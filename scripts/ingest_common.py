@@ -416,6 +416,8 @@ def summarize_session(
         vault_root,
         model,
     )
+    for backend_warning in claude_runner.last_warnings():
+        write_health(state_dir, backend_warning, warning=True)
     if error is not None:
         return SummaryResult("", "fail", error)
     if not summary:

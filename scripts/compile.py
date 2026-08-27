@@ -617,6 +617,13 @@ def _promote_changes(
 
 
 def _run_claude(prompt: str, stage: Path) -> str | None:
+    # Compile is the only tool-mode call.  Under BEYIN_MODEL_BACKEND=antigravity
+    # it stays on claude when that binary exists, and otherwise fails loud with
+    # antigravity-backend-unsupported:compile — agy cannot scope write
+    # permission per invocation and we refuse to ship a blanket auto-approve.
+    backend, warning = claude_runner.compile_backend()
+    if warning:
+        write_health(STATE_DIR, warning, warning=True)
     _output, error = claude_runner.run_claude(
         prompt,
         model="sonnet",
@@ -625,6 +632,7 @@ def _run_claude(prompt: str, stage: Path) -> str | None:
         cwd=stage,
         permission_mode="acceptEdits",
         allowed_tools="Read,Write,Edit,Glob,Grep",
+        backend=backend,
     )
     return error
 

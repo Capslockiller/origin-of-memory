@@ -142,6 +142,51 @@ returns immediately; the summariser is not on the session-teardown critical path
 Daily directories and files are checked for symlinks and non-regular types before
 any of this; a violation raises rather than proceeding.
 
+### 4.4 Model backend dispatch
+
+Every model call in the system — flush summarize, ingest summarize, compile
+distill — goes through one function, `claude_runner.run_claude()`. That function
+is also the backend switch.
+
+`resolve_backend()` reads `BEYIN_MODEL_BACKEND`: unset or `claude` selects the
+Claude CLI path, `antigravity` selects `agy_runner`, and `gemini` is a
+deprecated alias for `antigravity` that returns a warning alongside it (Google
+retired Gemini CLI's serving on 2026-06-18). An unrecognised value falls back to
+`claude` with a warning rather than failing the run. Warnings are drained by the
+caller through `claude_runner.last_warnings()` and written to `health.json` as
+warning entries, so the selection is visible without changing the
+`(output, error)` contract that every caller already depends on.
+
+`agy_runner.run_agy()` implements the documented headless contract —
+`agy -p <prompt> --model <slug> --output-format text` — with stdin closed
+(the prompt travels in argv, not on stdin, unlike the Claude path),
+`BEYIN_INVOKED_BY` still set, the same timeout, and the same
+outside-the-vault temporary working directory. Binary resolution honours
+`BEYIN_AGY_BIN` and reuses the fixed `cmd.exe /d /s /c` bridge that
+`ingest_common._run_codex` uses for Windows `.cmd`/`.bat` shims. The caller's
+`haiku`/`sonnet` tier maps onto `BEYIN_AGY_MODEL_FAST`
+(default `gemini-3.5-flash-medium`) and `BEYIN_AGY_MODEL_SMART` (no default —
+unset degrades to the fast model and warns). Failures map to `agy-missing`,
+`agy-auth-missing` (best-effort stderr sniffing), `agy-timeout` and
+`agy-exec-error`, and propagate into health state exactly like Claude failures.
+
+**The compile refusal.** Compile is the only tool-mode call: the model must
+write files inside the staging tree (§5). The Claude path scopes that precisely,
+per invocation, with `--tools` plus `--permission-mode acceptEdits`. `agy` has
+no per-invocation equivalent — its only options are a user-global allow-list in
+`~/.gemini/antigravity-cli/settings.json` or `--dangerously-skip-permissions`,
+which auto-approves *every* tool call for that run. Granting blanket approval to
+buy a free backend would trade away the exact property section 5 exists to
+protect, so the antigravity backend refuses tool-mode calls outright with
+`antigravity-backend-unsupported:compile`. In antigravity mode
+`compile.py` therefore asks `claude_runner.compile_backend()` first: if `claude`
+is on `PATH` compile runs on it (recording a
+`warn:antigravity-compile-fallback-claude` health entry), and if it is not,
+the run fails loud with the refusal string instead of quietly weakening the
+sandbox. A user who wants compile on `agy` anyway can add a scoped
+`write_file(<staging>/)` rule to their own global settings — that is a manual,
+documented, off-by-default choice made outside this repository.
+
 ## 5. `compile.py` — staging isolation
 
 The compiler is the only component that lets a model write files, so it is the
@@ -170,7 +215,9 @@ treats `.claude/**` as sensitive and blocks writes there even under
 
 `claude -p --model sonnet --safe-mode --tools Read,Write,Edit,Glob,Grep
 --permission-mode acceptEdits --allowedTools Read,Write,Edit,Glob,Grep`, working
-directory = the staging tree, 900 s timeout, prompt on stdin.
+directory = the staging tree, 900 s timeout, prompt on stdin. This call always
+runs on the Claude backend; see §4.4 for why the optional Antigravity backend
+refuses it.
 
 The prompt (`COMPILE_PROMPT`) carries:
 
@@ -366,7 +413,8 @@ single table.
 `scripts/tests/` runs under `pytest` (configured in `pyproject.toml` via
 `testpaths`). Coverage includes compile state handling, flush summary shape and
 silent-skip behaviour, the retrieval index, root-map generation, the secret guard,
-and each ingest source.
+each ingest source, and the model-backend dispatch (`test_agy_backend.py`, fully
+mocked — no test ever launches a real CLI).
 
 ```powershell
 python -m pytest

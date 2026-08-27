@@ -189,6 +189,40 @@ enjekte ettiği kalıcı kurallar dosyasının eşlik eden örneği.
     ama kullandıkça öde [Anthropic API anahtarıyla](https://platform.claude.com/)
     da çalışır (`ANTHROPIC_API_KEY`). Bu sistemin arka plan çağrılarının tipik
     maliyeti, kullanım yoğunluğuna göre ayda birkaç dolar mertebesindedir.
+  - **Ücretsiz katmanda arka plan çağrıları (isteğe bağlı).**
+    `BEYIN_MODEL_BACKEND=antigravity` ayarlandığında arka plan özetleme
+    çağrıları — flush ve içe aktarma — `claude -p` yerine Google'ın
+    **Antigravity CLI**'si (`agy`) üzerinden koşar. npm paketi değil;
+    [resmî Antigravity CLI kurulum sayfasından](https://antigravity.google/docs/cli)
+    kur, sonra bir kez etkileşimli `agy` oturumu açıp giriş yap — başsız
+    çağrılar bu önbelleğe alınmış kimlik bilgilerini kullanır, belgelenmiş bir
+    API anahtarı değişkeni yok. Dürüst sınırlar:
+    - Claude Code **yine de gerekli** — kancalar, oturum döngüsü ve
+      transkriptler ondan geliyor. Bu arka uç yalnız özeti yazan modeli
+      değiştirir.
+    - **Gecelik derleme hâlâ `claude` ile koşar.** Derleme, modelin yalıtılmış
+      bir sahne ağacında dosya yazmasını gerektiriyor; `agy`'de çağrı başına
+      izin daraltma yok — yalnız kullanıcı-genel bir izin listesi ya da her şeyi
+      onaylayan bir bayrak var ve bu depo o bayrağı taşımıyor. `antigravity`
+      kipinde derleme, `claude` `PATH`'teyse onunla devam eder; değilse
+      `antigravity-backend-unsupported:compile` hatasıyla yüksek sesle düşer.
+      İleri düzey, elle, varsayılan olarak kapalı seçenek: kendi
+      `~/.gemini/antigravity-cli/settings.json` izin listene daraltılmış bir
+      `"write_file(<sahne>/)"` kuralı ekleyebilirsin — bu senin kararın, depo
+      onu senin yerine vermiyor.
+    - Ücretsiz katman kotası sınırlı. Üçüncü parti kaynaklar günde ~20 ajan
+      isteği ve ~5 saatlik tazelenme söylüyor; Google bu sayıları
+      yayımlamıyor, **doğrulanmamış** kabul et.
+    - Gemini modellerinde özet kalitesi **ölçülmedi** — istem sözleşmesi ve şema
+      doğrulayıcı Claude'a göre ayarlandı.
+    - Model kısaltmaları: `BEYIN_AGY_MODEL_FAST` (varsayılan
+      `gemini-3.5-flash-medium`; belgelerin gösterdiği tek kısaltma) ve
+      `BEYIN_AGY_MODEL_SMART` (varsayılanı yok — `agy models` çıktısından seç;
+      boşsa hızlı modele düşer ve sağlık defterine uyarı yazar). `BEYIN_AGY_BIN`
+      ikili adını değiştirir.
+    - Not: Google'ın eski **Gemini CLI'si 2026-06-18'de kapatıldı**; `agy` onun
+      ardılı. `BEYIN_MODEL_BACKEND=gemini` `antigravity` için kullanımdan
+      kaldırılmış takma ad olarak kabul edilir ve uyarı üretir.
 - **FTS5 destekli SQLite.** Getirme katmanı
   `CREATE VIRTUAL TABLE notes USING fts5(...)` ile sanal tablo kuruyor. Windows
   CPython derlemelerinin çoğunda FTS5 açık ama hepsinde değil. Kurulumdan önce

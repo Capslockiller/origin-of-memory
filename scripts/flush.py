@@ -583,6 +583,8 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
             )
 
         summary, error = _run_claude(build_flush_prompt(transcript), VAULT_ROOT)
+        for backend_warning in claude_runner.last_warnings():
+            write_health(STATE_DIR, backend_warning, warning=True)
         if error is not None:
             _record_flush_failure(
                 STATE_DIR,

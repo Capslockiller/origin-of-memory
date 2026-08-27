@@ -185,6 +185,39 @@ the persistent-rules file the session hook injects.
     [Anthropic API key](https://platform.claude.com/) (`ANTHROPIC_API_KEY`).
     Typical cost for this system's background calls is on the order of a few
     dollars per month, depending on session volume.
+  - **Free-tier background calls (optional).** Set
+    `BEYIN_MODEL_BACKEND=antigravity` and the background summarisation calls —
+    flush and ingest — run through Google's **Antigravity CLI** (`agy`) instead
+    of `claude -p`. Install it from the
+    [official Antigravity CLI install page](https://antigravity.google/docs/cli)
+    (it is not an npm package), then run `agy` interactively once to sign in;
+    headless calls reuse those cached credentials, and there is no documented
+    API-key environment variable. Honest limits:
+    - Claude Code itself is **still required** — the hooks, the session
+      lifecycle and the transcripts all come from it. This backend only
+      replaces the model that writes the summaries.
+    - **Nightly compile still runs on `claude`.** Compile needs the model to
+      write files in an isolated staging tree, and `agy` has no per-invocation
+      permission scoping — only a user-global allow-list or a blanket
+      auto-approval flag, which this repository refuses to ship. In
+      `antigravity` mode compile keeps using `claude` when that binary is on
+      `PATH`, and otherwise fails loud with
+      `antigravity-backend-unsupported:compile`. Advanced, manual, off by
+      default: you may add a scoped `"write_file(<staging>/)"` rule to your own
+      `~/.gemini/antigravity-cli/settings.json` allow-list — that is your
+      decision, and the repository does not make it for you.
+    - Free-tier quota is limited. Third-party reports put it around 20 agent
+      requests per day with a roughly five-hour refresh; Google does not
+      publish these numbers, so treat them as **unverified**.
+    - Summary quality on Gemini models is **unmeasured** — the prompt contract
+      and the schema validator were tuned against Claude.
+    - Model slugs: `BEYIN_AGY_MODEL_FAST` (default `gemini-3.5-flash-medium`,
+      the only slug the docs show) and `BEYIN_AGY_MODEL_SMART` (no default —
+      pick one from `agy models`; unset degrades to the fast model with a
+      warning in health state). `BEYIN_AGY_BIN` overrides the binary name.
+    - Note: Google's older **Gemini CLI was retired on 2026-06-18**; `agy` is
+      its successor. `BEYIN_MODEL_BACKEND=gemini` is accepted as a deprecated
+      alias for `antigravity` and warns.
 - **SQLite with FTS5.** Retrieval builds a virtual table with
   `CREATE VIRTUAL TABLE notes USING fts5(...)`. Most CPython builds for Windows
   ship FTS5 enabled, but not all do. Check before installing:

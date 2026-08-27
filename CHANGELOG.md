@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional **Antigravity CLI (`agy`) backend** for the background model calls,
+  selected with `BEYIN_MODEL_BACKEND=antigravity`. Default behaviour is
+  unchanged: with the variable unset every call still goes through `claude -p`
+  with byte-identical arguments. `BEYIN_MODEL_BACKEND=gemini` is accepted as a
+  deprecated alias and warns (Google retired Gemini CLI's serving on
+  2026-06-18; `agy` is the successor).
+  - New `scripts/agy_runner.py` runs the documented headless contract
+    `agy -p <prompt> --model <slug> --output-format text` with stdin closed,
+    the same timeout and out-of-vault temporary-directory discipline as the
+    Claude path, and `BEYIN_INVOKED_BY` still set.
+  - Binary resolution: `agy` by default, `BEYIN_AGY_BIN` to override, with the
+    fixed `cmd.exe /d /s /c` bridge for Windows `.cmd`/`.bat` shims.
+  - Model mapping: `haiku` → `BEYIN_AGY_MODEL_FAST` (default
+    `gemini-3.5-flash-medium`, the only slug the official docs show);
+    `sonnet` → `BEYIN_AGY_MODEL_SMART`, which has no default and degrades to
+    the fast model with a `warn:agy-smart-model-unset:…` entry in health state.
+  - Distinct failure strings propagated into health state: `agy-missing`,
+    `agy-auth-missing` (best-effort stderr sniffing), `agy-exec-error`,
+    `agy-timeout`.
+  - **Compile is refused** on this backend with
+    `antigravity-backend-unsupported:compile`. Compile is the only tool-mode
+    call and `agy` offers no per-invocation permission scoping — only a
+    user-global allow-list or `--dangerously-skip-permissions`, which this
+    repository does not ship. In `antigravity` mode compile keeps using
+    `claude` when that binary is on `PATH` and fails loud otherwise.
+
 ## [0.1.0] - 2026-08-27
 
 First public release. This is the initial extraction of a working system into a
