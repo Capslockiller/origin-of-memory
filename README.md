@@ -1,7 +1,6 @@
 # Origin of Memory
 
-<!-- Replace OWNER with the GitHub account or organisation hosting this repository. -->
-[![tests](https://github.com/OWNER/origin-of-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/origin-of-memory/actions/workflows/ci.yml)
+[![tests](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Origin of Memory is a persistent memory system — a "second brain" — for
@@ -114,7 +113,7 @@ so no memory reached any session at all.
 ## Quickstart
 
 ```powershell
-git clone https://github.com/OWNER/origin-of-memory.git
+git clone https://github.com/Capslockiller/origin-of-memory.git
 cd origin-of-memory
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath C:\path\to\vault
 ```
@@ -157,10 +156,10 @@ Agents working *inside* this repository should read
 part of the mechanism: `beyin-doktor` (health check for the pipeline) and
 `beyin-ice-aktar` (processes a claude.ai export ZIP into the vault).
 
-The other six — `companion`, `orchestration`, `codex-fleet`, `gece-vardiyasi`,
-`gptpro`, `gptpro-handoff` — are **genericized copies of the author's working
-set**: delegation policy, an overnight draft-only shift protocol, a Codex CLI
-operating manual, and a deep-model handoff loop. They are published because the
+The other four — `companion`, `orchestration`, `codex-fleet`,
+`gece-vardiyasi` — are **genericized copies of the author's working
+set**: delegation policy, an overnight draft-only shift protocol, and a Codex CLI
+operating manual. They are published because the
 patterns are useful, not because they are right for you, and several assume
 tools you may not have installed.
 

@@ -64,7 +64,7 @@ somewhere unrelated.
   actually be on.
 - Confirm the default branch name matches what the README's clone instructions
   imply.
-- Replace the `OWNER` placeholder in the README badges, the clone command, the
+- Confirm the `Capslockiller` account references in the README badges, the clone command, the
   CHANGELOG comparison links and `INSTALL-AGENT.md` with the real account or
   organisation.
 
@@ -141,13 +141,13 @@ funnel to one line.
 Once the repository is public, the raw URL is:
 
 ```
-https://raw.githubusercontent.com/OWNER/origin-of-memory/main/INSTALL-AGENT.md
+https://raw.githubusercontent.com/Capslockiller/origin-of-memory/main/INSTALL-AGENT.md
 ```
 
 The line to publish alongside it, in the README and in any announcement:
 
 > In Claude Code, paste:
-> `Read https://raw.githubusercontent.com/OWNER/origin-of-memory/main/INSTALL-AGENT.md and follow it exactly to install my second brain.`
+> `Read https://raw.githubusercontent.com/Capslockiller/origin-of-memory/main/INSTALL-AGENT.md and follow it exactly to install my second brain.`
 
 Operator checklist for this channel:
 

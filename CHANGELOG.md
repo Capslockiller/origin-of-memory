@@ -176,8 +176,7 @@ see [docs/attribution.md](docs/attribution.md) for the lineage.
   the installer copies the whole directory to the user's skills folder.
 - Six genericized skills alongside the two mechanism skills — `companion`
   (structure example for the personal identity layer, placeholder content only),
-  `orchestration`, `codex-fleet`, `gece-vardiyasi`, `gptpro` and
-  `gptpro-handoff`. Absolute paths, usernames and project names replaced with
+  `orchestration`, `codex-fleet` and `gece-vardiyasi`. Absolute paths, usernames and project names replaced with
   placeholders; Turkish trigger phrases kept; upstream Avenox credits and
   adaptation notes preserved.
 - `template/rules.example.md`: seventeen ranked binding rules in the form the
@@ -192,5 +191,5 @@ see [docs/attribution.md](docs/attribution.md) for the lineage.
   Untrusted-data delimiters are in place, but there is no exclusion list.
 - Windows only; no tested macOS or Linux path.
 
-[Unreleased]: https://github.com/OWNER/origin-of-memory/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/OWNER/origin-of-memory/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Capslockiller/origin-of-memory/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Capslockiller/origin-of-memory/releases/tag/v0.1.0

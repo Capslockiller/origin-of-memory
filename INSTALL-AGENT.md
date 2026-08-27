@@ -67,11 +67,10 @@ Example: `C:\Users\<user>\Documents\brain`
 ## Step 3 — Clone
 
 ```powershell
-git clone https://github.com/OWNER/origin-of-memory.git
+git clone https://github.com/Capslockiller/origin-of-memory.git
 cd origin-of-memory
 ```
 
-<!-- Replace OWNER with the actual account hosting this repository. -->
 
 ## Step 4 — Dry run first
 
@@ -95,8 +94,7 @@ That is fine — the installer is idempotent.
 
 **Before the real run, decide about skills.** `skills/` is copied wholesale into
 `<user>\.claude\skills\`, and it contains more than the memory mechanism:
-`companion`, `orchestration`, `codex-fleet`, `gece-vardiyasi`, `gptpro` and
-`gptpro-handoff` are genericized copies of the author's working set. Show the
+`companion`, `orchestration`, `codex-fleet` and `gece-vardiyasi` are genericized copies of the author's working set. Show the
 user [skills/README.md](skills/README.md) and delete the directories they do not
 want **before** the real run. The two to keep in any case are `beyin-doktor` and
 `beyin-ice-aktar`.
@@ -239,8 +237,7 @@ There is no uninstaller. Removal is manual and reversible:
 
 3. **Remove the skills** you installed from `<user>\.claude\skills\`:
    `beyin-doktor`, `beyin-ice-aktar`, and whichever of `companion`,
-   `orchestration`, `codex-fleet`, `gece-vardiyasi`, `gptpro`,
-   `gptpro-handoff` were copied.
+   `orchestration`, `codex-fleet`, `gece-vardiyasi` were copied.
 
 4. **Keep or delete the content.** `daily/` and `knowledge/` are the user's
    notes, in plain Markdown. Deleting them destroys the memory; that is the

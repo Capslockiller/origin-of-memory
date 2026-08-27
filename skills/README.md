@@ -30,8 +30,6 @@ and are the ones to keep if you keep nothing else.
 | `orchestration` | Loaded before splitting work across agents | Delegation policy: which tier drives, which tier gets which lane, what a brief must carry, where a delegate's output goes. |
 | `codex-fleet` | "use codex", "codex exec", "spawn a codex fleet", image generation | Operating manual for the Codex CLI: invocation, image generation, worktree-isolated multi-lane fleets. |
 | `gece-vardiyasi` | "gece vardiyası: `<task>`" | Overnight draft-only shift protocol: irreversible actions queue for morning approval instead of executing. |
-| `gptpro` | Packaging a repo for external review | Exports a repo into secret-scanned, subsystem-split zip bundles for a non-agentic frontier model. |
-| `gptpro-handoff` | Sending work to, or receiving a report from, a deep external model | The workflow around `gptpro`: author the prompt, verify every returned finding against the live code, then implement. |
 
 ### What "genericized" means here
 
@@ -64,15 +62,14 @@ the persistent-rules file.
 
 ### Skills that assume external tools
 
-`codex-fleet`, `gptpro` and `gptpro-handoff` describe workflows around the Codex
-CLI and a chat-based frontier model. They do nothing on their own and are inert
-if you do not have those tools. `orchestration` and `gece-vardiyasi` reference
+`codex-fleet` describes workflows around the Codex CLI. It does nothing on its
+own and is inert if you do not have that tool. `orchestration` and `gece-vardiyasi` reference
 each other and `codex-fleet`; if you delete one, read the others for dangling
 references before relying on them.
 
 ## Attribution
 
-`codex-fleet`, `gptpro` and `gptpro-handoff` are adaptations of skills by
-[Avenox](https://avenox.lol) (MIT), and keep their upstream credits and
+`codex-fleet` is an adaptation of a skill by
+[Avenox](https://avenox.lol) (MIT), and keeps its upstream credits and
 adaptation notes. `orchestration` adapts Avenox's `fable-orchestration` and says
 so in its own text. See [../docs/attribution.md](../docs/attribution.md).

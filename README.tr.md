@@ -1,7 +1,7 @@
 # Origin of Memory
 
-<!-- OWNER yerine bu deponun barındığı GitHub hesabını/organizasyonunu yaz. -->
-[![tests](https://github.com/OWNER/origin-of-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/origin-of-memory/actions/workflows/ci.yml)
+<!-- Capslockiller yerine bu deponun barındığı GitHub hesabını/organizasyonunu yaz. -->
+[![tests](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml)
 [![Lisans: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > İngilizce sürüm: [README.md](README.md)
@@ -116,7 +116,7 @@ hafıza ulaşmıyordu.
 ## Hızlı başlangıç
 
 ```powershell
-git clone https://github.com/OWNER/origin-of-memory.git
+git clone https://github.com/Capslockiller/origin-of-memory.git
 cd origin-of-memory
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath C:\vault\yolu
 ```
@@ -161,10 +161,10 @@ dahil — kendisi koşabilir. Bu deponun *içinde* çalışan ajanlar
 kopyalar. İkisi mekanizmanın parçası: `beyin-doktor` (hattın sağlık kontrolü) ve
 `beyin-ice-aktar` (claude.ai dışa aktarım ZIP'ini vault'a işler).
 
-Diğer altısı — `companion`, `orchestration`, `codex-fleet`, `gece-vardiyasi`,
-`gptpro`, `gptpro-handoff` — **yazarın çalışma setinden genelleştirilmiş
-kopyalar**: delegasyon politikası, gece taslak-modu vardiya protokolü, Codex CLI
-kullanım kılavuzu ve derin model devir döngüsü. Desenler işe yaradığı için
+Diğer dördü — `companion`, `orchestration`, `codex-fleet`,
+`gece-vardiyasi` — **yazarın çalışma setinden genelleştirilmiş
+kopyalar**: delegasyon politikası, gece taslak-modu vardiya protokolü ve Codex CLI
+kullanım kılavuzu. Desenler işe yaradığı için
 yayımlandılar, sana uygun oldukları için değil; birkaçı sende kurulu olmayan
 araçları varsayıyor.
 
