@@ -82,10 +82,19 @@ class WizardDryRunTests(unittest.TestCase):
             check=False,
         )
 
+    def _tree(self) -> list[Path]:
+        # PowerShell itself materialises AppData\Roaming under a redirected
+        # USERPROFILE on startup, so those paths are not wizard writes.
+        return sorted(
+            path.relative_to(self.root)
+            for path in self.root.rglob("*")
+            if "AppData" not in path.relative_to(self.root).parts
+        )
+
     def test_all_four_presets_are_deterministic_write_free_dry_runs(self) -> None:
         for preset in ("cloud", "hybrid", "local", "lite"):
             with self.subTest(preset=preset):
-                before = sorted(path.relative_to(self.root) for path in self.root.rglob("*"))
+                before = self._tree()
                 result = self._run_wizard(self._plan(preset))
                 output = result.stdout + result.stderr
                 self.assertEqual(result.returncode, 0, output)
@@ -96,7 +105,7 @@ class WizardDryRunTests(unittest.TestCase):
                     self.assertIn("[SKIP] Hook registration disabled.", output)
                 if preset in {"local", "lite"}:
                     self.assertIn("Claude Desktop config not found", output)
-                after = sorted(path.relative_to(self.root) for path in self.root.rglob("*"))
+                after = self._tree()
                 expected_new = Path(f"{preset}.json")
                 self.assertEqual(after, sorted([*before, expected_new]))
                 self.assertEqual(list(self.vault.iterdir()), [])
