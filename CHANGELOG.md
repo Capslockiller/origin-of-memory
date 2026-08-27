@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+<!-- yazan: codex · gpt-5.6-sol -->
+- Optional OpenAI-compatible local backend for LM Studio, llama.cpp
+  `llama-server`, vLLM, and similar chat endpoints. It uses stdlib `urllib`,
+  requires an explicit URL and fast-model slug, supports an optional Bearer
+  token, and preserves distinct connection, HTTP, timeout, and response errors.
+- Backend-aware live-flush chunking: Ollama and OpenAI-compatible runs default to
+  24,000 transcript characters, `BEYIN_FLUSH_CHUNK_CHARS` overrides any backend,
+  and the effective bound is recorded in flush state detail.
+- Local model selection, rough hardware tiers, and context guidance in
+  `docs/local-models.md`.
+
 - Local **MCP memory server** (`scripts/mcp_server.py`, stdlib-only JSON-RPC
   over stdio): `memory_search` and `memory_root_map` tools plus root-map and
   hub resources, read-only, dual protocol era (`2026-07-28` and the legacy

@@ -230,7 +230,17 @@ the persistent-rules file the session hook injects.
     a warning; `BEYIN_OLLAMA_URL` defaults to `http://localhost:11434`.
     Compile is text-tool mode and is refused just as it is on Antigravity:
     `claude` is used when present, otherwise the run fails loud with
-    `ollama-backend-unsupported:compile`.
+    `ollama-backend-unsupported:compile`. See
+    [Local model backends](docs/local-models.md) for model, hardware, and context
+    guidance.
+  <!-- yazan: codex · gpt-5.6-sol -->
+  - **Other local servers (optional).** Set
+    `BEYIN_MODEL_BACKEND=openai-compat` for LM Studio, llama.cpp's
+    `llama-server`, vLLM, or another local OpenAI-compatible chat endpoint.
+    `BEYIN_OPENAI_URL` and `BEYIN_OPENAI_MODEL_FAST` are required;
+    `BEYIN_OPENAI_MODEL_SMART` and `BEYIN_OPENAI_KEY` are optional. Compile uses
+    `claude` when present and otherwise fails loud with
+    `openai-compat-backend-unsupported:compile`.
   - **Clipboard bridge.** Users of consumer web chat on any provider can inject
     the root map and capped top-three memory notes manually:
 

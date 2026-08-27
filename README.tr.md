@@ -236,7 +236,16 @@ enjekte ettiği kalıcı kurallar dosyasının eşlik eden örneği.
     bağlıdır; boşsa uyarıyla hızlı modele düşer. `BEYIN_OLLAMA_URL`
     varsayılanı `http://localhost:11434` adresidir. Derleme Antigravity'de
     olduğu gibi reddedilir: `claude` varsa ona düşer, yoksa
-    `ollama-backend-unsupported:compile` hatasıyla yüksek sesle durur.
+    `ollama-backend-unsupported:compile` hatasıyla yüksek sesle durur. Model,
+    donanım ve bağlam rehberi için [Yerel model arka uçları](docs/local-models.md)
+    belgesine bak.
+  <!-- yazan: codex · gpt-5.6-sol -->
+  - **Diğer yerel sunucular (isteğe bağlı).** LM Studio, llama.cpp
+    `llama-server`, vLLM veya OpenAI uyumlu başka bir yerel sohbet endpoint'i
+    için `BEYIN_MODEL_BACKEND=openai-compat` ayarla. `BEYIN_OPENAI_URL` ve
+    `BEYIN_OPENAI_MODEL_FAST` zorunlu; `BEYIN_OPENAI_MODEL_SMART` ile
+    `BEYIN_OPENAI_KEY` isteğe bağlıdır. Derleme `claude` varsa ona düşer; yoksa
+    `openai-compat-backend-unsupported:compile` hatasıyla yüksek sesle durur.
   - **Pano köprüsü.** Herhangi bir sağlayıcının tüketici web sohbetini kullanan
     kişiler, kök haritayı ve sınırlandırılmış en ilgili üç hafıza notunu elle
     bağlama ekleyebilir:

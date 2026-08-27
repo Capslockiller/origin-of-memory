@@ -103,8 +103,11 @@ returns immediately; the summariser is not on the session-teardown critical path
 2. **Lock per session.** An exclusive lock keyed on `session_id`
    (`fcntl.flock`, or `msvcrt.locking` on Windows). A second flush for the same
    session does not run.
-3. **Read the transcript.** Up to `MAX_TURNS = 30` turns, truncated to
-   `MAX_TRANSCRIPT_CHARS = 15_000`.
+3. **Read the transcript.** Up to `MAX_TURNS = 30` turns, truncated to the
+   effective live-flush bound. Claude and Antigravity retain
+   `MAX_TRANSCRIPT_CHARS = 15_000`; Ollama and OpenAI-compatible backends use
+   24,000 characters. A positive `BEYIN_FLUSH_CHUNK_CHARS` overrides either.
+   The selected value is recorded in the run's state detail.
 4. **Redact inbound.** `secret_guard.redact()` over the transcript; matched
    pattern classes are written to the health file as a warning.
 5. **Summarise.** `claude -p --model haiku`, no tools, 240 s timeout, run in a
@@ -149,11 +152,12 @@ distill — goes through one function, `claude_runner.run_claude()`. That functi
 is also the backend switch.
 
 `resolve_backend()` reads `BEYIN_MODEL_BACKEND`: unset or `claude` selects the
-Claude CLI path, `antigravity` selects `agy_runner`, `ollama` selects the local
-HTTP runner, and `gemini` is a deprecated alias for `antigravity` that returns
-a warning alongside it (Google retired Gemini CLI's serving on 2026-06-18). An
-unrecognised value falls back to `claude` with a warning rather than failing the
-run. Warnings are drained by the caller through
+Claude CLI path, `antigravity` selects `agy_runner`, `ollama` selects its native
+local HTTP runner, and `openai-compat` selects the OpenAI chat API runner.
+`openai` is an alias for `openai-compat` and warns; `gemini` is a deprecated
+alias for `antigravity` that also warns (Google retired Gemini CLI's serving on
+2026-06-18). An unrecognised value falls back to `claude` with a warning rather
+than failing the run. Warnings are drained by the caller through
 `claude_runner.last_warnings()` and written to `health.json` as warning entries,
 so the selection is visible without changing the `(output, error)` contract
 that every caller already depends on.
@@ -182,6 +186,16 @@ HTTP, timeout, and malformed-response failures have distinct stable error
 strings. Ollama exposes no compile tool path, so the same compile dispatch uses
 `claude` when available and otherwise refuses with
 `ollama-backend-unsupported:compile`.
+
+<!-- yazan: codex · gpt-5.6-sol -->
+`openai_runner.run_openai()` provides the equivalent text-mode path for LM
+Studio, llama.cpp `llama-server`, vLLM, and other local OpenAI-compatible
+servers. It POSTs a non-streaming user message to
+`{BEYIN_OPENAI_URL}/chat/completions`, optionally sends
+`Authorization: Bearer <BEYIN_OPENAI_KEY>`, and reads
+`choices[0].message.content`. The URL and fast model slug have no defaults.
+Compile follows the same Claude fallback and text-tool refusal mechanism, using
+`openai-compat-backend-unsupported:compile` when no Claude CLI is available.
 
 **The compile refusal.** Compile is the only tool-mode call: the model must
 write files inside the staging tree (§5). The Claude path scopes that precisely,

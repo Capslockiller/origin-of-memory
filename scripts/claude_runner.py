@@ -3,7 +3,7 @@
 
 ``run_claude`` keeps its historical name and signature so every existing caller
 works untouched.  ``BEYIN_MODEL_BACKEND`` can dispatch text-mode calls to the
-Antigravity CLI or a local Ollama server instead.
+Antigravity CLI, a local Ollama server, or an OpenAI-compatible endpoint instead.
 """
 
 # yazan: codex · model: gpt-5.6-sol
@@ -22,10 +22,14 @@ BACKEND_ENV = "BEYIN_MODEL_BACKEND"
 BACKEND_CLAUDE = "claude"
 BACKEND_ANTIGRAVITY = "antigravity"
 BACKEND_OLLAMA = "ollama"
+BACKEND_OPENAI_COMPAT = "openai-compat"
 # Antigravity has no per-invocation permission scoping, so a tool-mode call
 # (compile) can only be auto-approved globally.  We refuse instead.
 COMPILE_UNSUPPORTED = "antigravity-backend-unsupported:compile"
 OLLAMA_COMPILE_UNSUPPORTED = "ollama-backend-unsupported:compile"
+OPENAI_COMPAT_COMPILE_UNSUPPORTED = (
+    "openai-compat-backend-unsupported:compile"
+)
 
 _LAST_WARNINGS: list[str] = []
 
@@ -49,6 +53,10 @@ def resolve_backend(
         return BACKEND_ANTIGRAVITY, None
     if raw == BACKEND_OLLAMA:
         return BACKEND_OLLAMA, None
+    if raw == BACKEND_OPENAI_COMPAT:
+        return BACKEND_OPENAI_COMPAT, None
+    if raw == "openai":
+        return BACKEND_OPENAI_COMPAT, "warn:backend-alias:openai"
     if raw == "gemini":
         # Gemini CLI's serving was retired 2026-06-18; `gemini` now means the
         # Antigravity CLI successor, but the caller is told the name is stale.
@@ -61,19 +69,25 @@ def compile_backend(
 ) -> tuple[str, str | None]:
     """Backend for the tool-mode compile call.
 
-    In antigravity or ollama mode compile keeps running on ``claude`` when that
-    binary is on PATH; otherwise the selected backend is returned so the call
-    fails loud with its tool-mode refusal.
+    In antigravity, ollama, or openai-compat mode compile keeps running on
+    ``claude`` when that binary is on PATH; otherwise the selected backend is
+    returned so the call fails loud with its tool-mode refusal.
     """
     backend, warning = resolve_backend(environment)
-    if backend not in (BACKEND_ANTIGRAVITY, BACKEND_OLLAMA):
+    if backend not in (
+        BACKEND_ANTIGRAVITY,
+        BACKEND_OLLAMA,
+        BACKEND_OPENAI_COMPAT,
+    ):
         return backend, warning
     if shutil.which("claude") is not None:
-        fallback_warning = (
-            "warn:antigravity-compile-fallback-claude"
-            if backend == BACKEND_ANTIGRAVITY
-            else "warn:ollama-compile-fallback-claude"
-        )
+        fallback_warning = {
+            BACKEND_ANTIGRAVITY: "warn:antigravity-compile-fallback-claude",
+            BACKEND_OLLAMA: "warn:ollama-compile-fallback-claude",
+            BACKEND_OPENAI_COMPAT: (
+                "warn:openai-compat-compile-fallback-claude"
+            ),
+        }[backend]
         return BACKEND_CLAUDE, fallback_warning
     return backend, warning
 
@@ -155,6 +169,23 @@ def run_claude(
         import ollama_runner
 
         return ollama_runner.run_ollama(
+            prompt,
+            model=model,
+            timeout=timeout,
+            cwd=cwd,
+            vault_root=vault_root,
+            temporary_prefix=temporary_prefix,
+            warnings=_LAST_WARNINGS,
+        )
+
+    if backend == BACKEND_OPENAI_COMPAT:
+        if tools:
+            # OpenAI-compatible chat endpoints are text-only here; they cannot
+            # perform the scoped staging-tree writes required by compile.
+            return None, OPENAI_COMPAT_COMPILE_UNSUPPORTED
+        import openai_runner
+
+        return openai_runner.run_openai(
             prompt,
             model=model,
             timeout=timeout,
