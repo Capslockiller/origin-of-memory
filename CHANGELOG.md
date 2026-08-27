@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: codex · gpt-5.6-sol -->
+- Two-screen, one-Enter recommended setup with deterministic JSON planning,
+  `-Recommended` agent automation, visible custom defaults, and seven-step
+  maximum custom flow.
+- Multi-runtime wizard support for Ollama, LM Studio, llama.cpp, and vLLM,
+  including OpenAI-compatible endpoint wiring and consent-safe model handling.
+
+<!-- yazan: codex · gpt-5.6-sol -->
 - Fault-tolerant Windows hardware probe (`scripts/donanim.py`) and verified-tag
   Ollama fit recommender (`scripts/model_oneri.py`), with interactive wizard
   guidance, explicit non-interactive install/pull plan fields, disk preflight,

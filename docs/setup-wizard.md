@@ -5,18 +5,83 @@ model: gpt-5.6-sol
 
 # Setup wizard and plan contract
 
-`kur.ps1` is an interview-first layer over `install.ps1`. Running it without
-arguments asks numbered bilingual questions, shows the resulting JSON and a
-summary table, then asks one final confirmation before writing.
+`kur.ps1` defaults to a two-screen recommended installation. The first screen
+has one decision, with Enter selecting the recommended path:
 
-For automation, `-Answers <file.json>` makes that file the complete plan. This
-mode never prompts and exits 0 on success or 1 on a validation/action failure.
-`-DryRun` prints every copy, hook, environment, and MCP action without writing.
+```text
+Step 1/2 — Choose a path
+  1. Recommended setup (auto-detect) [default]
+  2. Custom
+  3. Show me what you detected first
+```
 
-## Plan schema
+The wizard probes Claude Code, local model runtimes, hardware, the Windows
+Documents path, and Claude Desktop configuration. It then shows one confirmation
+screen. Each chosen value has a one-line reason:
 
-The original fields are required. `install_runtime` and `pull_models` are
-optional and default to `false` and `[]`; unknown fields are rejected.
+```text
+Step 2/2 — Recommended setup confirmation
+  Preset: cloud — Claude Code was detected and no local runtime was found ...
+  Vault: C:\Users\<user>\Documents\brain — Documents is not redirected ...
+  Backend: claude — No local runtime was detected.
+  Model: not needed — No local model is needed for this plan.
+  MCP: False — No Claude Desktop config exists ...
+  Skills: beyin-doktor, beyin-ice-aktar — ...
+  Mode: WRITE
+  Plan JSON: {...}
+[Enter] Install / [c] Change something / [q] Quit
+```
+
+Holding Enter therefore selects recommended, approves the detected plan, and
+installs. `c` opens Custom with those auto-values as defaults. `q` exits without
+writing. Recommended mode never installs a GUI runtime or pulls a model without
+consent.
+
+## Auto-decision rules
+
+The pure function in `scripts/kurulum_plani.py` implements these decisions:
+
+| Claude Code | Local runtime | Preset | Backend |
+| --- | --- | --- | --- |
+| Detected | Detected | `hybrid` | Preferred detected runtime |
+| Detected | None | `cloud` | `claude` |
+| None | Detected | `lite` | Preferred detected runtime; no capture or compile |
+| None | None | `cloud` | `claude`, with an install-Claude-first note |
+
+An already-running runtime is preferred over one that is merely installed;
+ties use Ollama, LM Studio, llama.cpp, then vLLM. MCP defaults on only when an
+existing Claude Desktop config is found. The only default skills are
+`beyin-doktor` and `beyin-ice-aktar`. The model is the first `fits-gpu` or
+`cpu-ok` catalogue recommendation.
+
+The vault defaults to `%USERPROFILE%\Documents\brain`. If Windows reports a
+Documents directory different from `%USERPROFILE%\Documents` (the common
+OneDrive-redirection case), it uses `%USERPROFILE%\brain` instead.
+
+## Custom flow
+
+Custom mode is at most seven steps: preset, vault, runtime/backend, model,
+integrations, verification, and confirmation. Every prompt displays a default
+and bare Enter accepts it. Detected values are shown as defaults instead of
+being asked as unknowns.
+
+For a hybrid, local, or lite plan, detected runtimes are numbered with a running
+runtime preselected. If none is found, the choices are Install Ollama, use LM
+Studio, or skip local models. LM Studio prints its download URL and manual GUI
+instructions; the wizard does not download or launch its installer. Ollama
+model pulls remain separately opt-in.
+
+OpenAI-compatible model names cannot be discovered without HTTP. Custom mode
+explains where the runtime displays the name. No HTTP model listing occurs in
+dry-run or recommended mode. If no model name is known, the plan prints a
+`[TODO]` for `BEYIN_OPENAI_MODEL_FAST` and does not persist an empty value.
+
+## Plan JSON contract
+
+`-Answers <file.json>` is unchanged: the file is the complete non-interactive
+plan, there are no prompts, and validation remains strict. The original fields
+are required; `install_runtime` and `pull_models` are optional and default to
+`false` and `[]`. Unknown fields are rejected.
 
 ```json
 {
@@ -32,119 +97,35 @@ optional and default to `false` and `[]`; unknown fields are rejected.
 }
 ```
 
-Validation is deliberately strict and names the failing field. The vault may
-exist or be new, but must be a directory and must not be inside this repository.
-A non-ASCII path is accepted with a warning. Skill names must match directories
-under `skills/`. Backend compatibility is:
+Backend compatibility is:
 
-| Preset | Valid backend | Notes |
-| --- | --- | --- |
-| `cloud` | `claude` | Full Claude Code capture and compile |
-| `hybrid` | `antigravity`, `ollama`, `openai-compat` | Claude Code capture/compile; selected backend for flush/ingest |
-| `local` | `antigravity`, `ollama`, `openai-compat` | Same hooks plus MCP/clipboard-oriented defaults; compile still needs `claude` |
-| `lite` | `none` | No hook registration, automatic capture, or compile |
+| Preset | Valid backend |
+| --- | --- |
+| `cloud` | `claude` |
+| `hybrid` | `antigravity`, `ollama`, `openai-compat` |
+| `local` | `antigravity`, `ollama`, `openai-compat` |
+| `lite` | `none`, `ollama`, `openai-compat` |
 
-Ollama plans require `BEYIN_OLLAMA_MODEL_FAST`. An explicit `pull_models` list
-accepts at most two verified catalogue tags; the first becomes the fast model
-and the second becomes the smart model through the plan environment mechanism.
-`install_runtime` and model pulls are valid only for Ollama. OpenAI-compatible
-plans require `BEYIN_OPENAI_URL` and `BEYIN_OPENAI_MODEL_FAST`.
+Ollama plans require `BEYIN_OLLAMA_MODEL_FAST`. `pull_models` accepts at most
+two verified catalogue tags and is valid only for Ollama. OpenAI-compatible
+`-Answers` plans require non-empty `BEYIN_OPENAI_URL` and
+`BEYIN_OPENAI_MODEL_FAST` values.
 
-## Filled plans
+## Agent and automation mode
 
-Replace `<vault>` with an absolute path. These examples select only the two
-core memory skills.
+`-Recommended` probes, prints the same confirmation screen, and proceeds without
+prompts. It is intended for agents and automation. Always review its dry-run
+first:
 
-### Cloud
-
-```json
-{
-  "preset": "cloud",
-  "vault": "<vault>",
-  "backend": "claude",
-  "backend_env": {
-    "BEYIN_VAULT": "<vault>",
-    "BEYIN_MODEL_BACKEND": "claude"
-  },
-  "mcp": false,
-  "skills": ["beyin-doktor", "beyin-ice-aktar"],
-  "force": false
-}
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended
 ```
 
-### Hybrid
+`-DryRun` prints every copy, hook, environment, runtime, and MCP action without
+writing. `-Answers` and `-Recommended` are mutually exclusive.
 
-```json
-{
-  "preset": "hybrid",
-  "vault": "<vault>",
-  "backend": "antigravity",
-  "backend_env": {
-    "BEYIN_VAULT": "<vault>",
-    "BEYIN_MODEL_BACKEND": "antigravity"
-  },
-  "mcp": false,
-  "skills": ["beyin-doktor", "beyin-ice-aktar"],
-  "force": false
-}
-```
-
-Run `agy` once interactively to complete login before relying on this backend.
-
-### Local
-
-```json
-{
-  "preset": "local",
-  "vault": "<vault>",
-  "backend": "ollama",
-  "backend_env": {
-    "BEYIN_VAULT": "<vault>",
-    "BEYIN_MODEL_BACKEND": "ollama",
-    "BEYIN_OLLAMA_MODEL_FAST": "qwen3:8b"
-  },
-  "mcp": true,
-  "skills": ["beyin-doktor", "beyin-ice-aktar"],
-  "force": false
-}
-```
-
-An OpenAI-compatible local plan uses `backend: "openai-compat"` plus
-`BEYIN_OPENAI_URL` and `BEYIN_OPENAI_MODEL_FAST` instead.
-
-### Lite
-
-```json
-{
-  "preset": "lite",
-  "vault": "<vault>",
-  "backend": "none",
-  "backend_env": {
-    "BEYIN_VAULT": "<vault>"
-  },
-  "mcp": true,
-  "skills": ["beyin-doktor", "beyin-ice-aktar"],
-  "force": false
-}
-```
-
-Lite installs ingest, retrieval, MCP, and clipboard components but does not
-register hooks. Memory is fed through export ZIPs and read through MCP or the
-clipboard bridge; there is no automatic capture or nightly compile.
-
-## Environment and MCP writes
-
-The interactive wizard lists all chosen `BEYIN_*` variables and asks once
-before persisting them through the .NET user-scope environment API. It never
-uses `setx`, which can truncate long values and damage PATH. Non-interactive
-mode treats the plan as that authorization. Secret-like values are redacted.
-
-When MCP is selected, the wizard probes both the standard
-`%APPDATA%\Claude\claude_desktop_config.json` and the MSIX-virtualised
-`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`.
-It prefers an existing file, backs up every file it writes, and writes the same
-merged content to both when both exist. If neither exists, it creates the
-standard file and warns that an MSIX install may read the virtual path.
-
-Cheap backend verification (`--version` or a short TCP connection) is performed
-only after explicit interactive consent and never makes a model call.
+MCP detection and registration cover both the standard
+`%APPDATA%\Claude\claude_desktop_config.json` path and the MSIX-virtualised
+path. Existing files are backed up before a real merge. Cheap backend checks use
+only a binary version or TCP connection and run only after interactive consent.

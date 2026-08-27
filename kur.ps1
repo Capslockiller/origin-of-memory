@@ -19,17 +19,22 @@ PowerShell 5.1 plan contract (also accepted through -Answers):
 
 With -Answers, the file is the complete plan: there are no prompts. -DryRun
 prints every action and never writes, including environment and MCP registration.
+With -Recommended, detection builds the plan and installation proceeds without
+prompts; pair it with -DryRun for an agent-reviewable confirmation screen.
 #>
 [CmdletBinding()]
 param(
   [string]$Answers,
+  [switch]$Recommended,
   [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
 $script:RepoRoot = $PSScriptRoot
 $script:ProbeBackend = $false
-$script:Interactive = -not $Answers
+$script:Interactive = -not $Answers -and -not $Recommended
+$script:AllowEmptyOpenAiModel = $false
+$script:PlanAlreadyConfirmed = $false
 $script:OllamaModels = [ordered]@{
   'qwen3:4b' = 2.5
   'qwen3:8b' = 5.2
@@ -62,6 +67,12 @@ function Read-Required([string]$Prompt) {
   }
 }
 
+function Read-Default([string]$Prompt, [string]$DefaultValue) {
+  $raw = (Read-Host ("{0} [{1}]" -f $Prompt, $(if ($DefaultValue) { $DefaultValue } else { 'not detected / sonra ayarla' }))).Trim()
+  if ($raw) { return $raw }
+  return $DefaultValue
+}
+
 function Read-Choice(
   [string]$Title,
   [object[]]$Options,
@@ -70,11 +81,11 @@ function Read-Choice(
   Write-Host ''
   Write-Host $Title
   for ($index = 0; $index -lt $Options.Count; $index++) {
-    $defaultMark = if ($index -eq $DefaultIndex) { ' [default / varsayılan]' } else { '' }
-    Write-Host ("  {0}. {1}{2}" -f ($index + 1), $Options[$index].Label, $defaultMark)
+    $defaultMark = if ($index -eq $DefaultIndex) { ' [default] [varsayılan]' } else { '' }
+    Write-Host ("  [{0}] {1}{2}" -f ($index + 1), $Options[$index].Label, $defaultMark)
   }
   while ($true) {
-    $raw = (Read-Host 'Choice number (Seçim numarası)').Trim()
+    $raw = (Read-Host ("Choice number [{0}] (Seçim numarası)" -f ($DefaultIndex + 1))).Trim()
     if (-not $raw) { return $Options[$DefaultIndex].Value }
     $number = 0
     if ([int]::TryParse($raw, [ref]$number) -and $number -ge 1 -and $number -le $Options.Count) {
@@ -110,7 +121,7 @@ function Find-PythonCommand {
 function Invoke-PythonJson([string]$ScriptName, [string[]]$Arguments) {
   $python = Find-PythonCommand
   $scriptPath = Join-Path $script:RepoRoot ("scripts\{0}" -f $ScriptName)
-  $output = & $python.Exe @($python.Prefix) $scriptPath @Arguments 2>&1 | Out-String
+  $output = & $python.Exe @($python.Prefix) -B $scriptPath @Arguments 2>&1 | Out-String
   if ($LASTEXITCODE -ne 0) {
     throw ("{0} failed: {1}" -f $ScriptName, $output.Trim())
   }
@@ -288,7 +299,12 @@ function Convert-BackendEnvironment([object]$Value) {
     if ($entry.Name -notmatch '^BEYIN_[A-Z0-9_]+$') {
       Fail-Field 'backend_env' ("key '{0}' must start with BEYIN_" -f $entry.Name)
     }
-    if ($entry.Value -isnot [string] -or -not $entry.Value) {
+    $emptyOpenAiModel = (
+      $script:AllowEmptyOpenAiModel -and
+      $entry.Name -eq 'BEYIN_OPENAI_MODEL_FAST' -and
+      $entry.Value -is [string]
+    )
+    if (($entry.Value -isnot [string] -or -not $entry.Value) -and -not $emptyOpenAiModel) {
       Fail-Field 'backend_env' ("'{0}' must be a non-empty string" -f $entry.Name)
     }
     $environment[$entry.Name] = [string]$entry.Value
@@ -323,7 +339,7 @@ function Validate-Plan([object]$Plan) {
     'cloud' { @('claude') }
     'hybrid' { @('antigravity', 'ollama', 'openai-compat') }
     'local' { @('antigravity', 'ollama', 'openai-compat') }
-    'lite' { @('none') }
+    'lite' { @('none', 'ollama', 'openai-compat') }
   }
   if ($allowedBackends -notcontains $Plan.backend) {
     Fail-Field 'backend' ("is incompatible with preset '{0}'" -f $Plan.preset)
@@ -427,79 +443,208 @@ function Validate-Plan([object]$Plan) {
   }
 }
 
-function New-InteractivePlan {
-  Write-Host 'origin-of-memory setup wizard (kurulum sihirbazı)'
-  Write-Host 'Interview first, build second. (Önce görüşme, sonra kurulum.)'
-  $preset = Read-Choice 'Choose a preset (Bir ön ayar seç)' @(
-    [pscustomobject]@{ Value = 'cloud'; Label = 'Cloud (Bulut) — full system on Claude; subscription or ANTHROPIC_API_KEY' },
-    [pscustomobject]@{ Value = 'hybrid'; Label = 'Hybrid (Hibrit) — Claude hooks/sessions; free background backend' },
-    [pscustomobject]@{ Value = 'local'; Label = 'Local (Yerel) — local flush/ingest + MCP + clipboard; claude CLI still required for hooks/compile' },
-    [pscustomobject]@{ Value = 'lite'; Label = 'Lite (Hafif) — no Claude Code; ingest + retrieval + MCP + clipboard only' }
+function Get-McpConfigState {
+  $appData = [Environment]::GetEnvironmentVariable('APPDATA')
+  $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+  $standard = if ($appData) { Join-Path $appData 'Claude\claude_desktop_config.json' } else { $null }
+  $virtual = if ($localAppData) { Join-Path $localAppData 'Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json' } else { $null }
+  $paths = @($standard, $virtual | Where-Object { $_ })
+  return [pscustomobject]@{
+    Exists = [bool](@($paths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -gt 0)
+    Paths = [string[]]$paths
+  }
+}
+
+function Get-DecisionContext {
+  $probe = Invoke-PythonJson 'donanim.py' @('--json')
+  $recommendations = @(Invoke-PythonJson 'model_oneri.py' @('--json'))
+  $userProfile = [Environment]::GetFolderPath('UserProfile')
+  if (-not $userProfile) { $userProfile = [Environment]::GetEnvironmentVariable('USERPROFILE') }
+  $documents = [Environment]::GetFolderPath('MyDocuments')
+  if (-not $documents) { $documents = Join-Path $userProfile 'Documents' }
+  $mcpState = Get-McpConfigState
+  return [pscustomobject]@{
+    probe = $probe
+    recommendations = $recommendations
+    user_profile = $userProfile
+    documents_path = $documents
+    mcp_config_exists = $mcpState.Exists
+  }
+}
+
+function Get-AutoDecision {
+  $context = Get-DecisionContext
+  $json = $context | ConvertTo-Json -Depth 100 -Compress
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+  $decision = Invoke-PythonJson 'kurulum_plani.py' @('--context-base64', $encoded)
+  return [pscustomobject]@{ Context = $context; Decision = $decision }
+}
+
+function Show-Detection([object]$Bundle) {
+  $context = $Bundle.Context
+  Write-Host ''
+  Write-Host 'Detected environment (Algılanan ortam)'
+  Write-Host ("  Claude Code: {0}" -f $(if ($context.probe.commands.claude) { 'detected' } else { 'not detected' }))
+  $runtimes = @($context.probe.runtimes)
+  if ($runtimes.Count -eq 0) {
+    Write-Host '  Local runtimes: none detected'
+  } else {
+    foreach ($runtime in $runtimes) {
+      $state = if ($runtime.detected_by) { $runtime.detected_by } else { 'not detected' }
+      Write-Host ("  {0}: {1}; endpoint={2}; backend={3}" -f $runtime.name, $state, $runtime.endpoint, $runtime.backend)
+    }
+  }
+  Show-HardwareSummary $context.probe
+}
+
+function Show-RecommendedConfirmation([object]$Decision, [bool]$PromptForAction) {
+  $plan = $Decision.plan
+  Write-Host ''
+  Write-Host 'Step 2/2 — Recommended setup confirmation (Önerilen kurulum onayı)'
+  Write-Host ("  Preset: {0} — {1}" -f $plan.preset, $Decision.reasons.preset)
+  Write-Host ("  Vault: {0} — {1}" -f $plan.vault, $Decision.reasons.vault)
+  Write-Host ("  Backend: {0} — {1}" -f $plan.backend, $Decision.reasons.backend)
+  Write-Host ("  Model: {0} — {1}" -f $(if ($plan.backend -eq 'ollama') { $plan.backend_env.BEYIN_OLLAMA_MODEL_FAST } elseif ($plan.backend -eq 'openai-compat') { 'set later' } else { 'not needed' }), $Decision.reasons.model)
+  Write-Host ("  MCP: {0} — {1}" -f $plan.mcp, $Decision.reasons.mcp)
+  Write-Host ("  Skills: {0} — {1}" -f ($plan.skills -join ', '), $Decision.reasons.skills)
+  foreach ($note in @($Decision.notes)) { Write-Host ("  NOTE: {0}" -f $note) }
+  foreach ($todo in @($Decision.todos)) { Write-Host ("  [TODO] {0}" -f $todo) }
+  Write-Host ("  Mode: {0}" -f $(if ($DryRun) { 'DRY RUN (writes nothing)' } else { 'WRITE' }))
+  Write-Host ("  Plan JSON: {0}" -f ($plan | ConvertTo-Json -Depth 10 -Compress))
+  if (-not $PromptForAction) { return 'install' }
+  while ($true) {
+    $raw = (Read-Host '[Enter] Install / [c] Change something / [q] Quit').Trim().ToLowerInvariant()
+    if (-not $raw) { return 'install' }
+    if ($raw -eq 'c') { return 'change' }
+    if ($raw -eq 'q') { return 'quit' }
+    Write-Warning 'Press Enter, c, or q. (Enter, c veya q kullan.)'
+  }
+}
+
+function Get-OpenAiDefaultUrl([object]$Runtime) {
+  $name = ([string]$Runtime.name).ToLowerInvariant()
+  $url = ([string]$Runtime.endpoint).TrimEnd('/')
+  if (-not $url) {
+    if ($name -eq 'lm studio') { $url = 'http://127.0.0.1:1234/v1' }
+    elseif ($name -eq 'llama.cpp') { $url = 'http://127.0.0.1:8080/v1' }
+    else { $url = 'http://127.0.0.1:8000/v1' }
+  } elseif (-not $url.EndsWith('/v1')) {
+    $url += '/v1'
+  }
+  return $url
+}
+
+function Read-RuntimeChoice([object]$Bundle, [string]$Preset) {
+  $detected = @($Bundle.Decision.detected_runtimes)
+  if ($detected.Count -gt 0) {
+    $options = @()
+    foreach ($runtime in $detected) {
+      $status = if ($runtime.detected_by -in @('port', 'both')) { 'running' } else { 'installed' }
+      $runtimeNote = if (([string]$runtime.name) -match '^(?i:vllm)$') { '; probably WSL/remote, no installer' } else { '' }
+      $options += [pscustomobject]@{
+        Value = $runtime
+        Label = ("{0} — {1}; {2}{3}" -f $runtime.name, $status, $runtime.endpoint, $runtimeNote)
+      }
+    }
+    $skipBackend = if ($Preset -eq 'lite') { 'none' } else { 'antigravity' }
+    $options += [pscustomobject]@{
+      Value = [pscustomobject]@{ name = 'Skip local models'; backend = $skipBackend; endpoint = ''; detected_by = $null }
+      Label = $(if ($skipBackend -eq 'none') { 'Skip local models' } else { 'Skip local models — use Antigravity' })
+    }
+    return Read-Choice 'Detected local runtimes — running is preferred (Algılanan yerel çalışma zamanları)' $options 0
+  }
+
+  $choice = Read-Choice 'No local runtime detected (Yerel çalışma zamanı algılanmadı)' @(
+    [pscustomobject]@{ Value = 'install-ollama'; Label = 'Install Ollama (easiest, CLI; model download size is shown separately)' },
+    [pscustomobject]@{ Value = 'lm-studio'; Label = "I'll use LM Studio (GUI; no CLI needed)" },
+    [pscustomobject]@{ Value = 'skip'; Label = 'Skip local models' }
   ) 0
-
-  if ($preset -eq 'local') {
-    Write-Host 'Local still requires the claude CLI for hooks and compile. (Local, kancalar ve derleme için yine claude CLI ister.)'
-  } elseif ($preset -eq 'lite') {
-    Write-Host 'Lite has no automatic capture and no compile. Feed memory with export ZIPs; read it through MCP or the clipboard bridge.'
-    Write-Host 'Lite otomatik yakalama ve derleme yapmaz. Hafızayı dışa aktarım ZIP dosyalarıyla besle; MCP veya pano köprüsüyle oku.'
+  if ($choice -eq 'install-ollama') {
+    return [pscustomobject]@{ name = 'Ollama'; backend = 'ollama'; endpoint = 'http://127.0.0.1:11434'; detected_by = $null; install = $true }
   }
+  if ($choice -eq 'lm-studio') {
+    Write-Host '  Download: https://lmstudio.ai/download'
+    Write-Host '  Install the GUI, load a model, then enable the local server in the Developer/Server tab. This wizard does not download the installer.'
+    return [pscustomobject]@{ name = 'LM Studio'; backend = 'openai-compat'; endpoint = 'http://127.0.0.1:1234/v1'; detected_by = $null; install = $false }
+  }
+  $fallback = if ($Preset -eq 'lite') { 'none' } else { 'antigravity' }
+  return [pscustomobject]@{ name = 'Skip local models'; backend = $fallback; endpoint = ''; detected_by = $null; install = $false }
+}
 
-  $vault = Resolve-VaultPath (Read-Required 'Vault path (Vault yolu)')
+function New-CustomPlan([object]$Bundle) {
+  $defaults = $Bundle.Decision.plan
+  Write-Host ''
+  Write-Host 'Step 1/7 — Preset'
+  $presetOptions = @(
+    [pscustomobject]@{ Value = 'cloud'; Label = 'Cloud — Claude handles capture and model work' },
+    [pscustomobject]@{ Value = 'hybrid'; Label = 'Hybrid — Claude capture plus a local/background backend' },
+    [pscustomobject]@{ Value = 'local'; Label = 'Local — local model work; Claude still needed for hooks/compile' },
+    [pscustomobject]@{ Value = 'lite'; Label = 'Lite — no Claude Code; no automatic capture or nightly compile' }
+  )
+  $presetDefault = [Array]::IndexOf(@('cloud', 'hybrid', 'local', 'lite'), [string]$defaults.preset)
+  if ($presetDefault -lt 0) { $presetDefault = 0 }
+  $preset = Read-Choice 'Choose a preset (Ön ayar seç)' $presetOptions $presetDefault
+
+  Write-Host ''
+  Write-Host 'Step 2/7 — Vault'
+  $vault = Resolve-VaultPath (Read-Default 'Vault path (Vault yolu)' ([string]$defaults.vault))
+
+  Write-Host ''
+  Write-Host 'Step 3/7 — Runtime/backend'
+  $runtime = $null
   $backend = 'claude'
-  if ($preset -eq 'lite') {
-    $backend = 'none'
-  } elseif ($preset -in @('hybrid', 'local')) {
-    $backend = Read-Choice 'Choose the background backend (Arka plan backendini seç)' @(
-      [pscustomobject]@{ Value = 'antigravity'; Label = 'Antigravity — free CLI backend (ücretsiz CLI backendi)' },
-      [pscustomobject]@{ Value = 'ollama'; Label = 'Ollama — local server (yerel sunucu)' },
-      [pscustomobject]@{ Value = 'openai-compat'; Label = 'OpenAI-compatible — LM Studio, llama.cpp, vLLM' }
-    ) 0
+  $installRuntime = $false
+  if ($preset -in @('hybrid', 'local', 'lite')) {
+    $runtime = Read-RuntimeChoice $Bundle $preset
+    $backend = [string]$runtime.backend
+    $installRuntime = [bool]$runtime.install
+  } else {
+    Write-Host '  Claude backend [detected default / algılanan varsayılan]'
   }
 
+  Write-Host ''
+  Write-Host 'Step 4/7 — Model'
   $backendEnvironment = [ordered]@{ BEYIN_VAULT = $vault }
-  $installRuntime = $false
   $pullModels = @()
   if ($backend -ne 'none') { $backendEnvironment['BEYIN_MODEL_BACKEND'] = $backend }
   if ($backend -eq 'ollama') {
-    $ollamaChoices = Get-OllamaInteractiveChoices
-    $backendEnvironment['BEYIN_OLLAMA_MODEL_FAST'] = $ollamaChoices.FastModel
-    if ($ollamaChoices.SmartModel) {
-      $backendEnvironment['BEYIN_OLLAMA_MODEL_SMART'] = $ollamaChoices.SmartModel
+    $candidate = @($Bundle.Context.recommendations | Where-Object { $_.label -in @('fits-gpu', 'cpu-ok') }) | Select-Object -First 1
+    if (-not $candidate) { $candidate = @($Bundle.Context.recommendations) | Select-Object -First 1 }
+    $defaultTag = if ($candidate) { [string]$candidate.tag } else { 'qwen3:4b' }
+    $fastModel = Read-VerifiedModel 'Fast Ollama model tag (Hızlı Ollama modeli)' $defaultTag
+    $backendEnvironment['BEYIN_OLLAMA_MODEL_FAST'] = $fastModel
+    if ($installRuntime) {
+      $size = [double]$script:OllamaModels[$fastModel]
+      Write-Host ("  {0} download is about {1:N1} GB; pull remains opt-in." -f $fastModel, $size)
+      if (Read-YesNo 'Pull this model after installing Ollama? (Model Ollama kurulduktan sonra indirilsin mi?)' $false) { $pullModels += $fastModel }
     }
-    $installRuntime = $ollamaChoices.InstallRuntime
-    $pullModels = @($ollamaChoices.PullModels)
   } elseif ($backend -eq 'openai-compat') {
-    $backendEnvironment['BEYIN_OPENAI_URL'] = Read-Required 'OpenAI-compatible base URL (Temel URL)'
-    $backendEnvironment['BEYIN_OPENAI_MODEL_FAST'] = Read-Required 'Fast model slug (Hızlı model kısaltması)'
+    $backendEnvironment['BEYIN_OPENAI_URL'] = Get-OpenAiDefaultUrl $runtime
+    Write-Host '  LM Studio shows the model identifier in its Server tab; llama.cpp/vLLM use the served model name.'
+    Write-Host '  Model listing needs an HTTP request and is never performed automatically or in dry-run.'
+    $knownModel = if ($runtime.PSObject.Properties['model']) { [string]$runtime.model } else { '' }
+    $backendEnvironment['BEYIN_OPENAI_MODEL_FAST'] = Read-Default 'Fast model name (Hızlı model adı)' $knownModel
+    $script:AllowEmptyOpenAiModel = $true
   } elseif ($backend -eq 'antigravity') {
-    Write-Host 'Reminder: run agy once interactively and complete login. (Hatırlatma: agy komutunu bir kez etkileşimli çalıştırıp giriş yap.)'
+    Write-Host '  Antigravity selected [detected/default]; run agy once interactively to log in.'
+  } else {
+    Write-Host '  No model backend [default for lite without a runtime].'
   }
 
   Write-Host ''
-  Write-Host 'User environment variables to persist (Kalıcı olacak kullanıcı değişkenleri):'
-  foreach ($name in $backendEnvironment.Keys) {
-    Write-Host ("  {0}={1}" -f $name, $backendEnvironment[$name])
-  }
-  if (-not (Read-YesNo 'Persist these variables? (Bu değişkenler kalıcı olsun mu?)' $true)) {
-    throw 'Setup cancelled: environment variables were not approved. (Kurulum iptal edildi.)'
-  }
-
-  $mcpDefault = $preset -in @('local', 'lite')
-  $mcp = Read-YesNo 'Register the MCP server in Claude Desktop? (MCP sunucusu Claude Desktop uygulamasına kaydedilsin mi?)' $mcpDefault
+  Write-Host 'Step 5/7 — Integrations'
+  $mcp = Read-YesNo 'Register MCP in Claude Desktop?' ([bool]$defaults.mcp)
+  $skillMode = Read-Choice 'Skills to install (Kurulacak beceriler)' @(
+    [pscustomobject]@{ Value = 'core'; Label = 'beyin-doktor + beyin-ice-aktar' },
+    [pscustomobject]@{ Value = 'all'; Label = 'All available skills (Tüm beceriler)' },
+    [pscustomobject]@{ Value = 'none'; Label = 'No skills (Beceri yok)' }
+  ) 0
+  $skills = if ($skillMode -eq 'core') { @('beyin-doktor', 'beyin-ice-aktar') } elseif ($skillMode -eq 'all') { @(Get-AvailableSkills | ForEach-Object { $_.Name }) } else { @() }
 
   Write-Host ''
-  Write-Host 'Skills (Beceriler):'
-  $skills = @()
-  foreach ($directory in Get-AvailableSkills) {
-    $description = Get-SkillDescription $directory
-    Write-Host ("  {0} — {1}" -f $directory.Name, $description)
-    $default = $directory.Name -in @('beyin-doktor', 'beyin-ice-aktar')
-    if (Read-YesNo ("Install {0}? (Kurulsun mu?)" -f $directory.Name) $default) {
-      $skills += $directory.Name
-    }
-  }
+  Write-Host 'Step 6/7 — Verification'
+  $script:ProbeBackend = Read-YesNo 'Run a cheap TCP/binary check after install? No model call.' $false
 
-  $script:ProbeBackend = Read-YesNo 'Run cheap backend checks after install? No model call. (Kurulumdan sonra ucuz backend kontrolleri çalışsın mı? Model çağrısı yok.)' $false
   $plan = [ordered]@{
     preset = $preset
     vault = $vault
@@ -512,9 +657,32 @@ function New-InteractivePlan {
     pull_models = $pullModels
   }
   Write-Host ''
+  Write-Host 'Step 7/7 — Plan confirmation'
   Write-Host 'Plan JSON:'
   Write-Host ($plan | ConvertTo-Json -Depth 10)
   return [pscustomobject]$plan
+}
+
+function New-InteractivePlan {
+  Write-Host 'origin-of-memory setup wizard (kurulum sihirbazı)'
+  Write-Host 'Step 1/2 — Choose a path (Yol seç)'
+  $mode = Read-Choice 'First question decides the flow (İlk soru akışı belirler)' @(
+    [pscustomobject]@{ Value = 'recommended'; Label = 'Recommended setup (auto-detect)' },
+    [pscustomobject]@{ Value = 'custom'; Label = 'Custom' },
+    [pscustomobject]@{ Value = 'detect'; Label = 'Show me what you detected first' }
+  ) 0
+  $bundle = Get-AutoDecision
+  if ($mode -eq 'detect') {
+    Show-Detection $bundle
+    return New-CustomPlan $bundle
+  }
+  if ($mode -eq 'custom') { return New-CustomPlan $bundle }
+  $action = Show-RecommendedConfirmation $bundle.Decision $true
+  if ($action -eq 'quit') { return $null }
+  if ($action -eq 'change') { return New-CustomPlan $bundle }
+  $script:AllowEmptyOpenAiModel = $true
+  $script:PlanAlreadyConfirmed = $true
+  return $bundle.Decision.plan
 }
 
 function Read-PlanFile([string]$Path) {
@@ -575,6 +743,10 @@ function Invoke-InstallCore([object]$Plan) {
 function Set-PlanEnvironment([object]$Plan) {
   foreach ($name in $Plan.BackendEnvironment.Keys) {
     $value = [string]$Plan.BackendEnvironment[$name]
+    if ($name -eq 'BEYIN_OPENAI_MODEL_FAST' -and -not $value) {
+      Write-Host '[TODO] BEYIN_OPENAI_MODEL_FAST was not detected; set it to the model identifier shown by the local runtime.'
+      continue
+    }
     $shown = if ($name -match '(?i:KEY|TOKEN|SECRET)') { '<redacted>' } else { $value }
     if ($DryRun) {
       Write-Host ("[DRYRUN][SETX] {0}={1}" -f $name, $shown)
@@ -634,7 +806,7 @@ function Install-OllamaRuntime {
 }
 
 function Invoke-OllamaSetup([object]$Plan) {
-  if ($Plan.Backend -ne 'ollama' -or $Plan.Preset -notin @('hybrid', 'local')) {
+  if ($Plan.Backend -ne 'ollama' -or $Plan.Preset -notin @('hybrid', 'local', 'lite')) {
     return
   }
   if ($DryRun) {
@@ -870,17 +1042,34 @@ function Show-NextSteps([object]$Plan) {
       Write-Host '  Yerel flush/içe aktarma hazır; MCP ve pano köprüsü okuma sağlar. Kancalar ve derleme yine claude CLI ister.'
     }
     'lite' {
-      Write-Host '  No automatic capture and no compile. Import export ZIPs, build retrieval data, then use MCP or the clipboard bridge.'
-      Write-Host '  Otomatik yakalama ve derleme yok. Dışa aktarım ZIP dosyalarını içe aktar, getirme verisini oluştur, sonra MCP veya pano köprüsünü kullan.'
+      Write-Host '  No automatic capture and no compile. A selected local backend can process imports; use MCP or the clipboard bridge for retrieval.'
+      Write-Host '  Otomatik yakalama ve derleme yok. Seçili yerel backend içe aktarımları işleyebilir; erişim için MCP veya pano köprüsünü kullan.'
     }
   }
 }
 
 try {
-  $rawPlan = if ($Answers) { Read-PlanFile $Answers } else { New-InteractivePlan }
+  if ($Answers -and $Recommended) {
+    throw '-Answers and -Recommended are mutually exclusive.'
+  }
+  $rawPlan = if ($Answers) {
+    Read-PlanFile $Answers
+  } elseif ($Recommended) {
+    $bundle = Get-AutoDecision
+    $script:AllowEmptyOpenAiModel = $true
+    Show-RecommendedConfirmation $bundle.Decision $false | Out-Null
+    $script:PlanAlreadyConfirmed = $true
+    $bundle.Decision.plan
+  } else {
+    New-InteractivePlan
+  }
+  if ($null -eq $rawPlan) {
+    Write-Host '[QUIT] No changes were made. (Değişiklik yapılmadı.)'
+    exit 0
+  }
   $plan = Validate-Plan $rawPlan
-  Show-PlanSummary $plan
-  if ($script:Interactive -and -not (Read-YesNo 'Execute this plan? (Bu plan çalıştırılsın mı?)' $false)) {
+  if ($Answers -or -not $script:PlanAlreadyConfirmed) { Show-PlanSummary $plan }
+  if ($script:Interactive -and -not $script:PlanAlreadyConfirmed -and -not (Read-YesNo 'Execute this plan? (Bu plan çalıştırılsın mı?)' $true)) {
     throw 'Setup cancelled. (Kurulum iptal edildi.)'
   }
   Invoke-InstallCore $plan

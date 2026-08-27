@@ -10,11 +10,21 @@ every Claude Code session into a daily log, compile those logs nightly into a
 linked Markdown knowledge base, and inject the relevant notes back into every
 session and every prompt.
 
-**Ask before you install.** Confirm the preset, vault path, backend, MCP choice,
-skills, and environment variables with the user before running anything that
-writes. The primary agent path is a reviewed plan passed to `kur.ps1 -Answers`.
-Cloud, hybrid, and local edit user-level Claude Code settings; none of those
-changes are yours to infer.
+**Dry-run before you install.** The primary agent path is `kur.ps1 -Recommended`.
+It deterministically detects the preset, vault, backend, MCP choice, skills, and
+model. First run it with `-DryRun`, copy the complete Recommended setup
+confirmation screen into your report to the user, and obtain approval before
+the real run. Cloud, hybrid, and local edit user-level Claude Code settings;
+that write authorization is not yours to infer.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended -DryRun
+# Report the confirmation screen and wait for approval, then:
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended
+```
+
+Use `-Answers` only when the user explicitly overrides the recommended plan and
+approves an authored JSON contract.
 
 ---
 
@@ -74,9 +84,12 @@ python "<VAULT PATH>\.claude\scripts\context_pack.py" "<question>" --clip
 The bridge does not automate consumer web UIs; such automation is fragile and
 conflicts with providers' terms.
 
-## Step 2 — Choose the vault path
+## Step 2 — Review the detected vault path
 
-Ask the user where the vault should live. Guidance:
+Recommended mode chooses `%USERPROFILE%\Documents\brain`, or
+`%USERPROFILE%\brain` when Windows reports a redirected Documents directory.
+Report that detected choice. If the user wants a different location, switch to
+Custom or an explicitly reviewed `-Answers` plan. Guidance:
 
 - Any directory. It can be new, or an existing Obsidian vault.
 - Prefer a path **without** non-ASCII characters if you can — it avoids a whole
@@ -96,10 +109,11 @@ cd origin-of-memory
 ```
 
 
-## Step 4 — Build and review the plan
+## Step 4 — Advanced: build an explicit override plan
 
 <!-- yazan: codex · gpt-5.6-sol -->
-Create the answers JSON outside the repository. The file is the entire
+Skip this step for the primary `-Recommended` path. For a user-requested
+override, create the answers JSON outside the repository. The file is the entire
 non-interactive contract and `kur.ps1` will not ask a follow-up question. The
 original fields are required; `install_runtime` and `pull_models` are optional
 and default to `false` and `[]`. Use exactly one example below, replacing
@@ -149,10 +163,24 @@ names in `skills`. The two core defaults are `beyin-doktor` and
 `beyin-ice-aktar`; the four generic working-set skills default off in the
 interactive wizard.
 
-## Step 5 — Dry run, then execute the same plan
+## Step 5 — Dry run, report, then execute the same mode
 
-Never run a first install without `-DryRun`. It prints install, environment, and MCP
-actions and writes nothing.
+Never run a first install without `-DryRun`. For the primary path, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended -DryRun
+```
+
+Paste the complete `Recommended setup confirmation` section into your user
+report. State any `[TODO]` lines, especially an unknown OpenAI-compatible model
+identifier. Do not run the real install until the user approves that screen.
+Then execute the same mode without `-DryRun`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended
+```
+
+For an explicitly approved override plan, use the same JSON for both runs:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers "<ANSWERS JSON>" -DryRun

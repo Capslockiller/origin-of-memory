@@ -120,8 +120,8 @@ hafıza ulaşmıyordu.
 ## Hızlı başlangıç
 
 <!-- yazan: codex · gpt-5.6-sol -->
-Birincil yol kurulum sihirbazıdır. Önce görüşmeyi tamamlar, planın tamamını
-gösterir ve yalnızca son onaydan sonra yazar:
+Birincil yol kurulum sihirbazıdır. Önerilen kurulum için Enter'a basın, otomatik
+algılanan planı inceleyin ve kurmak için bir kez daha Enter'a basın:
 
 ```powershell
 git clone https://github.com/Capslockiller/origin-of-memory.git
@@ -129,24 +129,34 @@ cd origin-of-memory
 powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1
 ```
 
+İki ekranlı yol Claude Code, Ollama, LM Studio, llama.cpp, vLLM, donanım,
+Documents yönlendirmesi ve Claude Desktop MCP yapılandırmasını algılar. Yalnızca
+algılanan bir varsayılanı değiştirmek istediğinizde `Custom` seçin.
+
 | Ön ayar | Yakalama ve derleme | Flush / içe aktarma | Okuma erişimi |
 | --- | --- | --- | --- |
 | `cloud` | Claude Code kancaları + Claude derlemesi | Claude | Kancalar; isteğe bağlı MCP / pano |
 | `hybrid` | Claude Code kancaları + Claude derlemesi | Antigravity, Ollama veya OpenAI-uyumlu | Kancalar; isteğe bağlı MCP / pano |
 | `local` | Claude Code kancaları + Claude derlemesi | Antigravity veya yerel uç | Varsayılan MCP + pano; ayrıca kancalar |
-| `lite` | Yok — otomatik yakalama ve derleme yok | Yalnızca içe aktarımla besleme | MCP + pano; hafıza dışa aktarım ZIP dosyalarından gelir |
+| `lite` | Yok — otomatik yakalama ve derleme yok | Algılanan yerel backend veya yalnızca içe aktarma | MCP + pano; hafıza dışa aktarım ZIP dosyalarından gelir |
 
 `local`, kancalar ve derleme için yine `claude` CLI ister. `lite` Claude Code
 kullanmaz; otomatik yakalama ve gece derlemesi yoktur.
 
 <!-- yazan: codex · gpt-5.6-sol -->
-- **Rehberli yerel modeller.** Etkileşimli Ollama `hybrid` veya `local`
-  kurulumunda sihirbaz RAM/CPU/GPU/disk probu yapar, yalnız doğrulanmış model
-  etiketlerini bellek uyumuna göre sıralar ve onaylanan Ollama kurulumu ya da
-  model indirmelerini disk ön kontrolüyle yürütebilir.
+- **Rehberli yerel modeller.** Sihirbaz Ollama, LM Studio, llama.cpp ve vLLM'i
+  algılar. Doğrulanmış Ollama etiketlerini donanım uyumuna göre sıralar, onayla
+  Ollama kurabilir ve LM Studio için elle GUI kurulumunu açıklar.
 
-Tekrarlanabilir veya ajan tarafından yürütülen kurulumda plan dosyası verilir.
-Önce mutlaka kuru koşu yapılır:
+Ajanın otomatik algılamalı kurulumu için `-Recommended` kullanın; gerçek
+çalıştırmadan önce kuru koşu onay ekranını kullanıcıya mutlaka raporlayın:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended
+```
+
+Açıkça hazırlanmış tekrarlanabilir planlar için `-Answers` kullanılmaya devam eder:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\plan\yolu.json -DryRun

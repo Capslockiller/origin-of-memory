@@ -116,8 +116,8 @@ so no memory reached any session at all.
 ## Quickstart
 
 <!-- yazan: codex · gpt-5.6-sol -->
-The setup wizard is the primary path. It interviews first, shows one complete
-plan, and writes only after the final confirmation:
+The setup wizard is the primary path. Press Enter for Recommended, review its
+auto-detected plan, then press Enter once more to install:
 
 ```powershell
 git clone https://github.com/Capslockiller/origin-of-memory.git
@@ -125,23 +125,34 @@ cd origin-of-memory
 powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1
 ```
 
+The two-screen path detects Claude Code, Ollama, LM Studio, llama.cpp, vLLM,
+hardware, Documents redirection, and Claude Desktop MCP configuration. Choose
+`Custom` only when you want to override a detected default.
+
 | Preset | Capture and compile | Flush / ingest | Read access |
 | --- | --- | --- | --- |
 | `cloud` | Claude Code hooks + Claude compile | Claude | Hooks; optional MCP / clipboard |
 | `hybrid` | Claude Code hooks + Claude compile | Antigravity, Ollama, or OpenAI-compatible | Hooks; optional MCP / clipboard |
 | `local` | Claude Code hooks + Claude compile | Antigravity or a local endpoint | MCP + clipboard by default; hooks too |
-| `lite` | None — no automatic capture, no compile | Import-driven backend work only | MCP + clipboard; memory comes from export ZIPs |
+| `lite` | None — no automatic capture, no compile | Detected local backend or import-only mode | MCP + clipboard; memory comes from export ZIPs |
 
 `local` still needs the `claude` CLI for hooks and compile. `lite` does not use
 Claude Code: it has no automatic capture or nightly compile.
 
 <!-- yazan: codex · gpt-5.6-sol -->
-- **Guided local models.** For an interactive Ollama `hybrid` or `local` setup,
-  the wizard probes RAM/CPU/GPU/disk, ranks only verified model tags by memory
-  fit, and can install Ollama or pull approved models with disk preflight.
+- **Guided local models.** The wizard detects Ollama, LM Studio, llama.cpp, and
+  vLLM. It ranks verified Ollama tags by hardware fit, can install Ollama after
+  consent, and prints manual GUI instructions for LM Studio.
 
-For a reproducible or agent-driven run, pass a plan file. Always dry-run it
-first:
+For an agent-driven auto-detected run, use `-Recommended` and always report the
+dry-run confirmation screen before running for real:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Recommended
+```
+
+For an explicitly authored reproducible plan, `-Answers` remains available:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\path\to\plan.json -DryRun
