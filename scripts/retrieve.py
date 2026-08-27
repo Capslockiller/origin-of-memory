@@ -39,7 +39,7 @@ _SAFE_SESSION = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 BENCH_QUERIES = (
     "hafıza",
     "karar alma",
-    "Odena Studio",
+    "iş akışı",
     "yapay zeka",
     "İstanbul",
     "proje yönetimi",
