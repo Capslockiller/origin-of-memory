@@ -98,8 +98,10 @@ function Find-Python {
 $repoRoot = $PSScriptRoot
 $expandedVault = [Environment]::ExpandEnvironmentVariables($VaultPath)
 $vault = [IO.Path]::GetFullPath($expandedVault)
-$userRoot = [Environment]::GetFolderPath('UserProfile')
-if (-not $userRoot) { $userRoot = $env:USERPROFILE }
+# USERPROFILE first: GetFolderPath ignores the environment override, which
+# silently points a redirected run at the real profile.
+$userRoot = $env:USERPROFILE
+if (-not $userRoot) { $userRoot = [Environment]::GetFolderPath('UserProfile') }
 if (-not $userRoot) { throw 'The user profile directory could not be resolved.' }
 $userClaude = Join-Path $userRoot '.claude'
 $settingsPath = Join-Path $userClaude 'settings.json'

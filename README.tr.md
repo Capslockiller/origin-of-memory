@@ -139,6 +139,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1
 `local`, kancalar ve derleme için yine `claude` CLI ister. `lite` Claude Code
 kullanmaz; otomatik yakalama ve gece derlemesi yoktur.
 
+<!-- yazan: codex · gpt-5.6-sol -->
+- **Rehberli yerel modeller.** Etkileşimli Ollama `hybrid` veya `local`
+  kurulumunda sihirbaz RAM/CPU/GPU/disk probu yapar, yalnız doğrulanmış model
+  etiketlerini bellek uyumuna göre sıralar ve onaylanan Ollama kurulumu ya da
+  model indirmelerini disk ön kontrolüyle yürütebilir.
+
 Tekrarlanabilir veya ajan tarafından yürütülen kurulumda plan dosyası verilir.
 Önce mutlaka kuru koşu yapılır:
 
@@ -150,12 +156,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\plan\yol
 Plan sözleşmesi:
 
 ```json
-{"preset":"cloud|hybrid|local|lite","vault":"<yol>","backend":"claude|antigravity|ollama|openai-compat|none","backend_env":{"BEYIN_*":"<değer>"},"mcp":true,"skills":["beyin-doktor"],"force":false}
+{"preset":"cloud|hybrid|local|lite","vault":"<yol>","backend":"claude|antigravity|ollama|openai-compat|none","backend_env":{"BEYIN_*":"<değer>"},"mcp":true,"skills":["beyin-doktor"],"force":false,"install_runtime":false,"pull_models":[]}
 ```
 
 Doğrulama kuralları ve doldurulmuş örnekler:
 [kurulum sihirbazı sözleşmesi](docs/setup-wizard.md). `-DryRun`, kurulum,
-`setx` ve MCP eylemlerinin tamamını basar; hiçbir şey yazmaz.
+ortam değişkeni ve MCP eylemlerinin tamamını basar; hiçbir şey yazmaz.
+
+Proje kayıtlarını geri almak ve istenirse kopyalanan çalışma dosyalarını
+kaldırmak için önce güvenli kaldırıcının kuru koşusunu yapın. Düzenlediği her
+dosyayı yedekler; `daily/`, `knowledge/`, companion dosyaları ve diğer vault
+içeriğine asla dokunmaz:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
+```
 
 ### Doğrudan kurucu
 

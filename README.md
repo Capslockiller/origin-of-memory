@@ -135,6 +135,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1
 `local` still needs the `claude` CLI for hooks and compile. `lite` does not use
 Claude Code: it has no automatic capture or nightly compile.
 
+<!-- yazan: codex · gpt-5.6-sol -->
+- **Guided local models.** For an interactive Ollama `hybrid` or `local` setup,
+  the wizard probes RAM/CPU/GPU/disk, ranks only verified model tags by memory
+  fit, and can install Ollama or pull approved models with disk preflight.
+
 For a reproducible or agent-driven run, pass a plan file. Always dry-run it
 first:
 
@@ -146,12 +151,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\path\to\
 The plan contract is:
 
 ```json
-{"preset":"cloud|hybrid|local|lite","vault":"<path>","backend":"claude|antigravity|ollama|openai-compat|none","backend_env":{"BEYIN_*":"<value>"},"mcp":true,"skills":["beyin-doktor"],"force":false}
+{"preset":"cloud|hybrid|local|lite","vault":"<path>","backend":"claude|antigravity|ollama|openai-compat|none","backend_env":{"BEYIN_*":"<value>"},"mcp":true,"skills":["beyin-doktor"],"force":false,"install_runtime":false,"pull_models":[]}
 ```
 
 See [the setup-wizard contract](docs/setup-wizard.md) for validation rules and
-filled examples. `-DryRun` prints every install, `setx`, and MCP action and
+filled examples. `-DryRun` prints every install, environment, and MCP action and
 writes nothing.
+
+To reverse project registrations and optionally remove copied runtime files,
+dry-run the safe uninstaller first. It backs up every edited file and never
+touches `daily/`, `knowledge/`, companion files, or other vault content:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
+```
 
 ### Direct installer
 

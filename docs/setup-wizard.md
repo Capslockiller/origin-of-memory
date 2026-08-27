@@ -11,11 +11,12 @@ summary table, then asks one final confirmation before writing.
 
 For automation, `-Answers <file.json>` makes that file the complete plan. This
 mode never prompts and exits 0 on success or 1 on a validation/action failure.
-`-DryRun` prints every copy, hook, `setx`, and MCP action without writing.
+`-DryRun` prints every copy, hook, environment, and MCP action without writing.
 
 ## Plan schema
 
-Every field is required; unknown fields are rejected.
+The original fields are required. `install_runtime` and `pull_models` are
+optional and default to `false` and `[]`; unknown fields are rejected.
 
 ```json
 {
@@ -25,7 +26,9 @@ Every field is required; unknown fields are rejected.
   "backend_env": { "BEYIN_*": "<string>" },
   "mcp": true,
   "skills": ["beyin-doktor", "beyin-ice-aktar"],
-  "force": false
+  "force": false,
+  "install_runtime": false,
+  "pull_models": []
 }
 ```
 
@@ -41,9 +44,11 @@ under `skills/`. Backend compatibility is:
 | `local` | `antigravity`, `ollama`, `openai-compat` | Same hooks plus MCP/clipboard-oriented defaults; compile still needs `claude` |
 | `lite` | `none` | No hook registration, automatic capture, or compile |
 
-Ollama plans require `BEYIN_OLLAMA_MODEL_FAST`. OpenAI-compatible plans require
-`BEYIN_OPENAI_URL` and `BEYIN_OPENAI_MODEL_FAST`. The wizard suggests
-`qwen3:8b` for Ollama as a starting point, not as a measured recommendation.
+Ollama plans require `BEYIN_OLLAMA_MODEL_FAST`. An explicit `pull_models` list
+accepts at most two verified catalogue tags; the first becomes the fast model
+and the second becomes the smart model through the plan environment mechanism.
+`install_runtime` and model pulls are valid only for Ollama. OpenAI-compatible
+plans require `BEYIN_OPENAI_URL` and `BEYIN_OPENAI_MODEL_FAST`.
 
 ## Filled plans
 
@@ -130,15 +135,16 @@ clipboard bridge; there is no automatic capture or nightly compile.
 ## Environment and MCP writes
 
 The interactive wizard lists all chosen `BEYIN_*` variables and asks once
-before including their user-scope `setx` writes. Non-interactive mode treats the
-plan as that authorization. Secret-like values are redacted in console output.
+before persisting them through the .NET user-scope environment API. It never
+uses `setx`, which can truncate long values and damage PATH. Non-interactive
+mode treats the plan as that authorization. Secret-like values are redacted.
 
-When MCP is selected, the wizard probes
-`%APPDATA%\Claude\claude_desktop_config.json`. If it exists, the wizard backs it
-up and JSON-merges `origin-of-memory` under `mcpServers` without changing other
-entries. An existing entry is skipped. If the config file is absent, the wizard
-prints the registration snippet from [mcp.md](mcp.md) and does not create a
-Claude Desktop config on the user's behalf.
+When MCP is selected, the wizard probes both the standard
+`%APPDATA%\Claude\claude_desktop_config.json` and the MSIX-virtualised
+`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`.
+It prefers an existing file, backs up every file it writes, and writes the same
+merged content to both when both exist. If neither exists, it creates the
+standard file and warns that an MSIX install may read the virtual path.
 
 Cheap backend verification (`--version` or a short TCP connection) is performed
 only after explicit interactive consent and never makes a model call.

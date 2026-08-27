@@ -100,20 +100,21 @@ cd origin-of-memory
 
 <!-- yazan: codex · gpt-5.6-sol -->
 Create the answers JSON outside the repository. The file is the entire
-non-interactive contract: every field is required, and `kur.ps1` will not ask a
-follow-up question. Use exactly one example below, replacing `<VAULT PATH>` and
-backend details after the user approves them.
+non-interactive contract and `kur.ps1` will not ask a follow-up question. The
+original fields are required; `install_runtime` and `pull_models` are optional
+and default to `false` and `[]`. Use exactly one example below, replacing
+`<VAULT PATH>` and backend details after the user approves them.
 
 ### Cloud example
 
 ```json
-{"preset":"cloud","vault":"<VAULT PATH>","backend":"claude","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"claude"},"mcp":false,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+{"preset":"cloud","vault":"<VAULT PATH>","backend":"claude","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"claude"},"mcp":false,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false,"install_runtime":false,"pull_models":[]}
 ```
 
 ### Hybrid example
 
 ```json
-{"preset":"hybrid","vault":"<VAULT PATH>","backend":"antigravity","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"antigravity"},"mcp":false,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+{"preset":"hybrid","vault":"<VAULT PATH>","backend":"antigravity","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"antigravity"},"mcp":false,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false,"install_runtime":false,"pull_models":[]}
 ```
 
 Before the real hybrid run, remind the user to launch `agy` once interactively
@@ -123,17 +124,20 @@ backend fields shown in [the full plan contract](docs/setup-wizard.md).
 ### Local example
 
 ```json
-{"preset":"local","vault":"<VAULT PATH>","backend":"ollama","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"ollama","BEYIN_OLLAMA_MODEL_FAST":"qwen3:8b"},"mcp":true,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+{"preset":"local","vault":"<VAULT PATH>","backend":"ollama","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"ollama","BEYIN_OLLAMA_MODEL_FAST":"qwen3:8b"},"mcp":true,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false,"install_runtime":false,"pull_models":[]}
 ```
 
-`qwen3:8b` is a starting-point suggestion, not a measured recommendation.
-Local may instead use OpenAI-compatible `BEYIN_OPENAI_URL` and
-`BEYIN_OPENAI_MODEL_FAST` fields.
+For explicitly authorized agent-driven Ollama setup, set `install_runtime` to
+`true` and put one or two verified tags in `pull_models`. The first tag must
+match `BEYIN_OLLAMA_MODEL_FAST`; a second tag becomes
+`BEYIN_OLLAMA_MODEL_SMART`. The real run may install/download, while `-DryRun`
+always prints `[SKIP]` and performs neither. Local may instead use
+OpenAI-compatible `BEYIN_OPENAI_URL` and `BEYIN_OPENAI_MODEL_FAST` fields.
 
 ### Lite example
 
 ```json
-{"preset":"lite","vault":"<VAULT PATH>","backend":"none","backend_env":{"BEYIN_VAULT":"<VAULT PATH>"},"mcp":true,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+{"preset":"lite","vault":"<VAULT PATH>","backend":"none","backend_env":{"BEYIN_VAULT":"<VAULT PATH>"},"mcp":true,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false,"install_runtime":false,"pull_models":[]}
 ```
 
 State the lite limitation without euphemism: no automatic capture and no
@@ -147,7 +151,7 @@ interactive wizard.
 
 ## Step 5 — Dry run, then execute the same plan
 
-Never run a first install without `-DryRun`. It prints install, `setx`, and MCP
+Never run a first install without `-DryRun`. It prints install, environment, and MCP
 actions and writes nothing.
 
 ```powershell
@@ -156,12 +160,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers "<ANSWERS J
 ```
 
 Read the dry-run output with the user. Expect `[COPY]`, hook `[REGISTER]` lines
-except in lite, `[DRYRUN][SETX]`, MCP merge-or-snippet output when selected, and
+except in lite, `[DRYRUN][SETX]`, MCP create/merge output when selected, and
 `[DONE] preset=<name> mode=dry-run`. If an existing hook or MCP entry is
 reported as `[SKIP]`, the merge is idempotent.
 
 Set `force` to `true` only for an approved upgrade. It overwrites installed
 scripts/hooks but never the user's `hub-config.json` or vault content.
+
+### Uninstall
+
+Use `uninstall.ps1` to remove only the six exact project hook commands and the
+`origin-of-memory` MCP entry from both Claude Desktop config locations. Copied
+scripts, copied hooks, and this repository's skills each require separate
+approval. Every edited or removed file is backed up. The uninstaller never
+touches `daily/`, `knowledge/`, companion files, or other vault content.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
+```
+
+For a non-interactive run, pass an answers file containing `vault`,
+`remove_scripts`, `remove_hooks`, and `remove_skills`; dry-run that exact file
+before executing it:
+
+```json
+{"vault":"<VAULT PATH>","remove_scripts":false,"remove_hooks":false,"remove_skills":false}
+```
 
 ### Manual fallback
 
@@ -300,31 +325,21 @@ subscription usage; `--max-sessions` bounds a run.
 
 ## Uninstall
 
-There is no uninstaller. Removal is manual and reversible:
+<!-- yazan: codex · gpt-5.6-sol -->
+Use `uninstall.ps1` and review its dry-run first. It matches only the six exact
+hook command strings, removes only the `origin-of-memory` MCP key from both
+Claude Desktop locations, and asks separately about copied scripts, copied
+hooks, and repository skills. Every file it edits or removes is backed up.
 
-1. **Unregister the hooks.** Edit `<user>\.claude\settings.json` and remove the
-   entries whose `command` points at `<vault>\.claude\hooks\`:
-   - `SessionStart` → `session-start.ps1`
-   - `UserPromptSubmit` → `prompt-counter.ps1` and `memory-retrieve.ps1`
-   - `SessionEnd` → `flush-launch.ps1 -Reason sessionend` and `session-end.ps1`
-   - `PreCompact` → `flush-launch.ps1 -Reason precompact`
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File uninstall.ps1
+```
 
-   The installer left a backup at `settings.json.bak-<timestamp>`; restoring it
-   is the cleanest route if nothing else changed since.
-
-2. **Remove the machinery.** Delete `<vault>\.claude\scripts\` and
-   `<vault>\.claude\hooks\`. This also removes `.state\` (session counters,
-   ingest and compile bookkeeping, `notes.db`).
-
-3. **Remove the skills** you installed from `<user>\.claude\skills\`:
-   `beyin-doktor`, `beyin-ice-aktar`, and whichever of `companion`,
-   `orchestration`, `codex-fleet`, `gece-vardiyasi` were copied.
-
-4. **Keep or delete the content.** `daily/` and `knowledge/` are the user's
-   notes, in plain Markdown. Deleting them destroys the memory; that is the
-   user's decision alone, and never yours. Leave them unless explicitly asked.
-
-5. `<vault>\.stage\` and `<vault>\.import\` are transient and safe to delete.
+The uninstaller deliberately preserves runtime state and all user memory it did
+not install as a copied project file. In particular, it never touches `daily/`,
+`knowledge/`, companion files, `.stage/`, `.import/`, or other vault content.
+Deleting any of those remains the user's decision alone.
 
 ---
 

@@ -27,24 +27,69 @@ are accepted by some local servers. `BEYIN_MODEL_BACKEND=openai` is a supported
 alias for `openai-compat`, but records a warning so the canonical name remains
 visible.
 
-## Suggested models
+<!-- yazan: codex · gpt-5.6-sol -->
+## Hardware probe and model recommendations
 
-These are suggestions, not benchmarks. For a Turkish vault, Turkish-language
-quality matters at least as much as headline English scores. Qwen 2.5 or Qwen 3
-in the 7–14B range is the first model family to try; Gemma 3 and Llama 3.x are
-reasonable alternatives. Test summaries against your own Turkish material
-before relying on unattended runs.
+Run the standard-library-only tools directly to inspect the full result:
 
-## Rough hardware guidance
+```powershell
+python scripts/donanim.py
+python scripts/donanim.py --json
+python scripts/model_oneri.py
+python scripts/model_oneri.py --json
+```
 
-All figures below are rough guidance, not measurements from this project.
+The stable probe JSON keys are `ram_gb`, `cpu` (`name`, `physical_cores`,
+`logical_cores`), `gpus` (`name`, `vram_gb`, `source`), `free_disk_gb`,
+`model_store`, `commands`, `os_build`, and `notes`. Every field is independent:
+an unavailable value is `null` and a reason is added to `notes` instead of
+aborting the result. `OLLAMA_MODELS` selects the model-store path; the default
+is `%USERPROFILE%\.ollama\models`.
 
-- Floor: 8–16 GB system RAM can run a 4-bit 7–8B model on CPU slowly. Background
-  summarisation is latency-tolerant, so this can still be useful.
-- Comfortable: about 8 GB VRAM or 16 GB unified memory for typical 7–14B local
-  use, depending on quantisation and context allocation.
-- Better: about 24 GB VRAM or 32 GB unified memory gives more room for 14–32B
-  models and larger context allocations.
+GPU memory detection does not trust `Win32_VideoController.AdapterRAM`: that
+field is 32-bit and can misreport cards above 4 GB. The order is NVIDIA
+`nvidia-smi`, the cross-vendor display-class registry QWORD
+`HardwareInformation.qwMemorySize`, then `AdapterRAM` as a warned last resort.
+
+The embedded catalogue contains only these verified Ollama tags and file sizes:
+
+| Tag | File size |
+| --- | ---: |
+| `qwen3:4b` | 2.5 GB |
+| `qwen3:8b` | 5.2 GB |
+| `qwen3:14b` | 9.3 GB |
+| `qwen3:30b` | 19 GB |
+| `gemma3:4b` | 3.3 GB |
+| `gemma3:12b` | 8.1 GB |
+| `gemma3:27b` | 17 GB |
+
+The estimator uses `need_GB = file_size_GB × 1.2 + 1.0` and labels each model
+`fits-gpu`, `tight`, `cpu-ok`, or `no-fit`. These are memory-fit estimates, not
+benchmarks or speed promises. Context length, GPU offload, runtime settings, and
+workload can change real behaviour. Test summaries against your own material.
+
+## Guided Ollama setup
+
+In an interactive `hybrid` or `local` wizard run with the `ollama` backend,
+`kur.ps1` prints the probe and ranked fit table. After explicit confirmation it
+can:
+
+1. Install Ollama through
+   `winget install --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements`.
+2. If `winget` is unavailable, download the official
+   `https://ollama.com/download/OllamaSetup.exe` and run it with
+   `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`. These are widely reported
+   InnoSetup flags but are not officially documented by Ollama. Windows
+   SmartScreen may prompt; the wizard warns in advance and never bypasses it.
+3. Refresh the current process PATH from Machine and User values, then verify
+   `ollama --version`.
+4. Require model-store free space equal to 1.5 times the selected catalogue file
+   size, then stream `ollama pull <tag>`. Ollama pulls are resumable.
+
+The default install is per-user under `%LOCALAPPDATA%\Programs\Ollama` and does
+not need administrator rights. Use `HTTPS_PROXY`, not `HTTP_PROXY`, when Ollama
+must reach its registry through a proxy. `-DryRun` skips this entire step and
+cannot install or download anything.
 
 ## Context window and flush chunking
 

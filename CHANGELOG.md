@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: codex · gpt-5.6-sol -->
+- Fault-tolerant Windows hardware probe (`scripts/donanim.py`) and verified-tag
+  Ollama fit recommender (`scripts/model_oneri.py`), with interactive wizard
+  guidance, explicit non-interactive install/pull plan fields, disk preflight,
+  and dry-run isolation.
+- Safe `uninstall.ps1` for exact hook/MCP cleanup and separately approved copied
+  files, with per-file backups and an explicit vault-memory preservation rule.
+
+<!-- yazan: codex · gpt-5.6-sol -->
 - Interview-first PowerShell 5.1 setup wizard (`kur.ps1`) with strict JSON plans,
   cloud/hybrid/local/lite presets, dry-run-safe user environment actions,
   selected-skill installs, optional non-clobbering Claude Desktop MCP merge,
@@ -71,6 +79,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     user-global allow-list or `--dangerously-skip-permissions`, which this
     repository does not ship. In `antigravity` mode compile keeps using
     `claude` when that binary is on `PATH` and fails loud otherwise.
+
+### Fixed
+
+<!-- yazan: codex · gpt-5.6-sol -->
+- Replaced `setx` persistence with the non-truncating .NET user environment API.
+- Claude Desktop MCP registration now handles both standard and MSIX-virtualised
+  config paths, backs up every edited file, and keeps dual configs in sync.
 
 ## [0.1.0] - 2026-08-27
 

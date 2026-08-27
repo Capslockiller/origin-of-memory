@@ -27,6 +27,8 @@ class WizardDryRunTests(unittest.TestCase):
         self.vault.mkdir()
         self.appdata = self.root / "appdata"
         self.appdata.mkdir()
+        self.localappdata = self.root / "localappdata"
+        self.localappdata.mkdir()
         self.profile = self.root / "profile"
         self.profile.mkdir()
 
@@ -60,6 +62,7 @@ class WizardDryRunTests(unittest.TestCase):
         )
         environment = os.environ.copy()
         environment["APPDATA"] = str(self.appdata)
+        environment["LOCALAPPDATA"] = str(self.localappdata)
         environment["USERPROFILE"] = str(self.profile)
         return subprocess.run(
             [
@@ -105,6 +108,7 @@ class WizardDryRunTests(unittest.TestCase):
                     self.assertIn("[SKIP] Hook registration disabled.", output)
                 if preset in {"local", "lite"}:
                     self.assertIn("Claude Desktop config not found", output)
+                    self.assertIn("[DRYRUN][MCP] Create origin-of-memory", output)
                 after = self._tree()
                 expected_new = Path(f"{preset}.json")
                 self.assertEqual(after, sorted([*before, expected_new]))
@@ -122,6 +126,7 @@ class WizardDryRunTests(unittest.TestCase):
         answers = ["", str(self.vault), *([""] * 9), "y"]
         environment = os.environ.copy()
         environment["APPDATA"] = str(self.appdata)
+        environment["LOCALAPPDATA"] = str(self.localappdata)
         environment["USERPROFILE"] = str(self.profile)
         result = subprocess.run(
             [
@@ -196,10 +201,53 @@ class WizardDryRunTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, output)
         self.assertIn("[DRYRUN][BACKUP]", output)
         self.assertIn(
-            "[DRYRUN][MCP] Merge origin-of-memory under mcpServers.",
+            "[DRYRUN][MCP] Merge origin-of-memory in",
             output,
         )
         self.assertEqual(config.read_text(encoding="utf-8"), original)
+
+    def test_optional_ollama_plan_fields_round_trip_in_dry_run(self) -> None:
+        plan = self._plan("local")
+        plan["backend_env"]["BEYIN_OLLAMA_MODEL_FAST"] = "qwen3:8b"
+        plan["install_runtime"] = True
+        plan["pull_models"] = ["qwen3:8b", "gemma3:12b"]
+        result = self._run_wizard(plan)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("Install Ollama True", output)
+        self.assertIn("qwen3:8b, gemma3:12b", output)
+        self.assertIn("[DRYRUN][SETX] BEYIN_OLLAMA_MODEL_SMART=gemma3:12b", output)
+        self.assertIn(
+            "[SKIP] Ollama guided setup disabled in dry-run; no probe, install, or pull.",
+            output,
+        )
+        self.assertNotIn("[PULL]", output)
+
+    def test_mcp_dry_run_detects_both_standard_and_msix_configs(self) -> None:
+        standard = self.appdata / "Claude" / "claude_desktop_config.json"
+        virtual = (
+            self.localappdata
+            / "Packages"
+            / "Claude_pzs8sxrjxfjjc"
+            / "LocalCache"
+            / "Roaming"
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
+        standard.parent.mkdir(parents=True)
+        virtual.parent.mkdir(parents=True)
+        standard.write_text(json.dumps({"theme": "standard"}), encoding="utf-8")
+        virtual.write_text(json.dumps({"locale": "virtual"}), encoding="utf-8")
+        before_standard = standard.read_bytes()
+        before_virtual = virtual.read_bytes()
+        result = self._run_wizard(self._plan("local"))
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn(str(standard), output)
+        self.assertIn(str(virtual), output)
+        self.assertEqual(output.count("[DRYRUN][MCP] Merge"), 2)
+        self.assertEqual(standard.read_bytes(), before_standard)
+        self.assertEqual(virtual.read_bytes(), before_virtual)
 
 
 if __name__ == "__main__":
