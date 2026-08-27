@@ -1,0 +1,41 @@
+{
+  "_schema": "rootmap hub definitions v1 — membership uses frontmatter tags and title_keys; unmatched concepts go to catch_all; array order controls root-map order",
+  "catch_all": "daily-life",
+  "hubs": [
+    {
+      "id": "work-project",
+      "ad": "Work Projects",
+      "kapsam": "Projects, clients, planning, delivery, and professional decisions",
+      "tags": ["work", "project", "client", "planning", "delivery"],
+      "title_keys": ["project", "client", "work"]
+    },
+    {
+      "id": "health",
+      "ad": "Health",
+      "kapsam": "Health, exercise, sleep, nutrition, and wellbeing",
+      "tags": ["health", "exercise", "sleep", "nutrition", "wellbeing"],
+      "title_keys": ["health", "sleep", "exercise"]
+    },
+    {
+      "id": "learning",
+      "ad": "Learning",
+      "kapsam": "Courses, books, research, skills, and study notes",
+      "tags": ["learning", "study", "course", "book", "research"],
+      "title_keys": ["learning", "course", "study"]
+    },
+    {
+      "id": "finances",
+      "ad": "Finances",
+      "kapsam": "Budgets, expenses, invoices, taxes, and financial planning",
+      "tags": ["finances", "budget", "expense", "invoice", "tax"],
+      "title_keys": ["budget", "invoice", "finance"]
+    },
+    {
+      "id": "daily-life",
+      "ad": "Daily Life",
+      "kapsam": "Catch-all for useful concepts that do not match another hub",
+      "tags": [],
+      "title_keys": []
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+.state/
+.stage/
+notes.db
+*.lock
+__pycache__/
+*.pyc
+.import/
