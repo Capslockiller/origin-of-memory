@@ -41,14 +41,17 @@ python -c "import sqlite3; sqlite3.connect(':memory:').execute('CREATE VIRTUAL T
 | --- | --- | --- |
 | Windows | Yes | **Stop.** Point the user at the upstream project for macOS/Linux: <https://github.com/avenoxai/avenoxbeyin> |
 | Python 3.12+ | Yes | Have the user install Python 3.12+ from python.org. If they have an interpreter elsewhere, set `BEYIN_PYTHON` to its full path. |
-| `claude` CLI | Yes | The pipeline calls `claude -p` for summarising and compiling. Without it, nothing is written. |
+| `claude` CLI | Yes | The pipeline calls `claude -p` for summarising and compiling. Without it, nothing is written. Claude Code needs a paid subscription (Pro or higher) **or** a pay-as-you-go Anthropic API key set as `ANTHROPIC_API_KEY` — it is not part of the free claude.ai plan. |
 | FTS5 probe prints `fts5 ok` | For retrieval | If it raises `sqlite3.OperationalError`, per-prompt retrieval will not work. Everything else still does. Tell the user, and let them decide whether to continue. |
 
 Two notes worth passing on:
 
-- There is **no additional cost**. Model calls run on the user's existing Claude
-  subscription: a small Haiku call per session end, one Sonnet compile per day.
-- **No API keys, no external services.** Everything is local files.
+- On a subscription there is **no additional cost**: model calls run on the
+  user's existing Claude plan — a small Haiku call per session end, one Sonnet
+  compile per day. Without a subscription, the same calls run on a
+  pay-as-you-go `ANTHROPIC_API_KEY` for roughly a few dollars a month.
+- **No external services.** Everything is local files; no key is required
+  beyond the Claude authentication the user already has.
 
 ## Step 2 — Choose the vault path
 

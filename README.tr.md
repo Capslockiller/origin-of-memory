@@ -185,6 +185,10 @@ enjekte ettiği kalıcı kurallar dosyasının eşlik eden örneği.
   değilse `BEYIN_PYTHON` değişkenini ayarla.
 - **Claude Code CLI** `PATH` üzerinde. Tüm model çağrıları mevcut aboneliğin
   üstünden `claude -p` ile gidiyor — flush Haiku, derleme Sonnet.
+  - **Aboneliğin yok mu?** Claude Code ücretsiz claude.ai planına dahil değil;
+    ama kullandıkça öde [Anthropic API anahtarıyla](https://platform.claude.com/)
+    da çalışır (`ANTHROPIC_API_KEY`). Bu sistemin arka plan çağrılarının tipik
+    maliyeti, kullanım yoğunluğuna göre ayda birkaç dolar mertebesindedir.
 - **FTS5 destekli SQLite.** Getirme katmanı
   `CREATE VIRTUAL TABLE notes USING fts5(...)` ile sanal tablo kuruyor. Windows
   CPython derlemelerinin çoğunda FTS5 açık ama hepsinde değil. Kurulumdan önce

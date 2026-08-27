@@ -180,6 +180,11 @@ the persistent-rules file the session hook injects.
   the first `python` on `PATH`.
 - **Claude Code CLI** on `PATH`. All model calls go through `claude -p` on your
   existing subscription — flush uses Haiku, compile uses Sonnet.
+  - **No subscription?** Claude Code is not part of the free claude.ai plan,
+    but it also runs on a pay-as-you-go
+    [Anthropic API key](https://platform.claude.com/) (`ANTHROPIC_API_KEY`).
+    Typical cost for this system's background calls is on the order of a few
+    dollars per month, depending on session volume.
 - **SQLite with FTS5.** Retrieval builds a virtual table with
   `CREATE VIRTUAL TABLE notes USING fts5(...)`. Most CPython builds for Windows
   ship FTS5 enabled, but not all do. Check before installing:
