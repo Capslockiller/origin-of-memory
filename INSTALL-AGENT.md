@@ -10,16 +10,19 @@ every Claude Code session into a daily log, compile those logs nightly into a
 linked Markdown knowledge base, and inject the relevant notes back into every
 session and every prompt.
 
-**Ask before you install.** Confirm the vault path with the user before running
-anything that writes. This installer edits their user-level Claude Code
-settings; that is not a change to make on your own initiative.
+**Ask before you install.** Confirm the preset, vault path, backend, MCP choice,
+skills, and environment variables with the user before running anything that
+writes. The primary agent path is a reviewed plan passed to `kur.ps1 -Answers`.
+Cloud, hybrid, and local edit user-level Claude Code settings; none of those
+changes are yours to infer.
 
 ---
 
 ## Step 1 — Verify prerequisites
 
-Run all four checks and report the results as a table before continuing. Do not
-proceed past a failure — tell the user what is missing and stop.
+Run the checks relevant to the chosen preset and report the results as a table
+before continuing. Do not proceed past a required failure — tell the user what
+is missing and stop. Lite does not require the `claude` CLI.
 
 ```powershell
 # 1. Windows. The hooks are PowerShell; there is no supported POSIX path.
@@ -42,7 +45,7 @@ python -c "import sqlite3; sqlite3.connect(':memory:').execute('CREATE VIRTUAL T
 | --- | --- | --- |
 | Windows | Yes | **Stop.** Point the user at the upstream project for macOS/Linux: <https://github.com/avenoxai/avenoxbeyin> |
 | Python 3.12+ | Yes | Have the user install Python 3.12+ from python.org. If they have an interpreter elsewhere, set `BEYIN_PYTHON` to its full path. |
-| `claude` CLI | Yes | The pipeline calls `claude -p` for summarising and compiling. Without it, nothing is written. Claude Code needs a paid subscription (Pro or higher) **or** a pay-as-you-go Anthropic API key set as `ANTHROPIC_API_KEY` — it is not part of the free claude.ai plan. |
+| `claude` CLI | Cloud / hybrid / local | Hooks and compile require it. Lite deliberately has neither. Claude Code needs a paid subscription (Pro or higher) **or** a pay-as-you-go Anthropic API key set as `ANTHROPIC_API_KEY` — it is not part of the free claude.ai plan. |
 | `agy` CLI (Antigravity) | Optional | Only if the user wants the background summarising calls (flush + ingest) on Google's free tier instead of `claude -p`. Install it from the official Antigravity CLI install page (not npm), run `agy` once interactively to sign in, then set `BEYIN_MODEL_BACKEND=antigravity`. The `claude` CLI is still required for hooks, sessions and the nightly compile. Free-tier quota is limited (third-party reports say ~20 agent requests/day — unverified), and summary quality on Gemini models is unmeasured. |
 | Local model server | Optional | Only if the user wants zero-cloud-cost flush and ingest summaries. For Ollama, set `BEYIN_MODEL_BACKEND=ollama` and `BEYIN_OLLAMA_MODEL_FAST`; Ollama defaults to `http://localhost:11434`. For LM Studio, llama.cpp `llama-server`, vLLM, or another OpenAI-compatible server, set `BEYIN_MODEL_BACKEND=openai-compat`, `BEYIN_OPENAI_URL`, and `BEYIN_OPENAI_MODEL_FAST`. Smart-model slugs and `BEYIN_OPENAI_KEY` are optional. Nightly compile still needs `claude` and is refused when that binary is absent. See [local model backends](docs/local-models.md). |
 | FTS5 probe prints `fts5 ok` | For retrieval | If it raises `sqlite3.OperationalError`, per-prompt retrieval will not work. Everything else still does. Tell the user, and let them decide whether to continue. |
@@ -93,42 +96,83 @@ cd origin-of-memory
 ```
 
 
-## Step 4 — Dry run first
+## Step 4 — Build and review the plan
 
-Never run the installer for the first time without `-DryRun`. It prints every
-action and writes nothing.
+<!-- yazan: codex · gpt-5.6-sol -->
+Create the answers JSON outside the repository. The file is the entire
+non-interactive contract: every field is required, and `kur.ps1` will not ask a
+follow-up question. Use exactly one example below, replacing `<VAULT PATH>` and
+backend details after the user approves them.
+
+### Cloud example
+
+```json
+{"preset":"cloud","vault":"<VAULT PATH>","backend":"claude","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"claude"},"mcp":false,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+```
+
+### Hybrid example
+
+```json
+{"preset":"hybrid","vault":"<VAULT PATH>","backend":"antigravity","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"antigravity"},"mcp":false,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+```
+
+Before the real hybrid run, remind the user to launch `agy` once interactively
+and complete login. Hybrid may instead use the Ollama or OpenAI-compatible
+backend fields shown in [the full plan contract](docs/setup-wizard.md).
+
+### Local example
+
+```json
+{"preset":"local","vault":"<VAULT PATH>","backend":"ollama","backend_env":{"BEYIN_VAULT":"<VAULT PATH>","BEYIN_MODEL_BACKEND":"ollama","BEYIN_OLLAMA_MODEL_FAST":"qwen3:8b"},"mcp":true,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+```
+
+`qwen3:8b` is a starting-point suggestion, not a measured recommendation.
+Local may instead use OpenAI-compatible `BEYIN_OPENAI_URL` and
+`BEYIN_OPENAI_MODEL_FAST` fields.
+
+### Lite example
+
+```json
+{"preset":"lite","vault":"<VAULT PATH>","backend":"none","backend_env":{"BEYIN_VAULT":"<VAULT PATH>"},"mcp":true,"skills":["beyin-doktor","beyin-ice-aktar"],"force":false}
+```
+
+State the lite limitation without euphemism: no automatic capture and no
+compile. The user feeds memory with export ZIPs and reads it through MCP or the
+clipboard bridge.
+
+Show [skills/README.md](skills/README.md) and put only approved skill directory
+names in `skills`. The two core defaults are `beyin-doktor` and
+`beyin-ice-aktar`; the four generic working-set skills default off in the
+interactive wizard.
+
+## Step 5 — Dry run, then execute the same plan
+
+Never run a first install without `-DryRun`. It prints install, `setx`, and MCP
+actions and writes nothing.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers "<ANSWERS JSON>" -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers "<ANSWERS JSON>"
+```
+
+Read the dry-run output with the user. Expect `[COPY]`, hook `[REGISTER]` lines
+except in lite, `[DRYRUN][SETX]`, MCP merge-or-snippet output when selected, and
+`[DONE] preset=<name> mode=dry-run`. If an existing hook or MCP entry is
+reported as `[SKIP]`, the merge is idempotent.
+
+Set `force` to `true` only for an approved upgrade. It overwrites installed
+scripts/hooks but never the user's `hub-config.json` or vault content.
+
+### Manual fallback
+
+If the wizard cannot run, keep the direct installer as the fallback. It installs
+all skills and registers all hooks by default; environment variables and MCP
+registration must then be handled manually.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath "<VAULT PATH>" -DryRun
-```
-
-Read the output with the user. You should see:
-
-- `[CREATE]` for the vault directory if it does not exist
-- `[COPY]` lines for `scripts/`, `hooks/`, `skills/` and the vault template
-- `[REGISTER]` lines for six hooks
-- `[BACKUP]` for the existing `settings.json`, if the user has one
-- A summary with `Mode: DRY RUN`
-
-If you see `[SKIP] Hook already registered`, a previous installation exists.
-That is fine — the installer is idempotent.
-
-**Before the real run, decide about skills.** `skills/` is copied wholesale into
-`<user>\.claude\skills\`, and it contains more than the memory mechanism:
-`companion`, `orchestration`, `codex-fleet` and `gece-vardiyasi` are genericized copies of the author's working set. Show the
-user [skills/README.md](skills/README.md) and delete the directories they do not
-want **before** the real run. The two to keep in any case are `beyin-doktor` and
-`beyin-ice-aktar`.
-
-## Step 5 — Install
-
-```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath "<VAULT PATH>"
 ```
-
-Add `-Force` only when upgrading an existing installation and the user wants
-scripts and hooks overwritten. `-Force` does **not** overwrite the user's
-`hub-config.json` or their vault content.
 
 What it does:
 
@@ -143,10 +187,14 @@ What it does:
 5. Backs up `<user>\.claude\settings.json`, then registers six hooks in it.
 6. Warns if Python 3.12+ or `claude` is missing.
 
-Exit code is 0. Read the summary lines (`Planned actions`, `Writes completed`,
-`Existing items skipped`) back to the user.
+Exit code is 0. Read the install summary plus the wizard's preset-specific
+"What happens next" block back to the user.
 
 ## Step 6 — Configure the topic hubs
+
+This step applies to cloud, hybrid, and local. Lite has no compiler; its
+import/retrieval path can still use existing knowledge content, but it will not
+generate topic hubs automatically.
 
 Open `<vault>\.claude\scripts\hub-config.json` with the user. The shipped
 example defines Work Projects, Health, Learning, Finances and a Daily Life
@@ -165,6 +213,8 @@ the defaults are generic on purpose.
 
 ### Immediately
 
+For cloud, hybrid, and local:
+
 ```powershell
 # Six hook registrations should be present:
 Get-Content "$env:USERPROFILE\.claude\settings.json"
@@ -175,6 +225,12 @@ Get-ChildItem "<VAULT PATH>\.claude\scripts", "<VAULT PATH>\.claude\hooks"
 
 Expect `SessionStart`, two `UserPromptSubmit`, two `SessionEnd`, one
 `PreCompact`.
+
+For lite, confirm instead that no hooks were registered and that
+`<vault>\.claude\scripts\mcp_server.py`, `retrieve.py`, `ingest.py`, and
+`context_pack.py` were copied. If Claude Desktop config was absent, use the
+snippet the wizard printed rather than creating or overwriting the config
+silently.
 
 ### After the user's next session
 

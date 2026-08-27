@@ -1,15 +1,17 @@
 # Skills
 
-Claude Code skills that ship with this repository. `install.ps1` copies this
-whole directory to `<user>\.claude\skills\`, so **every skill here becomes
-active on the machine after installation.**
+<!-- yazan: codex · gpt-5.6-sol -->
+Claude Code skills that ship with this repository. The setup wizard asks about
+each skill: `beyin-doktor` and `beyin-ice-aktar` default to yes, while the rest
+default to no. Direct `install.ps1` still copies this whole directory unless
+`-SkillFilter <comma-separated names>` is supplied.
 
-> **Prune before you rely on this set.** Two of these skills are the memory
+> **Select before you rely on this set.** Two of these skills are the memory
 > mechanism itself and are the reason the repository exists. The other six are
 > *genericized copies of the author's working set* — they encode one person's
 > tooling, tiers and habits, and several of them describe tools you may not have
 > installed. They are published because the patterns are useful, not because they
-> are correct for you. Delete the ones you do not want **before** running the
+> are correct for you. Leave them unselected in the wizard, filter the direct
 > installer, or remove them from `<user>\.claude\skills\` afterwards.
 
 ## Core — part of the memory mechanism

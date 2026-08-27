@@ -119,14 +119,56 @@ hafıza ulaşmıyordu.
 
 ## Hızlı başlangıç
 
+<!-- yazan: codex · gpt-5.6-sol -->
+Birincil yol kurulum sihirbazıdır. Önce görüşmeyi tamamlar, planın tamamını
+gösterir ve yalnızca son onaydan sonra yazar:
+
 ```powershell
 git clone https://github.com/Capslockiller/origin-of-memory.git
 cd origin-of-memory
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1
+```
+
+| Ön ayar | Yakalama ve derleme | Flush / içe aktarma | Okuma erişimi |
+| --- | --- | --- | --- |
+| `cloud` | Claude Code kancaları + Claude derlemesi | Claude | Kancalar; isteğe bağlı MCP / pano |
+| `hybrid` | Claude Code kancaları + Claude derlemesi | Antigravity, Ollama veya OpenAI-uyumlu | Kancalar; isteğe bağlı MCP / pano |
+| `local` | Claude Code kancaları + Claude derlemesi | Antigravity veya yerel uç | Varsayılan MCP + pano; ayrıca kancalar |
+| `lite` | Yok — otomatik yakalama ve derleme yok | Yalnızca içe aktarımla besleme | MCP + pano; hafıza dışa aktarım ZIP dosyalarından gelir |
+
+`local`, kancalar ve derleme için yine `claude` CLI ister. `lite` Claude Code
+kullanmaz; otomatik yakalama ve gece derlemesi yoktur.
+
+Tekrarlanabilir veya ajan tarafından yürütülen kurulumda plan dosyası verilir.
+Önce mutlaka kuru koşu yapılır:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\plan\yolu.json -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\plan\yolu.json
+```
+
+Plan sözleşmesi:
+
+```json
+{"preset":"cloud|hybrid|local|lite","vault":"<yol>","backend":"claude|antigravity|ollama|openai-compat|none","backend_env":{"BEYIN_*":"<değer>"},"mcp":true,"skills":["beyin-doktor"],"force":false}
+```
+
+Doğrulama kuralları ve doldurulmuş örnekler:
+[kurulum sihirbazı sözleşmesi](docs/setup-wizard.md). `-DryRun`, kurulum,
+`setx` ve MCP eylemlerinin tamamını basar; hiçbir şey yazmaz.
+
+### Doğrudan kurucu
+
+`install.ps1` alt seviye bağımsız yol olarak kalır; varsayılan davranışı tüm
+skill'leri ve altı kancayı kurmaktır.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath C:\vault\yolu -DryRun
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath C:\vault\yolu
 ```
 
-Önce `-DryRun` ile hiçbir şey yazmadan tüm eylemleri görebilirsin; yükseltmede
-betik ve kancaların üzerine yazmak için `-Force`.
+Yükseltmede betik ve kancaların üzerine yazmak için `-Force`; yalnız seçili
+skill'leri kurmak için `-SkillFilter beyin-doktor,beyin-ice-aktar` kullanılır.
 
 Kurulum betiği:
 
@@ -144,11 +186,13 @@ Kurulum betiği:
 
 Sonra ne olur:
 
-- Bir sonraki Claude Code oturumun — hangi projede olursa olsun — hafıza bloğuyla
+- `cloud`, `hybrid` ve `local` ayarlarında bir sonraki Claude Code oturumun hafıza bloğuyla
   açılır, her mesajda üç ilgili nota kadar not enjekte edilir.
 - İlk `daily/YYYY-AA-GG.md` o oturum kapanınca düşer.
 - Saat 18'den sonra, değişen günlük içerik bulan ilk oturum kapanışı ayrık bir
   derleme koşusu başlatır; `knowledge/` o koşu bitince belirir.
+- `lite` ayarında dışa aktarım ZIP dosyalarını içe aktarır, MCP veya pano
+  köprüsünü kullanırsın; otomatik yakalama ve derleme bilerek yoktur.
 - Önce geçmişi doldurmak istersen: `python scripts/ingest.py status`, ardından
   `claude`, `codex`, `web` veya `gemini` alt komutları.
 
@@ -161,8 +205,11 @@ dahil — kendisi koşabilir. Bu deponun *içinde* çalışan ajanlar
 
 ## Skill'ler
 
-`install.ps1`, `skills/` klasörünü `<kullanıcı>\.claude\skills\` altına
-kopyalar. İkisi mekanizmanın parçası: `beyin-doktor` (hattın sağlık kontrolü) ve
+<!-- yazan: codex · gpt-5.6-sol -->
+Sihirbaz her skill'i ayrı sorar; `beyin-doktor` ile `beyin-ice-aktar`
+varsayılan evet, diğerleri varsayılan hayırdır. Doğrudan `install.ps1`,
+`-SkillFilter` verilmedikçe tüm skill'leri kopyalar. İkisi mekanizmanın parçası:
+`beyin-doktor` (hattın sağlık kontrolü) ve
 `beyin-ice-aktar` (claude.ai dışa aktarım ZIP'ini vault'a işler).
 
 Diğer dördü — `companion`, `orchestration`, `codex-fleet`,
@@ -172,9 +219,8 @@ kullanım kılavuzu. Desenler işe yaradığı için
 yayımlandılar, sana uygun oldukları için değil; birkaçı sende kurulu olmayan
 araçları varsayıyor.
 
-> **Kurulumdan önce ayıkla.** İstemediğin skill klasörlerini kurulumu
-> koşmadan *önce* sil. Her birinin ne yaptığı ve "genelleştirilmiş"in burada ne
-> demek olduğu: [skills/README.md](skills/README.md).
+Her birinin ne yaptığı ve "genelleştirilmiş"in burada ne demek olduğu:
+[skills/README.md](skills/README.md).
 
 `skills/companion` bir kimlik değil, **yapı örneğidir** — aşağıya bak.
 [template/rules.example.md](template/rules.example.md) ise oturum kancasının

@@ -389,10 +389,22 @@ def summarize_session(
         # Adapter günleri 200k gövde karakterinde böler; flush'ın 15k/30-tur
         # penceresi burada yeniden uygulanırsa günün başı sessizce kaybolur.
         full_size = sum(len(text) + 32 for _role, text in session.turns) + 1
+        max_chars = full_size
+        # Claude, Antigravity and Codex keep the historical full-day payload.
+        # Local endpoints share live flush's bounded default and override.
+        if model != "codex" and not model.startswith("codex:"):
+            backend, _backend_warning = claude_runner.resolve_backend()
+            if backend in (
+                claude_runner.BACKEND_OLLAMA,
+                claude_runner.BACKEND_OPENAI_COMPAT,
+            ):
+                max_chars, chunk_warning = flush.resolve_flush_chunk_chars()
+                if chunk_warning:
+                    write_health(state_dir, chunk_warning, warning=True)
         transcript, turn_count = flush.format_turns(
             session.turns,
             max_turns=max(1, len(session.turns)),
-            max_chars=full_size,
+            max_chars=max_chars,
         )
     else:
         transcript, turn_count = flush.format_turns(session.turns)

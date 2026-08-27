@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: codex · gpt-5.6-sol -->
+- Interview-first PowerShell 5.1 setup wizard (`kur.ps1`) with strict JSON plans,
+  cloud/hybrid/local/lite presets, dry-run-safe user environment actions,
+  selected-skill installs, optional non-clobbering Claude Desktop MCP merge,
+  and preset-specific verification/next-step output.
+- `install.ps1 -SkillFilter` for selected skills while preserving the default
+  all-skills standalone behavior; lite wizard runs skip hook registration.
+- Backend-aware Gemini ingest bounds for local endpoints: 24,000 characters by
+  default or `BEYIN_FLUSH_CHUNK_CHARS`, while Claude, Antigravity, and Codex
+  retain the existing full-day payload.
+
+<!-- yazan: codex · gpt-5.6-sol -->
 - Optional OpenAI-compatible local backend for LM Studio, llama.cpp
   `llama-server`, vLLM, and similar chat endpoints. It uses stdlib `urllib`,
   requires an explicit URL and fast-model slug, supports an optional Bearer

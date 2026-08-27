@@ -4,7 +4,10 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$VaultPath,
   [switch]$DryRun,
-  [switch]$Force
+  [switch]$Force,
+  [string[]]$SkillFilter,
+  [switch]$NoSkills,
+  [switch]$SkipHookRegistration
 )
 
 $ErrorActionPreference = 'Stop'
@@ -123,7 +126,35 @@ $skillsTarget = Join-Path $userClaude 'skills'
 
 Copy-Tree (Join-Path $repoRoot 'scripts') $scriptsTarget ([bool]$Force)
 Copy-Tree (Join-Path $repoRoot 'hooks') $hooksTarget ([bool]$Force)
-Copy-Tree (Join-Path $repoRoot 'skills') $skillsTarget ([bool]$Force)
+$skillsSource = Join-Path $repoRoot 'skills'
+if ($NoSkills) {
+  Write-Host '[SKIP] No skills selected.'
+  $script:Skipped++
+} elseif ($null -eq $SkillFilter -or $SkillFilter.Count -eq 0) {
+  Copy-Tree $skillsSource $skillsTarget ([bool]$Force)
+} else {
+  $selectedSkills = @(
+    $SkillFilter |
+      ForEach-Object { $_ -split ',' } |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ }
+  )
+  $availableSkills = @(
+    Get-ChildItem -LiteralPath $skillsSource -Directory |
+      ForEach-Object { $_.Name }
+  )
+  foreach ($skillName in $selectedSkills) {
+    if ($availableSkills -notcontains $skillName) {
+      throw "Unknown SkillFilter entry: $skillName"
+    }
+  }
+  foreach ($skillName in $selectedSkills | Select-Object -Unique) {
+    Copy-Tree `
+      (Join-Path $skillsSource $skillName) `
+      (Join-Path $skillsTarget $skillName) `
+      ([bool]$Force)
+  }
+}
 Copy-Tree (Join-Path $repoRoot 'template\vault') $vault $false
 
 $hubSource = Join-Path $repoRoot 'template\hub-config.example.json'
@@ -140,68 +171,73 @@ if (Test-Path -LiteralPath $hubTarget) {
   }
 }
 
-$settingsExisted = Test-Path -LiteralPath $settingsPath
-if ($settingsExisted) {
-  try {
-    $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-  } catch {
-    throw "Existing settings.json is invalid JSON: $settingsPath"
-  }
+if ($SkipHookRegistration) {
+  Write-Host '[SKIP] Hook registration disabled.'
+  $script:Skipped++
 } else {
-  $settings = [pscustomobject]@{}
-}
-Add-NoteProperty $settings 'hooks' ([pscustomobject]@{})
-
-$registrations = @(
-  [pscustomobject]@{ Event = 'SessionStart'; Script = 'session-start.ps1'; Arguments = ''; Timeout = 15 },
-  [pscustomobject]@{ Event = 'UserPromptSubmit'; Script = 'prompt-counter.ps1'; Arguments = ''; Timeout = 5 },
-  [pscustomobject]@{ Event = 'UserPromptSubmit'; Script = 'memory-retrieve.ps1'; Arguments = ''; Timeout = 5 },
-  [pscustomobject]@{ Event = 'SessionEnd'; Script = 'flush-launch.ps1'; Arguments = ' -Reason sessionend'; Timeout = 15 },
-  [pscustomobject]@{ Event = 'SessionEnd'; Script = 'session-end.ps1'; Arguments = ''; Timeout = 10 },
-  [pscustomobject]@{ Event = 'PreCompact'; Script = 'flush-launch.ps1'; Arguments = ' -Reason precompact'; Timeout = 15 }
-)
-$addedHooks = 0
-foreach ($registration in $registrations) {
-  $eventName = $registration.Event
-  Add-NoteProperty $settings.hooks $eventName @()
-  $hookPath = Join-Path $hooksTarget $registration.Script
-  $commandText = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $hookPath + '"' + $registration.Arguments
-  $found = $false
-  foreach ($group in @($settings.hooks.$eventName)) {
-    foreach ($hook in @($group.hooks)) {
-      if ($hook.command -eq $commandText) { $found = $true }
-    }
-  }
-  if ($found) {
-    Write-Host ("[SKIP] Hook already registered: {0} / {1}" -f $eventName, $registration.Script)
-    $script:Skipped++
-    continue
-  }
-  $hookObject = [pscustomobject]@{
-    type = 'command'
-    command = $commandText
-    timeout = $registration.Timeout
-  }
-  $groupObject = [pscustomobject]@{ hooks = @($hookObject) }
-  $settings.hooks.$eventName = @($settings.hooks.$eventName) + @($groupObject)
-  Write-Action 'REGISTER' ("{0}: {1}" -f $eventName, $commandText)
-  $addedHooks++
-}
-
-if ($addedHooks -gt 0 -and -not $DryRun) {
-  Ensure-Directory $userClaude
+  $settingsExisted = Test-Path -LiteralPath $settingsPath
   if ($settingsExisted) {
-    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $backup = "$settingsPath.bak-$timestamp"
-    Write-Action 'BACKUP' ("{0} -> {1}" -f $settingsPath, $backup)
-    Copy-Item -LiteralPath $settingsPath -Destination $backup
-    $script:Written++
+    try {
+      $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+      throw "Existing settings.json is invalid JSON: $settingsPath"
+    }
+  } else {
+    $settings = [pscustomobject]@{}
   }
-  $json = $settings | ConvertTo-Json -Depth 100
-  [IO.File]::WriteAllText($settingsPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-  $script:Written++
-} elseif ($addedHooks -gt 0 -and $DryRun -and $settingsExisted) {
-  Write-Action 'BACKUP' ("{0} -> {0}.bak-<timestamp>" -f $settingsPath)
+  Add-NoteProperty $settings 'hooks' ([pscustomobject]@{})
+
+  $registrations = @(
+    [pscustomobject]@{ Event = 'SessionStart'; Script = 'session-start.ps1'; Arguments = ''; Timeout = 15 },
+    [pscustomobject]@{ Event = 'UserPromptSubmit'; Script = 'prompt-counter.ps1'; Arguments = ''; Timeout = 5 },
+    [pscustomobject]@{ Event = 'UserPromptSubmit'; Script = 'memory-retrieve.ps1'; Arguments = ''; Timeout = 5 },
+    [pscustomobject]@{ Event = 'SessionEnd'; Script = 'flush-launch.ps1'; Arguments = ' -Reason sessionend'; Timeout = 15 },
+    [pscustomobject]@{ Event = 'SessionEnd'; Script = 'session-end.ps1'; Arguments = ''; Timeout = 10 },
+    [pscustomobject]@{ Event = 'PreCompact'; Script = 'flush-launch.ps1'; Arguments = ' -Reason precompact'; Timeout = 15 }
+  )
+  $addedHooks = 0
+  foreach ($registration in $registrations) {
+    $eventName = $registration.Event
+    Add-NoteProperty $settings.hooks $eventName @()
+    $hookPath = Join-Path $hooksTarget $registration.Script
+    $commandText = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $hookPath + '"' + $registration.Arguments
+    $found = $false
+    foreach ($group in @($settings.hooks.$eventName)) {
+      foreach ($hook in @($group.hooks)) {
+        if ($hook.command -eq $commandText) { $found = $true }
+      }
+    }
+    if ($found) {
+      Write-Host ("[SKIP] Hook already registered: {0} / {1}" -f $eventName, $registration.Script)
+      $script:Skipped++
+      continue
+    }
+    $hookObject = [pscustomobject]@{
+      type = 'command'
+      command = $commandText
+      timeout = $registration.Timeout
+    }
+    $groupObject = [pscustomobject]@{ hooks = @($hookObject) }
+    $settings.hooks.$eventName = @($settings.hooks.$eventName) + @($groupObject)
+    Write-Action 'REGISTER' ("{0}: {1}" -f $eventName, $commandText)
+    $addedHooks++
+  }
+
+  if ($addedHooks -gt 0 -and -not $DryRun) {
+    Ensure-Directory $userClaude
+    if ($settingsExisted) {
+      $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+      $backup = "$settingsPath.bak-$timestamp"
+      Write-Action 'BACKUP' ("{0} -> {1}" -f $settingsPath, $backup)
+      Copy-Item -LiteralPath $settingsPath -Destination $backup
+      $script:Written++
+    }
+    $json = $settings | ConvertTo-Json -Depth 100
+    [IO.File]::WriteAllText($settingsPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    $script:Written++
+  } elseif ($addedHooks -gt 0 -and $DryRun -and $settingsExisted) {
+    Write-Action 'BACKUP' ("{0} -> {0}.bak-<timestamp>" -f $settingsPath)
+  }
 }
 
 $python = Find-Python
@@ -222,7 +258,9 @@ if (-not $python) {
   }
 }
 
-if (Get-Command claude -ErrorAction SilentlyContinue) {
+if ($SkipHookRegistration) {
+  Write-Host '[SKIP] claude CLI check disabled with hook registration.'
+} elseif (Get-Command claude -ErrorAction SilentlyContinue) {
   Write-Host '[OK] claude CLI found on PATH.'
 } else {
   Write-Warning 'claude CLI was not found on PATH.'

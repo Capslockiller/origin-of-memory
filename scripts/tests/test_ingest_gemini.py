@@ -15,6 +15,7 @@ import _helpers
 from _helpers import GOOD_SUMMARY, write_jsonl
 
 import gemini_ayikla
+import flush
 import ingest
 import ingest_common
 import ingest_gemini
@@ -262,6 +263,124 @@ class GeminiCommandTests(unittest.TestCase):
         self.assertEqual(len(captured), 1)
         self.assertIn("BASLANGIC-", captured[0])
         self.assertIn("-BITIS", captured[0])
+
+    def test_gemini_local_summary_uses_backend_aware_bound(self) -> None:
+        captured: list[str] = []
+
+        def stub(prompt: str, root: Path):
+            captured.append(prompt)
+            return GOOD_SUMMARY, None
+
+        session = ingest_common.Session(
+            source="gemini",
+            key="gemini:2026-08-20",
+            when=dt.datetime(2026, 8, 20, 10, tzinfo=dt.timezone.utc),
+            turns=[
+                ("user", "BASLANGIC-" + "a" * 30_000),
+                ("assistant", "b" * 30_000 + "-BITIS"),
+            ],
+            origin=str(self.records_path),
+            label="gemini",
+        )
+        with mock.patch.dict(
+            ingest_common.os.environ,
+            {
+                "BEYIN_MODEL_BACKEND": "ollama",
+                "BEYIN_FLUSH_CHUNK_CHARS": "12345",
+            },
+            clear=True,
+        ), mock.patch.object(flush, "_run_claude", stub):
+            result = ingest_common.summarize_session(
+                session,
+                self.vault,
+                self.state_dir,
+                model="haiku",
+                min_turns=2,
+            )
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(len(captured), 1)
+        self.assertNotIn("BASLANGIC-", captured[0])
+        self.assertIn("-BITIS", captured[0])
+        body = captured[0].split(
+            _helpers.BEGIN_MARKER, 1
+        )[1].split(_helpers.END_MARKER, 1)[0].strip()
+        self.assertLessEqual(len(body), 12_345)
+
+    def test_gemini_local_summary_defaults_to_24k(self) -> None:
+        captured: list[str] = []
+
+        def stub(prompt: str, root: Path):
+            captured.append(prompt)
+            return GOOD_SUMMARY, None
+
+        session = ingest_common.Session(
+            source="gemini",
+            key="gemini:2026-08-20",
+            when=dt.datetime(2026, 8, 20, 10, tzinfo=dt.timezone.utc),
+            turns=[
+                ("user", "BASLANGIC-" + "a" * 30_000),
+                ("assistant", "b" * 30_000 + "-BITIS"),
+            ],
+            origin=str(self.records_path),
+            label="gemini",
+        )
+        with mock.patch.dict(
+            ingest_common.os.environ,
+            {"BEYIN_MODEL_BACKEND": "openai-compat"},
+            clear=True,
+        ), mock.patch.object(flush, "_run_claude", stub):
+            result = ingest_common.summarize_session(
+                session,
+                self.vault,
+                self.state_dir,
+                model="haiku",
+                min_turns=2,
+            )
+        self.assertEqual(result.status, "ok")
+        body = captured[0].split(
+            _helpers.BEGIN_MARKER, 1
+        )[1].split(_helpers.END_MARKER, 1)[0].strip()
+        self.assertLessEqual(len(body), flush.LOCAL_MAX_TRANSCRIPT_CHARS)
+        self.assertNotIn("BASLANGIC-", captured[0])
+        self.assertIn("-BITIS", captured[0])
+
+    def test_gemini_claude_and_antigravity_keep_full_day(self) -> None:
+        session = ingest_common.Session(
+            source="gemini",
+            key="gemini:2026-08-20",
+            when=dt.datetime(2026, 8, 20, 10, tzinfo=dt.timezone.utc),
+            turns=[
+                ("user", "BASLANGIC-" + "a" * 20_000),
+                ("assistant", "b" * 20_000 + "-BITIS"),
+            ],
+            origin=str(self.records_path),
+            label="gemini",
+        )
+        for backend in ("claude", "antigravity"):
+            captured: list[str] = []
+
+            def stub(prompt: str, root: Path):
+                captured.append(prompt)
+                return GOOD_SUMMARY, None
+
+            with self.subTest(backend=backend), mock.patch.dict(
+                ingest_common.os.environ,
+                {
+                    "BEYIN_MODEL_BACKEND": backend,
+                    "BEYIN_FLUSH_CHUNK_CHARS": "1000",
+                },
+                clear=True,
+            ), mock.patch.object(flush, "_run_claude", stub):
+                result = ingest_common.summarize_session(
+                    session,
+                    self.vault,
+                    self.state_dir,
+                    model="haiku",
+                    min_turns=2,
+                )
+            self.assertEqual(result.status, "ok")
+            self.assertIn("BASLANGIC-", captured[0])
+            self.assertIn("-BITIS", captured[0])
 
 
 if __name__ == "__main__":

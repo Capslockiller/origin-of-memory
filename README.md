@@ -115,14 +115,56 @@ so no memory reached any session at all.
 
 ## Quickstart
 
+<!-- yazan: codex · gpt-5.6-sol -->
+The setup wizard is the primary path. It interviews first, shows one complete
+plan, and writes only after the final confirmation:
+
 ```powershell
 git clone https://github.com/Capslockiller/origin-of-memory.git
 cd origin-of-memory
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1
+```
+
+| Preset | Capture and compile | Flush / ingest | Read access |
+| --- | --- | --- | --- |
+| `cloud` | Claude Code hooks + Claude compile | Claude | Hooks; optional MCP / clipboard |
+| `hybrid` | Claude Code hooks + Claude compile | Antigravity, Ollama, or OpenAI-compatible | Hooks; optional MCP / clipboard |
+| `local` | Claude Code hooks + Claude compile | Antigravity or a local endpoint | MCP + clipboard by default; hooks too |
+| `lite` | None — no automatic capture, no compile | Import-driven backend work only | MCP + clipboard; memory comes from export ZIPs |
+
+`local` still needs the `claude` CLI for hooks and compile. `lite` does not use
+Claude Code: it has no automatic capture or nightly compile.
+
+For a reproducible or agent-driven run, pass a plan file. Always dry-run it
+first:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\path\to\plan.json -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File kur.ps1 -Answers C:\path\to\plan.json
+```
+
+The plan contract is:
+
+```json
+{"preset":"cloud|hybrid|local|lite","vault":"<path>","backend":"claude|antigravity|ollama|openai-compat|none","backend_env":{"BEYIN_*":"<value>"},"mcp":true,"skills":["beyin-doktor"],"force":false}
+```
+
+See [the setup-wizard contract](docs/setup-wizard.md) for validation rules and
+filled examples. `-DryRun` prints every install, `setx`, and MCP action and
+writes nothing.
+
+### Direct installer
+
+`install.ps1` remains the lower-level standalone path and keeps its original
+default: all skills and all six hooks.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath C:\path\to\vault -DryRun
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath C:\path\to\vault
 ```
 
-Use `-DryRun` first to see every action without writing anything, and `-Force` to
-overwrite scripts and hooks on an upgrade.
+Use `-Force` to overwrite scripts and hooks during an upgrade. Use
+`-SkillFilter beyin-doktor,beyin-ice-aktar` to install only selected skills.
 
 The installer:
 
@@ -138,11 +180,13 @@ The installer:
 
 What happens next:
 
-- Your next Claude Code session, in any project, starts with the memory block
+- In `cloud`, `hybrid`, and `local`, your next Claude Code session starts with the memory block
   injected and each prompt pulls up to three relevant notes.
 - The first `daily/YYYY-MM-DD.md` appears when that session ends.
 - After 18:00, the first session end that finds changed daily content detaches a
   compile run; `knowledge/` appears after it finishes.
+- In `lite`, import export ZIPs and use MCP or the clipboard bridge; automatic
+  capture and compile are intentionally absent.
 - To backfill history first, run `python scripts/ingest.py status` and then the
   `claude`, `codex`, `web` or `gemini` subcommands.
 
@@ -155,7 +199,10 @@ Agents working *inside* this repository should read
 
 ## Skills
 
-`install.ps1` copies `skills/` into `<user>\.claude\skills\`. Two of them are
+<!-- yazan: codex · gpt-5.6-sol -->
+The wizard asks about every skill; `beyin-doktor` and `beyin-ice-aktar` default
+to yes, and the rest default to no. Direct `install.ps1` still copies all skills
+unless `-SkillFilter` is supplied. Two of them are
 part of the mechanism: `beyin-doktor` (health check for the pipeline) and
 `beyin-ice-aktar` (processes a claude.ai export ZIP into the vault).
 
@@ -166,9 +213,8 @@ operating manual. They are published because the
 patterns are useful, not because they are right for you, and several assume
 tools you may not have installed.
 
-> **Prune before installing.** Delete the skill directories you do not want
-> *before* running the installer. See [skills/README.md](skills/README.md) for
-> what each one does and what "genericized" means here.
+See [skills/README.md](skills/README.md) for what each one does and what
+"genericized" means here.
 
 `skills/companion` is a **structure example**, not an identity — see below.
 [template/rules.example.md](template/rules.example.md) is a matching example of

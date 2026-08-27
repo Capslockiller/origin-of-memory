@@ -10,6 +10,14 @@ Overview and quickstart: [../README.md](../README.md).
 
 ## 1. Layout after installation
 
+<!-- yazan: codex · gpt-5.6-sol -->
+`kur.ps1` is the interview/plan layer over this layout. Interactive runs collect
+a `cloud`, `hybrid`, `local`, or `lite` plan before writing; agents pass the
+same strict JSON contract through `-Answers`. The wizard delegates copying and
+normal hook registration to `install.ps1`, then applies user-scope `BEYIN_*`
+variables and an optional non-clobbering Claude Desktop MCP merge. Lite skips
+hook registration, automatic capture, and compile.
+
 `install.ps1 -VaultPath <vault>` produces three destinations:
 
 ```
