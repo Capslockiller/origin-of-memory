@@ -1,6 +1,6 @@
 # Origin of Memory
 
-<!-- Capslockiller yerine bu deponun barındığı GitHub hesabını/organizasyonunu yaz. -->
+<!-- <hesap> yerine bu deponun barındığı GitHub hesabını/organizasyonunu yaz. -->
 [![tests](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml)
 [![Lisans: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -91,6 +91,10 @@ kütüphaneyi kullanan Python 3.12.
   (`~/.claude/projects`), Codex rollout'larını (`~/.codex/sessions`), claude.ai
   dışa aktarım ZIP'lerini ve Google Takeout Gemini arşivini içeri alıyor.
 - **Türkçe birinci sınıf.** Aşağıdaki [Türkçe desteği](#türkçe-desteği) bölümü.
+- **MCP hafıza sunucusu.** Saf stdlib, yerel bir MCP sunucusu `memory_search`
+  aracını ve kök haritayı MCP konuşan her istemciye açar — free plandaki
+  Claude Desktop dahil — salt okunur, stdio üzerinden. Kurulum:
+  [docs/mcp.md](docs/mcp.md).
 - **Sağlık kontrolü skill'i.** `beyin doktor`, kanca kaydını, betikleri, günlük
   log tazeliğini ve son derleme durumunu tek tabloda veriyor.
 
@@ -183,8 +187,8 @@ enjekte ettiği kalıcı kurallar dosyasının eşlik eden örneği.
 - **Python 3.12+**, yalnız standart kütüphane. Çalışma zamanında üçüncü parti
   paket kurulmuyor, gerekmiyor. İstediğin yorumlayıcı `PATH`'teki ilk `python`
   değilse `BEYIN_PYTHON` değişkenini ayarla.
-- **Claude Code CLI** `PATH` üzerinde. Tüm model çağrıları mevcut aboneliğin
-  üstünden `claude -p` ile gidiyor — flush Haiku, derleme Sonnet.
+- **Claude Code CLI** `PATH` üzerinde. Varsayılan olarak model çağrıları mevcut
+  aboneliğin üstünden `claude -p` ile gidiyor — flush Haiku, derleme Sonnet.
   - **Aboneliğin yok mu?** Claude Code ücretsiz claude.ai planına dahil değil;
     ama kullandıkça öde [Anthropic API anahtarıyla](https://platform.claude.com/)
     da çalışır (`ANTHROPIC_API_KEY`). Bu sistemin arka plan çağrılarının tipik
@@ -223,6 +227,28 @@ enjekte ettiği kalıcı kurallar dosyasının eşlik eden örneği.
     - Not: Google'ın eski **Gemini CLI'si 2026-06-18'de kapatıldı**; `agy` onun
       ardılı. `BEYIN_MODEL_BACKEND=gemini` `antigravity` için kullanımdan
       kaldırılmış takma ad olarak kabul edilir ve uyarı üretir.
+  <!-- yazan: codex · gpt-5.6-sol -->
+  - **Tamamen yerel arka plan çağrıları (isteğe bağlı).**
+    `BEYIN_MODEL_BACKEND=ollama` ayarı flush ve içe aktarma özetlerini yerel
+    Ollama sunucusuna yollar. Bulut maliyeti sıfırdır; hesaplama yükünü Ollama'yı
+    çalıştıran makine taşır. Kurulu bir model kısaltmasını
+    `BEYIN_OLLAMA_MODEL_FAST` ile ver. `BEYIN_OLLAMA_MODEL_SMART` isteğe
+    bağlıdır; boşsa uyarıyla hızlı modele düşer. `BEYIN_OLLAMA_URL`
+    varsayılanı `http://localhost:11434` adresidir. Derleme Antigravity'de
+    olduğu gibi reddedilir: `claude` varsa ona düşer, yoksa
+    `ollama-backend-unsupported:compile` hatasıyla yüksek sesle durur.
+  - **Pano köprüsü.** Herhangi bir sağlayıcının tüketici web sohbetini kullanan
+    kişiler, kök haritayı ve sınırlandırılmış en ilgili üç hafıza notunu elle
+    bağlama ekleyebilir:
+
+    ```powershell
+    python .claude\scripts\context_pack.py "<soru>" --clip
+    ```
+
+    Kopyalanan bloğu sorunun üstüne yapıştır. `--no-map` kök haritayı atlar;
+    `-k N` bir ile beş not seçer. Proje tüketici web arayüzlerini bilerek
+    otomatikleştirmez: bu yöntem kırılgandır ve sağlayıcıların koşullarıyla
+    çatışır.
 - **FTS5 destekli SQLite.** Getirme katmanı
   `CREATE VIRTUAL TABLE notes USING fts5(...)` ile sanal tablo kuruyor. Windows
   CPython derlemelerinin çoğunda FTS5 açık ama hepsinde değil. Kurulumdan önce

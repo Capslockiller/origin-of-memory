@@ -62,10 +62,10 @@ class BackendResolutionTests(unittest.TestCase):
 
     def test_unknown_backend_falls_back_to_claude_with_warning(self) -> None:
         backend, warning = claude_runner.resolve_backend(
-            {"BEYIN_MODEL_BACKEND": "ollama"}
+            {"BEYIN_MODEL_BACKEND": "unknown-backend"}
         )
         self.assertEqual(backend, "claude")
-        self.assertEqual(warning, "warn:backend-unknown:ollama")
+        self.assertEqual(warning, "warn:backend-unknown:unknown-backend")
 
 
 class DispatchTests(unittest.TestCase):

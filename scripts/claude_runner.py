@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Shared hardened model runner: Claude CLI by default, Antigravity CLI opt-in.
+"""Shared hardened model runner with optional local and CLI backends.
 
 ``run_claude`` keeps its historical name and signature so every existing caller
-works untouched.  When ``BEYIN_MODEL_BACKEND`` selects the Antigravity CLI the
-same call is dispatched to :mod:`agy_runner` instead.
+works untouched.  ``BEYIN_MODEL_BACKEND`` can dispatch text-mode calls to the
+Antigravity CLI or a local Ollama server instead.
 """
 
 # yazan: codex · model: gpt-5.6-sol
@@ -21,9 +21,11 @@ from typing import Callable
 BACKEND_ENV = "BEYIN_MODEL_BACKEND"
 BACKEND_CLAUDE = "claude"
 BACKEND_ANTIGRAVITY = "antigravity"
+BACKEND_OLLAMA = "ollama"
 # Antigravity has no per-invocation permission scoping, so a tool-mode call
 # (compile) can only be auto-approved globally.  We refuse instead.
 COMPILE_UNSUPPORTED = "antigravity-backend-unsupported:compile"
+OLLAMA_COMPILE_UNSUPPORTED = "ollama-backend-unsupported:compile"
 
 _LAST_WARNINGS: list[str] = []
 
@@ -45,6 +47,8 @@ def resolve_backend(
         return BACKEND_CLAUDE, None
     if raw == BACKEND_ANTIGRAVITY:
         return BACKEND_ANTIGRAVITY, None
+    if raw == BACKEND_OLLAMA:
+        return BACKEND_OLLAMA, None
     if raw == "gemini":
         # Gemini CLI's serving was retired 2026-06-18; `gemini` now means the
         # Antigravity CLI successor, but the caller is told the name is stale.
@@ -57,16 +61,21 @@ def compile_backend(
 ) -> tuple[str, str | None]:
     """Backend for the tool-mode compile call.
 
-    In antigravity mode compile keeps running on ``claude`` when that binary is
-    on PATH; otherwise the antigravity backend is returned so the call fails
-    loud with :data:`COMPILE_UNSUPPORTED`.
+    In antigravity or ollama mode compile keeps running on ``claude`` when that
+    binary is on PATH; otherwise the selected backend is returned so the call
+    fails loud with its tool-mode refusal.
     """
     backend, warning = resolve_backend(environment)
-    if backend != BACKEND_ANTIGRAVITY:
+    if backend not in (BACKEND_ANTIGRAVITY, BACKEND_OLLAMA):
         return backend, warning
     if shutil.which("claude") is not None:
-        return BACKEND_CLAUDE, "warn:antigravity-compile-fallback-claude"
-    return BACKEND_ANTIGRAVITY, warning
+        fallback_warning = (
+            "warn:antigravity-compile-fallback-claude"
+            if backend == BACKEND_ANTIGRAVITY
+            else "warn:ollama-compile-fallback-claude"
+        )
+        return BACKEND_CLAUDE, fallback_warning
+    return backend, warning
 
 
 def run_in_isolated_dir(
@@ -129,6 +138,23 @@ def run_claude(
         import agy_runner
 
         return agy_runner.run_agy(
+            prompt,
+            model=model,
+            timeout=timeout,
+            cwd=cwd,
+            vault_root=vault_root,
+            temporary_prefix=temporary_prefix,
+            warnings=_LAST_WARNINGS,
+        )
+
+    if backend == BACKEND_OLLAMA:
+        if tools:
+            # Ollama's generate endpoint is text-only; it cannot perform the
+            # scoped staging-tree writes required by compile.
+            return None, OLLAMA_COMPILE_UNSUPPORTED
+        import ollama_runner
+
+        return ollama_runner.run_ollama(
             prompt,
             model=model,
             timeout=timeout,

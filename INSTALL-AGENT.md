@@ -37,12 +37,14 @@ claude --version
 python -c "import sqlite3; sqlite3.connect(':memory:').execute('CREATE VIRTUAL TABLE t USING fts5(a)'); print('fts5 ok')"
 ```
 
+<!-- yazan: codex · gpt-5.6-sol -->
 | Check | Required | If it fails |
 | --- | --- | --- |
 | Windows | Yes | **Stop.** Point the user at the upstream project for macOS/Linux: <https://github.com/avenoxai/avenoxbeyin> |
 | Python 3.12+ | Yes | Have the user install Python 3.12+ from python.org. If they have an interpreter elsewhere, set `BEYIN_PYTHON` to its full path. |
 | `claude` CLI | Yes | The pipeline calls `claude -p` for summarising and compiling. Without it, nothing is written. Claude Code needs a paid subscription (Pro or higher) **or** a pay-as-you-go Anthropic API key set as `ANTHROPIC_API_KEY` — it is not part of the free claude.ai plan. |
 | `agy` CLI (Antigravity) | Optional | Only if the user wants the background summarising calls (flush + ingest) on Google's free tier instead of `claude -p`. Install it from the official Antigravity CLI install page (not npm), run `agy` once interactively to sign in, then set `BEYIN_MODEL_BACKEND=antigravity`. The `claude` CLI is still required for hooks, sessions and the nightly compile. Free-tier quota is limited (third-party reports say ~20 agent requests/day — unverified), and summary quality on Gemini models is unmeasured. |
+| Ollama local server | Optional | Only if the user wants zero-cloud-cost flush and ingest summaries. Set `BEYIN_MODEL_BACKEND=ollama` and set `BEYIN_OLLAMA_MODEL_FAST` to an installed model slug; `BEYIN_OLLAMA_MODEL_SMART` is optional. Ollama defaults to `http://localhost:11434`. Nightly compile still needs `claude` and is refused when that binary is absent. |
 | FTS5 probe prints `fts5 ok` | For retrieval | If it raises `sqlite3.OperationalError`, per-prompt retrieval will not work. Everything else still does. Tell the user, and let them decide whether to continue. |
 
 Two notes worth passing on:
@@ -53,6 +55,21 @@ Two notes worth passing on:
   pay-as-you-go `ANTHROPIC_API_KEY` for roughly a few dollars a month.
 - **No external services.** Everything is local files; no key is required
   beyond the Claude authentication the user already has.
+
+### Optional — copy memory context into web chat
+
+The installer copies but does not register the clipboard bridge. Run it
+manually (or bind the wrapper to a shortcut) and paste the result above a
+question in any provider's consumer web chat:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<VAULT PATH>\.claude\hooks\pano-kopru.ps1" "<question>"
+# Direct form, including optional --no-map and -k 1..5 flags:
+python "<VAULT PATH>\.claude\scripts\context_pack.py" "<question>" --clip
+```
+
+The bridge does not automate consumer web UIs; such automation is fragile and
+conflicts with providers' terms.
 
 ## Step 2 — Choose the vault path
 

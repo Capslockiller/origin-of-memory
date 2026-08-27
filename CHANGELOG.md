@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Local **MCP memory server** (`scripts/mcp_server.py`, stdlib-only JSON-RPC
+  over stdio): `memory_search` and `memory_root_map` tools plus root-map and
+  hub resources, read-only, dual protocol era (`2026-07-28` and the legacy
+  `initialize` handshake shipping desktop clients still speak). Registration
+  and caveats: `docs/mcp.md`.
+<!-- yazan: codex · gpt-5.6-sol -->
+- Optional local **Ollama backend** for text-mode flush and ingest calls,
+  selected with `BEYIN_MODEL_BACKEND=ollama`. It posts non-streaming generate
+  requests through stdlib `urllib`, requires an explicit fast model slug, maps
+  transport/protocol failures to stable health strings, and falls back to
+  `claude` for compile when available while refusing tool mode otherwise.
+- Manual clipboard context bridge: `scripts/context_pack.py` composes the root
+  map plus capped BM25 notes and can send UTF-16LE text to `clip.exe`;
+  `hooks/pano-kopru.ps1` is an unregistered PowerShell 5.1 wrapper for manual
+  use or a user-defined shortcut.
 - Optional **Antigravity CLI (`agy`) backend** for the background model calls,
   selected with `BEYIN_MODEL_BACKEND=antigravity`. Default behaviour is
   unchanged: with the variable unset every call still goes through `claude -p`

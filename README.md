@@ -88,6 +88,9 @@ Two properties are load-bearing:
   archives (`~/.claude/projects`), Codex rollouts (`~/.codex/sessions`),
   claude.ai export ZIPs and a Google Takeout Gemini archive.
 - **First-class Turkish.** See [Turkish support](#turkish-support).
+- **MCP memory server.** A stdlib-only local MCP server exposes `memory_search`
+  and the root map to any MCP-capable client — Claude Desktop included, on the
+  free plan — read-only, over stdio. Setup: [docs/mcp.md](docs/mcp.md).
 - **Health check skill.** `beyin doktor` reports hook wiring, script presence,
   daily-log freshness and last compile status in a single table.
 
@@ -178,8 +181,8 @@ the persistent-rules file the session hook injects.
 - **Python 3.12+**, standard library only. No third-party packages are installed
   or required at runtime. Set `BEYIN_PYTHON` if the interpreter you want is not
   the first `python` on `PATH`.
-- **Claude Code CLI** on `PATH`. All model calls go through `claude -p` on your
-  existing subscription — flush uses Haiku, compile uses Sonnet.
+- **Claude Code CLI** on `PATH`. By default, model calls go through `claude -p`
+  on your existing subscription — flush uses Haiku, compile uses Sonnet.
   - **No subscription?** Claude Code is not part of the free claude.ai plan,
     but it also runs on a pay-as-you-go
     [Anthropic API key](https://platform.claude.com/) (`ANTHROPIC_API_KEY`).
@@ -218,6 +221,27 @@ the persistent-rules file the session hook injects.
     - Note: Google's older **Gemini CLI was retired on 2026-06-18**; `agy` is
       its successor. `BEYIN_MODEL_BACKEND=gemini` is accepted as a deprecated
       alias for `antigravity` and warns.
+  <!-- yazan: codex · gpt-5.6-sol -->
+  - **Fully local background calls (optional).** Set
+    `BEYIN_MODEL_BACKEND=ollama` to send flush and ingest summaries to a local
+    Ollama server. This has zero cloud cost; the machine running Ollama bears
+    the compute cost. Set `BEYIN_OLLAMA_MODEL_FAST` to an installed model slug.
+    `BEYIN_OLLAMA_MODEL_SMART` is optional and falls back to the fast model with
+    a warning; `BEYIN_OLLAMA_URL` defaults to `http://localhost:11434`.
+    Compile is text-tool mode and is refused just as it is on Antigravity:
+    `claude` is used when present, otherwise the run fails loud with
+    `ollama-backend-unsupported:compile`.
+  - **Clipboard bridge.** Users of consumer web chat on any provider can inject
+    the root map and capped top-three memory notes manually:
+
+    ```powershell
+    python .claude\scripts\context_pack.py "<question>" --clip
+    ```
+
+    Paste the copied block above the question. `--no-map` omits the root map;
+    `-k N` selects one to five notes. The project deliberately does **not**
+    automate consumer web UIs: that is fragile and conflicts with providers'
+    terms.
 - **SQLite with FTS5.** Retrieval builds a virtual table with
   `CREATE VIRTUAL TABLE notes USING fts5(...)`. Most CPython builds for Windows
   ship FTS5 enabled, but not all do. Check before installing:

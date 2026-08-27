@@ -149,13 +149,14 @@ distill — goes through one function, `claude_runner.run_claude()`. That functi
 is also the backend switch.
 
 `resolve_backend()` reads `BEYIN_MODEL_BACKEND`: unset or `claude` selects the
-Claude CLI path, `antigravity` selects `agy_runner`, and `gemini` is a
-deprecated alias for `antigravity` that returns a warning alongside it (Google
-retired Gemini CLI's serving on 2026-06-18). An unrecognised value falls back to
-`claude` with a warning rather than failing the run. Warnings are drained by the
-caller through `claude_runner.last_warnings()` and written to `health.json` as
-warning entries, so the selection is visible without changing the
-`(output, error)` contract that every caller already depends on.
+Claude CLI path, `antigravity` selects `agy_runner`, `ollama` selects the local
+HTTP runner, and `gemini` is a deprecated alias for `antigravity` that returns
+a warning alongside it (Google retired Gemini CLI's serving on 2026-06-18). An
+unrecognised value falls back to `claude` with a warning rather than failing the
+run. Warnings are drained by the caller through
+`claude_runner.last_warnings()` and written to `health.json` as warning entries,
+so the selection is visible without changing the `(output, error)` contract
+that every caller already depends on.
 
 `agy_runner.run_agy()` implements the documented headless contract —
 `agy -p <prompt> --model <slug> --output-format text` — with stdin closed
@@ -169,6 +170,18 @@ outside-the-vault temporary working directory. Binary resolution honours
 unset degrades to the fast model and warns). Failures map to `agy-missing`,
 `agy-auth-missing` (best-effort stderr sniffing), `agy-timeout` and
 `agy-exec-error`, and propagate into health state exactly like Claude failures.
+
+<!-- yazan: codex · gpt-5.6-sol -->
+`ollama_runner.run_ollama()` is the fully local text-mode alternative selected
+by `BEYIN_MODEL_BACKEND=ollama`. It uses stdlib `urllib` to POST
+`{"model": <slug>, "prompt": <prompt>, "stream": false}` to
+`{BEYIN_OLLAMA_URL|http://localhost:11434}/api/generate` and reads the
+`response` string. `haiku` requires `BEYIN_OLLAMA_MODEL_FAST`; `sonnet` uses
+`BEYIN_OLLAMA_MODEL_SMART` or warns and falls back to the fast slug. Connection,
+HTTP, timeout, and malformed-response failures have distinct stable error
+strings. Ollama exposes no compile tool path, so the same compile dispatch uses
+`claude` when available and otherwise refuses with
+`ollama-backend-unsupported:compile`.
 
 **The compile refusal.** Compile is the only tool-mode call: the model must
 write files inside the staging tree (§5). The Claude path scopes that precisely,
@@ -367,7 +380,20 @@ session ids are validated against `[A-Za-z0-9_.-]{1,128}` before touching the
 filesystem, and ledgers older than seven days are pruned. `--bench` runs a fixed
 query set for latency measurement.
 
-### 7.4 `session-end.ps1`
+### 7.4 `context_pack.py`
+
+`context_pack.py` is the manual bridge for web-chat clients that cannot run the
+hooks. It resolves the installed vault from the same `VAULT_ROOT` convention
+(or `--vault`), reads `knowledge/index.md`, and calls
+`retrieve.hook_result()` for the top notes so the existing 1,500-character
+per-note and 4,500-character total caps remain the single policy source. The
+Markdown block can be printed or piped to Windows `clip.exe` as UTF-16LE with
+`--clip`; `--no-map` and `-k 1..5` control composition. A missing root map or
+FTS database produces an explicit notice instead of an exception. The
+PowerShell 5.1 wrapper `hooks/pano-kopru.ps1` is installed but not registered as
+a hook.
+
+### 7.5 `session-end.ps1`
 
 Compares `Last-Session.md`'s mtime against the recorded session start. If the
 session ran at least 5 prompts and the companion memory was never updated, it
