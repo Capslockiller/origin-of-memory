@@ -84,7 +84,7 @@ A separate generation-quality evaluation would need a different design.
 
 | Metric | Value |
 | --- | --- |
-| recall@3 | 104/125 = 83% |
+| recall@3 | 104/125 = 83.2% |
 | recall@5 | 114/125 = 91.2% |
 | Baseline (before this system) | 0% |
 | Retrieval hook latency, p95 | 347 ms |
@@ -188,7 +188,8 @@ them:
 - **Note does not exist** — the compiler never made a concept for it. Fix belongs
   upstream, in the compile prompt or the source coverage.
 - **Ranked but below k** — genuine ranking failure; check whether the recall@5
-  column rescues it. On the measured run, almost nothing was rescued.
+  column rescues it. On the corrected run, ten of these were rescued at
+  positions four and five, which is why the top-5 column is worth storing.
 - **Query too short or filtered** — the hook skips prompts under 12 characters and
   slash commands. Real usage does this too; count it, do not exempt it.
 

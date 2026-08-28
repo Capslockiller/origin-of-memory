@@ -1,0 +1,65 @@
+name: Feature request
+description: Describe a problem this project could solve, and optionally how.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Project constraints, before you write
+
+        Two of them are load-bearing and are unlikely to change, so a proposal
+        that requires breaking either will probably be declined — not because
+        the idea is bad, but because it is a different project:
+
+        - **Stdlib-only at runtime.** Nothing under `scripts/` may import
+          anything outside the Python 3.12 standard library. No embedding
+          model, no vector store, no HTTP client library, no YAML parser.
+          `pytest` is a dev dependency and the only one.
+        - **Windows-native.** The hooks are PowerShell and must stay compatible
+          with Windows PowerShell 5.1. Cross-platform support is not a goal
+          here; the upstream project
+          [avenoxbeyin](https://github.com/avenoxai/avenoxbeyin) covers macOS.
+
+        Ideas that work *within* those constraints are very welcome, including
+        ones that look impossible at first glance.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What goes wrong for you today? Describe the situation, not the
+        solution — what you were doing, what the system did, and why that was
+        the wrong outcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal (optional)
+      description: |
+        If you have one. What would change, roughly where, and what would you
+        expect to happen instead.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried or considered
+      description: >-
+        Existing configuration, another tool, doing it by hand — and why the
+        current behaviour is not enough.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: This proposal does not require a third-party runtime dependency, or it explains why the trade is worth it.
+          required: false
+        - label: This proposal does not require dropping Windows-native operation.
+          required: false

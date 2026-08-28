@@ -1,0 +1,125 @@
+name: Bug report
+description: Something in the pipeline does not work the way the docs say it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Before you paste anything
+
+        **Do not paste vault content.** This project handles personal memory,
+        and issues are public. Your daily logs, concept notes, session
+        transcripts, companion files and gold questions do not belong in a bug
+        report — not even "just the relevant part".
+
+        If a specific note or log is needed to explain the bug, describe its
+        shape (how many lines, which frontmatter fields, what kind of content)
+        rather than its content, or replace the real text with invented text
+        that reproduces the same failure.
+
+        `python scripts/durum.py` is designed to be safe to paste: it reports
+        component status, timestamps and error strings, not memory content.
+        Read it once before pasting anyway — an error string can contain a file
+        name, and file names here are derived from note titles.
+
+  - type: textarea
+    id: what-you-ran
+    attributes:
+      label: What you ran
+      description: The exact command, hook event, or skill invocation. Redact paths to `<vault>` / `<user>`.
+      placeholder: |
+        powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -VaultPath <vault>
+        …or: "the SessionEnd hook fired and no daily log appeared"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs actual
+      description: What you expected to happen, and what happened instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: preset
+    attributes:
+      label: Preset
+      options:
+        - cloud
+        - hybrid
+        - local
+        - lite
+        - installed with install.ps1 directly (no preset)
+        - not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Model backend
+      description: The value of `BEYIN_MODEL_BACKEND`, or `claude` if it is unset.
+      options:
+        - claude (default, unset)
+        - antigravity
+        - ollama
+        - openai-compat
+        - none / not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: durum
+    attributes:
+      label: "`python scripts/durum.py` output"
+      description: |
+        Run it from the repository root, or
+        `python <vault>\.claude\scripts\durum.py` from an installed vault.
+        Check it for note titles in error strings before pasting.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: windows-build
+    attributes:
+      label: Windows build
+      description: "`winver`, or: `[System.Environment]::OSVersion.Version.ToString()`"
+      placeholder: "10.0.26100 (Windows 11 24H2)"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: "`python -V`. FTS5 matters too — see the check in docs/backends.md."
+      placeholder: "Python 3.12.7"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version of this project
+      description: The release tag you installed, or the commit if you are on `main`.
+      placeholder: "v0.2.0"
+    validations:
+      required: false
+
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else
+      description: Health warnings, quarantine entries, a `.state` timestamp that looks wrong. Same rule — describe, do not paste memory content.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Confirmation
+      options:
+        - label: This report contains no vault content, no transcript text, and no credentials.
+          required: true

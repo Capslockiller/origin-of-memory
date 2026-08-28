@@ -1,0 +1,16 @@
+# This project has no package dependencies to update: the runtime is Python
+# 3.12 standard library only, and `pytest` is installed ad hoc in CI rather
+# than pinned in a manifest. The one supply-chain surface that exists is the
+# set of third-party actions used by the workflow in .github/workflows/, so
+# that is the only ecosystem configured here.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 3

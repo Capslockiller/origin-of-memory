@@ -1,0 +1,25 @@
+# The Discussions links below only render once Discussions is enabled on the
+# repository (Settings -> General -> Features). Until then they 404.
+# See docs/outreach/repo-settings.md.
+blank_issues_enabled: false
+contact_links:
+  - name: Question about setup or usage
+    url: https://github.com/Capslockiller/origin-of-memory/discussions/categories/q-a
+    about: >-
+      How do I… and is this supposed to… belong in Q&A. Read docs/install.md and
+      docs/backends.md first — most setup questions are answered there.
+  - name: Idea or feedback
+    url: https://github.com/Capslockiller/origin-of-memory/discussions/categories/ideas
+    about: >-
+      Half-formed ideas, design disagreements, and has-anyone-tried questions
+      are better as a discussion than as an issue.
+  - name: Your own measured numbers
+    url: https://github.com/Capslockiller/origin-of-memory/discussions/categories/show-and-tell
+    about: >-
+      Built your own gold set and measured recall on your corpus? That is the
+      most valuable thing this project can receive — see docs/evaluation.md.
+  - name: Security vulnerability
+    url: https://github.com/Capslockiller/origin-of-memory/security/advisories/new
+    about: >-
+      Report privately through GitHub, never as a public issue. The threat model
+      is in SECURITY.md.
