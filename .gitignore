@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .import/
+
+# Inno Setup build output - a 2 MB binary does not belong in the repo.
+installer/output/
