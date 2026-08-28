@@ -27,7 +27,12 @@ $script:ActiveOperation = $null
 $script:DetectionResultSeen = $false
 $script:TokenUsed = $false
 $script:QuitRequested = $false
+# Armed at startup, not only after an operation. Left null, a wizard that never
+# completed anything never reached its own exit test: opening the page, doing
+# nothing and closing the browser left the process holding a loopback port
+# indefinitely. Measured - one run outlived a 600 second grace by hours.
 $script:ShutdownAt = $null
+$script:IdleSeconds = 0
 $script:GraceSeconds = $GraceSeconds
 
 function New-RandomToken {
@@ -503,6 +508,8 @@ try {
   $script:SessionToken = New-RandomToken
   $url = "$($script:ExpectedOrigin)/#$($script:LaunchToken)"
   Write-Host "GUI_LISTENING $($endpoint.Address):$port"
+  $script:IdleSeconds = $script:GraceSeconds
+  $script:ShutdownAt = [DateTime]::UtcNow.AddSeconds($script:IdleSeconds)
   Open-GuiBrowser $url
 
   while ($true) {
@@ -513,6 +520,8 @@ try {
       $client = $listener.AcceptTcpClient()
       try {
         $request = Receive-HttpRequest $client
+        # Someone is using it: push the idle deadline out.
+        $script:ShutdownAt = [DateTime]::UtcNow.AddSeconds($script:IdleSeconds)
         Invoke-HttpRequest $request
       } catch {
         try {
