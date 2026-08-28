@@ -53,6 +53,7 @@ ayarlar, etkileşimsiz planlar, alt seviye `install.ps1`, yükseltme ve kaldırm
 | Sen | Ne alırsın | Ne gerekir | Ön ayar |
 | --- | --- | --- | --- |
 | Abonelikle Claude Code kullanan biri | Tamamı: otomatik yakalama, gece derlemesi, her oturuma ve her mesaja enjekte edilen hafıza | Windows, Python 3.12+, Claude Code CLI | `cloud` |
+| Claude Code kullanmayan biri | 0.3.0'dan beri yakalama Claude Code'a bağlı değil: [izleyici](docs/watcher.md) transkriptleri diskten okur, kök harita `AGENTS.md`'ye yazılır, arama MCP'den yapılır. Her mesajda otomatik enjeksiyon yalnız Claude Code'da çalışır — o bir ev sahibi özelliği | Windows, Python 3.12+, bir yerel model ya da API anahtarı | `local` veya `lite` |
 | Yerelde çalışsın isteyen biri | Aynı hat, ama oturum özetlerini kendi modelin yazar — Ollama, LM Studio, llama.cpp, vLLM veya Antigravity. Kancalar ve gece derlemesi için `claude` yine gerekli | Yukarıdakiler + yerel bir sunucu ya da `agy` CLI | `local` veya `hybrid` |
 | Yalnızca eski konuşmalarında arama yapmak isteyen biri | claude.ai / Codex / Gemini dışa aktarımlarını içeri alır, MCP istemcisinden veya pano köprüsünden sorgularsın. Kanca yok, otomatik yakalama yok, derleme yok | Windows, Python 3.12+, MCP konuşan bir istemci ve içe aktarımları özetleyecek yerel bir backend | `lite` |
 
