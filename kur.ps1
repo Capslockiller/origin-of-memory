@@ -170,7 +170,16 @@ function Get-OllamaInteractiveChoices {
   $probe = Invoke-PythonJson 'donanim.py' @('--json')
   Show-HardwareSummary $probe
   $probeJson = $probe | ConvertTo-Json -Depth 100 -Compress
-  $recommendations = @(Invoke-PythonJson 'model_oneri.py' @('--json', '--probe-json', $probeJson))
+  # Via a file, not an argument: Windows PowerShell re-splits the quotes in a
+  # JSON blob handed to a native command, and argparse then rejects the whole
+  # call with exit 2. Reproduced here with a 504-character probe.
+  $probeFile = Join-Path ([IO.Path]::GetTempPath()) ("oom-probe-{0}.json" -f [guid]::NewGuid().ToString('N'))
+  [IO.File]::WriteAllText($probeFile, $probeJson, [Text.UTF8Encoding]::new($false))
+  try {
+    $recommendations = @(Invoke-PythonJson 'model_oneri.py' @('--json', '--probe-file', $probeFile))
+  } finally {
+    Remove-Item -LiteralPath $probeFile -ErrorAction SilentlyContinue
+  }
   Write-Host ''
   Write-Host 'Ranked model fit estimates (Sıralı model uyum tahminleri)'
   $rows = @($recommendations | ForEach-Object {
