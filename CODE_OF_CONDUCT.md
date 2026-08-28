@@ -59,8 +59,10 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-<CONTACT>.
+reported privately by opening a
+[security advisory](https://github.com/Capslockiller/origin-of-memory/security/advisories/new),
+which is visible only to the maintainer, or publicly in
+[Discussions](https://github.com/Capslockiller/origin-of-memory/discussions).
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
