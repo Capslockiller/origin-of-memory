@@ -1,0 +1,508 @@
+<!-- yazan: codex · model: gpt-5.6-sol -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Local Brain</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #eef1f4;
+      --surface: #ffffff;
+      --surface-2: #f7f8fa;
+      --text: #17202a;
+      --muted: #627080;
+      --line: #d7dde4;
+      --nav: #172431;
+      --nav-text: #f7f3e9;
+      --accent: #c7683d;
+      --accent-strong: #a84b25;
+      --good: #126b46;
+      --warn: #8b5700;
+      --bad: #a42b38;
+      --focus: #176fa3;
+      --shadow: 0 14px 40px rgba(24, 33, 43, .10);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #10161c;
+        --surface: #18212a;
+        --surface-2: #202b36;
+        --text: #f2f4f6;
+        --muted: #aeb8c2;
+        --line: #394653;
+        --nav: #0b1117;
+        --nav-text: #f7f3e9;
+        --accent: #e28a61;
+        --accent-strong: #f09c74;
+        --good: #61d09b;
+        --warn: #f1bd62;
+        --bad: #ff8290;
+        --focus: #70c7f5;
+        --shadow: 0 16px 46px rgba(0, 0, 0, .32);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
+    }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+    .rail {
+      background: var(--nav);
+      color: var(--nav-text);
+      padding: 30px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+    .mark { display: flex; gap: 12px; align-items: center; padding: 0 10px; }
+    .mark-shape {
+      width: 32px;
+      height: 32px;
+      border: 2px solid #e28a61;
+      border-radius: 11px 16px 11px 16px;
+      position: relative;
+    }
+    .mark-shape::before, .mark-shape::after {
+      content: "";
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #f7d492;
+    }
+    .mark-shape::before { left: 6px; top: 7px; }
+    .mark-shape::after { right: 6px; bottom: 7px; }
+    .brand { font-weight: 750; letter-spacing: .01em; }
+    .brand small { display: block; color: #aeb9c4; font-weight: 500; font-size: .76rem; }
+    .tabs { display: grid; gap: 8px; }
+    .tab {
+      width: 100%;
+      min-height: 48px;
+      border: 0;
+      border-radius: 11px;
+      padding: 10px 14px;
+      background: transparent;
+      color: #bdc7d0;
+      text-align: left;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .tab::before { display: inline-block; width: 26px; color: #e28a61; }
+    .tab[data-view="health"]::before { content: "●"; }
+    .tab[data-view="today"]::before { content: "◷"; font-size: 1.2rem; }
+    .tab[aria-selected="true"] { background: #263746; color: #ffffff; }
+    .rail-note { margin-top: auto; padding: 0 10px; color: #94a1ad; font-size: .78rem; }
+    .workspace { min-width: 0; padding: clamp(24px, 4vw, 48px); }
+    .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+    h1 { margin: 0 0 5px; font-size: clamp(1.7rem, 3vw, 2.35rem); line-height: 1.1; }
+    .lede { margin: 0; color: var(--muted); }
+    .connection { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); white-space: nowrap; }
+    .connection::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--good); }
+    .connection.busy::before { background: var(--warn); }
+    .connection.offline::before { background: var(--bad); }
+    .view[hidden] { display: none; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .section-head { padding: 20px 22px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+    h2 { margin: 0; font-size: 1.08rem; }
+    .section-note { color: var(--muted); font-size: .86rem; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 720px; }
+    th, td { padding: 15px 18px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: .75rem; letter-spacing: .05em; text-transform: uppercase; background: var(--surface-2); }
+    tbody tr:last-child td { border-bottom: 0; }
+    .component { font-weight: 750; text-transform: capitalize; }
+    .badge { display: inline-flex; align-items: center; gap: 7px; font-weight: 750; white-space: nowrap; }
+    .badge.good { color: var(--good); }
+    .badge.warn { color: var(--warn); }
+    .badge.bad { color: var(--bad); }
+    .badge.unknown { color: var(--muted); }
+    .muted { color: var(--muted); }
+    .accounting { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+    .accounting .panel { box-shadow: none; }
+    .compact { min-width: 420px; }
+    .compact th, .compact td { padding: 12px 15px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+    .metric { background: var(--surface); border: 1px solid var(--line); border-radius: 15px; padding: 20px; box-shadow: var(--shadow); }
+    .metric-label { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+    .metric-value { margin-top: 8px; font-size: 1.35rem; font-weight: 750; overflow-wrap: anywhere; }
+    .metric-detail { margin-top: 5px; color: var(--muted); font-size: .84rem; }
+    .sessions { margin-top: 20px; }
+    .session-list { list-style: none; padding: 0; margin: 0; }
+    .session { display: grid; grid-template-columns: 86px 1fr; align-items: center; gap: 18px; padding: 17px 22px; border-bottom: 1px solid var(--line); }
+    .session:last-child { border-bottom: 0; }
+    .session-time { font: 700 1.05rem/1.2 ui-monospace, "Cascadia Mono", monospace; }
+    .session-agent { font-weight: 700; text-transform: capitalize; }
+    .empty { padding: 34px 22px; color: var(--muted); text-align: center; }
+    .operations { margin-top: 28px; }
+    .operation-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; }
+    .action {
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 10px 14px;
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-strong); }
+    .action:disabled { opacity: .48; cursor: not-allowed; }
+    .output { margin-top: 14px; background: #0b1117; color: #d8e1e9; border-radius: 13px; overflow: hidden; }
+    .output-head { display: flex; justify-content: space-between; gap: 16px; padding: 11px 15px; border-bottom: 1px solid #2d3944; color: #aeb9c4; font-size: .82rem; }
+    pre { margin: 0; min-height: 84px; max-height: 210px; overflow: auto; padding: 14px 16px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 "Cascadia Mono", Consolas, monospace; }
+    .danger-text { color: var(--bad); }
+    .close-button { border: 0; background: transparent; color: inherit; cursor: pointer; text-decoration: underline; }
+    @media (max-width: 1050px) {
+      .operation-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+      .accounting { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 880px) {
+      .app { grid-template-columns: 1fr; }
+      .rail { padding: 14px 20px; flex-direction: row; align-items: center; gap: 18px; position: sticky; top: 0; z-index: 2; }
+      .mark { padding: 0; }
+      .brand small, .rail-note { display: none; }
+      .tabs { margin-left: auto; display: flex; }
+      .tab { width: auto; min-width: 116px; text-align: center; }
+      .workspace { padding: 24px; }
+    }
+    @media (max-width: 580px) {
+      .mark .brand { display: none; }
+      .tab { min-width: 96px; padding: 9px; }
+      .topbar { display: block; }
+      .connection { margin-top: 12px; }
+      .summary-grid, .operation-grid { grid-template-columns: 1fr; }
+      .workspace { padding: 18px 14px 28px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="rail">
+      <div class="mark">
+        <span class="mark-shape" aria-hidden="true"></span>
+        <div class="brand">Local Brain<small>Operations panel</small></div>
+      </div>
+      <nav class="tabs" role="tablist" aria-label="Panel sections">
+        <button class="tab" id="tab-health" role="tab" aria-selected="true" aria-controls="view-health" data-view="health">Health</button>
+        <button class="tab" id="tab-today" role="tab" aria-selected="false" aria-controls="view-today" data-view="today">Today</button>
+      </nav>
+      <div class="rail-note">Loopback only · local session</div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">System health</h1>
+          <p class="lede" id="page-lede">The latest evidence from every part of the memory pipeline.</p>
+        </div>
+        <div id="connection" class="connection" role="status" aria-live="polite">Connecting</div>
+      </header>
+
+      <section class="view" id="view-health" role="tabpanel" aria-labelledby="tab-health">
+        <div class="panel">
+          <div class="section-head">
+            <h2>Pipeline components</h2>
+            <span class="section-note" id="health-updated">Loading…</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Component</th><th>Status</th><th>Last run</th><th>Last error or skip</th><th>Quarantine</th></tr></thead>
+              <tbody id="health-rows"><tr><td colspan="5" class="muted">Loading health data…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="accounting">
+          <div class="panel">
+            <div class="section-head"><h2>Calls by backend</h2><span class="section-note" id="calls-total"></span></div>
+            <div class="table-wrap"><table class="compact"><thead><tr><th>Backend</th><th>Calls</th><th>Median</th><th>p95</th></tr></thead><tbody id="backend-rows"></tbody></table></div>
+          </div>
+          <div class="panel">
+            <div class="section-head"><h2>Estimated tokens</h2><span class="section-note">characters ÷ 4</span></div>
+            <div class="table-wrap"><table class="compact"><thead><tr><th>Component</th><th>Calls</th><th>Input</th><th>Output</th></tr></thead><tbody id="token-rows"></tbody></table></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-today" role="tabpanel" aria-labelledby="tab-today" hidden>
+        <div class="summary-grid">
+          <article class="metric"><div class="metric-label">Last flush</div><div class="metric-value" id="last-flush">Unknown</div><div class="metric-detail" id="last-flush-detail"></div></article>
+          <article class="metric"><div class="metric-label">Last compile</div><div class="metric-value" id="last-compile">Unknown</div><div class="metric-detail" id="last-compile-detail"></div></article>
+          <article class="metric"><div class="metric-label">Concepts from today</div><div class="metric-value" id="concept-count">0</div><div class="metric-detail">Traceable through today's session provenance</div></article>
+        </div>
+        <div class="panel sessions">
+          <div class="section-head"><h2>Today's sessions</h2><span class="section-note" id="today-date"></span></div>
+          <ol class="session-list" id="session-list"><li class="empty">Loading today's record…</li></ol>
+        </div>
+      </section>
+
+      <section class="operations" aria-labelledby="operations-title">
+        <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="operations-title">Operations</h2><span class="section-note">Every operation asks first</span></div>
+        <div class="operation-grid">
+          <button class="action" data-operation="doctor">Run the doctor</button>
+          <button class="action" data-operation="compile">Compile now</button>
+          <button class="action" data-operation="index">Rebuild the index</button>
+          <button class="action" data-operation="watcher">Watcher sweep once</button>
+        </div>
+        <div class="output" aria-live="polite">
+          <div class="output-head"><span id="operation-state">No operation running</span><button class="close-button" id="close-panel" type="button">Close panel</button></div>
+          <pre id="operation-output">Output will appear here.</pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      'use strict';
+      const labels = { doctor: 'Run the doctor', compile: 'Compile now', index: 'Rebuild the index', watcher: 'Watcher sweep once' };
+      const confirmations = {
+        doctor: 'Run the doctor now? This reads and reports the current system state.',
+        compile: 'Compile the pending daily memory now?',
+        index: 'Rebuild the retrieval index from the current concept notes now?',
+        watcher: 'Run one watcher sweep for settled sessions now?'
+      };
+      const title = document.getElementById('page-title');
+      const lede = document.getElementById('page-lede');
+      const connection = document.getElementById('connection');
+      const output = document.getElementById('operation-output');
+      const operationState = document.getElementById('operation-state');
+      const actionButtons = Array.from(document.querySelectorAll('.action'));
+      let lastEventId = 0;
+      let stopped = false;
+      let activeOperation = '';
+
+      function api(path, options = {}) {
+        const request = Object.assign({ credentials: 'same-origin', cache: 'no-store', mode: 'same-origin' }, options);
+        request.headers = Object.assign({}, options.headers || {});
+        if (request.body && !request.headers['Content-Type']) request.headers['Content-Type'] = 'application/json';
+        return fetch(path, request);
+      }
+
+      function textCell(text, className = '') {
+        const cell = document.createElement('td');
+        cell.textContent = text;
+        if (className) cell.className = className;
+        return cell;
+      }
+
+      function formatTime(value) {
+        if (!value || value === 'unknown') return 'Unknown';
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+      }
+
+      function statusInfo(row) {
+        const raw = String(row.last_status || 'unknown').toLowerCase();
+        if (raw === 'ok' || raw.startsWith('ok:')) return { className: 'good', label: '✓ Healthy' };
+        if (raw.includes('fail') || raw.includes('error')) return { className: 'bad', label: '× Error' };
+        if (raw === 'unknown') return { className: 'unknown', label: '? Unknown' };
+        return { className: 'warn', label: '! Attention' };
+      }
+
+      function renderHealth(data) {
+        const body = document.getElementById('health-rows');
+        body.replaceChildren();
+        (data.rows || []).forEach((row) => {
+          const tr = document.createElement('tr');
+          const status = statusInfo(row);
+          tr.append(textCell(row.component, 'component'));
+          tr.append(textCell(status.label, 'badge ' + status.className));
+          tr.append(textCell(formatTime(row.last_run)));
+          tr.append(textCell(row.last_error_or_skip || 'unknown', 'muted'));
+          tr.append(textCell(String(row.quarantine_count)));
+          body.append(tr);
+        });
+        document.getElementById('health-updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const calls = data.calls || {};
+        document.getElementById('calls-total').textContent = (calls.total_calls || 0) + ' calls · last ' + (calls.window_days || 7) + ' days';
+        renderSimpleRows('backend-rows', calls.backends || [], (item) => [item.backend, item.calls, item.median_ms + ' ms', item.p95_ms + ' ms']);
+        renderSimpleRows('token-rows', calls.components || [], (item) => [item.component, item.calls, Number(item.input_tokens_est).toLocaleString(), Number(item.output_tokens_est).toLocaleString()]);
+      }
+
+      function renderSimpleRows(id, rows, map) {
+        const body = document.getElementById(id);
+        body.replaceChildren();
+        if (!rows.length) {
+          const tr = document.createElement('tr');
+          const td = textCell('None recorded', 'muted');
+          td.colSpan = 4;
+          tr.append(td);
+          body.append(tr);
+          return;
+        }
+        rows.forEach((item) => {
+          const tr = document.createElement('tr');
+          map(item).forEach((value) => tr.append(textCell(String(value))));
+          body.append(tr);
+        });
+      }
+
+      function renderToday(data) {
+        document.getElementById('today-date').textContent = data.date || '';
+        document.getElementById('last-flush').textContent = formatTime(data.last_flush && data.last_flush.at);
+        document.getElementById('last-flush-detail').textContent = (data.last_flush && data.last_flush.status) || 'unknown';
+        document.getElementById('last-compile').textContent = formatTime(data.last_compile && data.last_compile.at);
+        document.getElementById('last-compile-detail').textContent = (data.last_compile && data.last_compile.status) || 'unknown';
+        document.getElementById('concept-count').textContent = String(data.concepts_count || 0);
+        const list = document.getElementById('session-list');
+        list.replaceChildren();
+        if (!(data.sessions || []).length) {
+          const item = document.createElement('li');
+          item.className = 'empty';
+          item.textContent = 'No sessions were recorded today.';
+          list.append(item);
+          return;
+        }
+        data.sessions.forEach((session) => {
+          const item = document.createElement('li');
+          item.className = 'session';
+          const time = document.createElement('span');
+          time.className = 'session-time';
+          time.textContent = session.time;
+          const agent = document.createElement('span');
+          agent.className = 'session-agent';
+          agent.textContent = session.agent;
+          item.append(time, agent);
+          list.append(item);
+        });
+      }
+
+      async function loadData() {
+        const [health, today] = await Promise.all([api('/api/health'), api('/api/today')]);
+        if (!health.ok) throw new Error('Health data is unavailable.');
+        if (!today.ok) throw new Error('Today data is unavailable.');
+        renderHealth(await health.json());
+        renderToday(await today.json());
+      }
+
+      function appendOutput(line, isError) {
+        if (output.textContent === 'Output will appear here.') output.textContent = '';
+        output.textContent += (isError ? '[error] ' : '') + line + '\n';
+        output.scrollTop = output.scrollHeight;
+      }
+
+      function setActive(kind) {
+        activeOperation = kind || '';
+        actionButtons.forEach((button) => { button.disabled = Boolean(activeOperation); });
+        connection.className = 'connection' + (activeOperation ? ' busy' : '');
+        connection.textContent = activeOperation ? 'Operation running' : 'Connected';
+      }
+
+      function consumeFrames(text) {
+        text.split(/\r?\n\r?\n/).forEach((frame) => {
+          if (!frame || frame.startsWith(':')) return;
+          let id = 0;
+          let data = '';
+          frame.split(/\r?\n/).forEach((line) => {
+            if (line.startsWith('id:')) id = Number(line.slice(3).trim());
+            if (line.startsWith('data:')) data += line.slice(5).trim();
+          });
+          if (!id || !data) return;
+          lastEventId = Math.max(lastEventId, id);
+          const event = JSON.parse(data);
+          if (event.type === 'operation-started') {
+            setActive(event.operation);
+            output.textContent = '';
+            operationState.textContent = labels[event.operation] + ' · running';
+          } else if (event.type === 'operation-output') {
+            appendOutput(event.line, event.stream === 'stderr');
+          } else if (event.type === 'operation-completed' || event.type === 'operation-failed') {
+            const failed = event.type === 'operation-failed';
+            operationState.textContent = labels[event.operation] + (failed ? ' · failed' : ' · complete') + ' · exit ' + event.exit_code;
+            if (failed && event.message) appendOutput(event.message, true);
+            setActive('');
+            loadData().catch(showConnectionError);
+          }
+        });
+      }
+
+      async function eventLoop() {
+        while (!stopped) {
+          try {
+            const response = await api('/api/events', { method: 'GET', headers: { 'Last-Event-ID': String(lastEventId) } });
+            if (!response.ok) throw new Error('Event stream rejected');
+            consumeFrames(await response.text());
+            if (!activeOperation) {
+              connection.className = 'connection';
+              connection.textContent = 'Connected';
+            }
+          } catch (_) {
+            if (!stopped) {
+              connection.className = 'connection offline';
+              connection.textContent = 'Reconnecting';
+            }
+          }
+          if (!stopped) await new Promise((resolve) => setTimeout(resolve, 650));
+        }
+      }
+
+      function showConnectionError(error) {
+        connection.className = 'connection offline';
+        connection.textContent = error.message || 'Data unavailable';
+      }
+
+      async function begin() {
+        const token = location.hash.slice(1);
+        if (!token) throw new Error('The one-time panel token is missing. Re-run Local Brain.');
+        const session = await api('/api/session', { method: 'POST', body: JSON.stringify({ token }) });
+        history.replaceState(null, '', location.pathname + location.search);
+        if (!session.ok) throw new Error('The secure local session could not be established.');
+        await loadData();
+        eventLoop();
+      }
+
+      document.querySelectorAll('.tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach((item) => item.setAttribute('aria-selected', String(item === tab)));
+          document.getElementById('view-health').hidden = tab.dataset.view !== 'health';
+          document.getElementById('view-today').hidden = tab.dataset.view !== 'today';
+          const today = tab.dataset.view === 'today';
+          title.textContent = today ? 'Today' : 'System health';
+          lede.textContent = today ? 'Sessions captured today and the work produced from them.' : 'The latest evidence from every part of the memory pipeline.';
+        });
+      });
+
+      actionButtons.forEach((button) => {
+        button.addEventListener('click', async () => {
+          const kind = button.dataset.operation;
+          if (!window.confirm(confirmations[kind])) return;
+          try {
+            const response = await api('/api/action/' + kind, { method: 'POST', body: '{}' });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || result.error || 'The operation could not start.');
+            setActive(kind);
+          } catch (error) {
+            operationState.textContent = labels[kind] + ' · could not start';
+            appendOutput(error.message, true);
+          }
+        });
+      });
+
+      document.getElementById('close-panel').addEventListener('click', async () => {
+        if (activeOperation && !window.confirm('An operation is still running. Close the panel after it finishes?')) return;
+        stopped = true;
+        try { await api('/api/quit', { method: 'POST', body: '{}' }); } catch (_) {}
+        connection.className = 'connection offline';
+        connection.textContent = activeOperation ? 'Closing after operation' : 'Panel closed';
+      });
+
+      begin().catch(showConnectionError);
+    })();
+  </script>
+</body>
+</html>
