@@ -323,9 +323,9 @@ begin
     VaultPage.SubCaptionLabel.Caption := 'Documents is redirected (commonly OneDrive), so it is not the default. The vault stays under your user profile.'
   else
     VaultPage.SubCaptionLabel.Caption := VaultReason;
-  PresetPage.CheckListBox.ItemCaption[0] := 'Cloud' + RecommendedSuffix('cloud') + ' - Claude handles capture and model work';
-  PresetPage.CheckListBox.ItemCaption[1] := 'Local' + RecommendedSuffix('local') + ' - local model work; Claude still powers capture/compile';
-  PresetPage.CheckListBox.ItemCaption[2] := 'Hybrid' + RecommendedSuffix('hybrid') + ' - Claude capture plus local model work';
+  PresetPage.CheckListBox.ItemCaption[0] := 'Cloud' + RecommendedSuffix('cloud') + ' - Claude does the summarising and the compile; nothing local to install';
+  PresetPage.CheckListBox.ItemCaption[1] := 'Local' + RecommendedSuffix('local') + ' - your own model does the summarising; the nightly compile still runs on Claude';
+  PresetPage.CheckListBox.ItemCaption[2] := 'Hybrid' + RecommendedSuffix('hybrid') + ' - your own model for summaries, Claude Code alongside it';
   if RecommendedPreset = 'local' then PresetIndex := 1
   else if RecommendedPreset = 'hybrid' then PresetIndex := 2
   else PresetIndex := 0;
