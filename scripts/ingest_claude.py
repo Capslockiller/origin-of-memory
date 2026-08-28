@@ -124,6 +124,8 @@ def candidates(
     only_project: str | None = None,
     retry_failed: bool = False,
     now_epoch: float | None = None,
+    fresh_seconds: float = FRESH_SECONDS,
+    after_watermark: str = "",
 ) -> tuple[list[Session], list[tuple[str, str]]]:
     """(işlenecek oturumlar, deftere yazılacak ön-atlamalar) döndürür."""
     projects_root = PROJECTS_ROOT if projects_root is None else projects_root
@@ -152,7 +154,10 @@ def candidates(
             entry = ingest_common.done_entry(state, SOURCE, key)
             if ingest_common.should_skip(entry, retry_failed):
                 continue
-            if current - file_stat.st_mtime < FRESH_SECONDS:
+            watermark = ingest_common.file_watermark(path, file_stat)
+            if after_watermark and watermark <= after_watermark and entry is None:
+                continue
+            if current - file_stat.st_mtime < fresh_seconds:
                 continue
             if _live_flushed(state_dir, key):
                 skips.append((key, "skipped-live"))
@@ -171,7 +176,7 @@ def candidates(
                     when=when,
                     turns=turns,
                     origin=str(path),
-                    watermark="",
+                    watermark=watermark,
                     model=model,
                     anchor=flush.session_anchor(key, when, "claude"),
                 )

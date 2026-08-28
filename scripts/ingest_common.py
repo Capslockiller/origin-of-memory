@@ -202,6 +202,30 @@ def record_file(
     bucket["files"][name] = {"size": int(size), "mtime": int(mtime)}
 
 
+def file_watermark(path: Path, file_stat: os.stat_result | None = None) -> str:
+    """Stable, lexically ordered watermark for one transcript revision."""
+    stat_result = path.stat() if file_stat is None else file_stat
+    return f"{stat_result.st_mtime_ns:020d}:{path.as_posix()}"
+
+
+def latest_watermark(state: dict[str, Any], source: str) -> str:
+    """Newest terminal session watermark in the existing ingest ledger."""
+    bucket = state.get("sources", {}).get(source)
+    if not isinstance(bucket, dict):
+        return ""
+    done = bucket.get("done")
+    if not isinstance(done, dict):
+        return ""
+    values = [
+        str(entry.get("watermark", ""))
+        for entry in done.values()
+        if isinstance(entry, dict)
+        and str(entry.get("status", "")) in TERMINAL_STATUSES
+        and entry.get("watermark")
+    ]
+    return max(values, default="")
+
+
 def file_unchanged(
     state: dict[str, Any],
     source: str,
@@ -491,6 +515,43 @@ def append_historical(
         anchor=session.anchor or None,
     )
     return daily_path.name
+
+
+def daily_has_session_anchor(vault_root: Path, session: Session) -> bool:
+    """Whether any daily log already contains this canonical session id."""
+    if not session.anchor:
+        return False
+    expected = flush.retrieve.parse_session_anchors(session.anchor)
+    if not expected:
+        return False
+    session_id = expected[0].session
+    daily_dir = vault_root / "daily"
+    if not daily_dir.exists():
+        return False
+    preferred = daily_dir / f"{session.when.strftime('%Y-%m-%d')}.md"
+    paths = [preferred] if preferred.is_file() else []
+    paths.extend(path for path in sorted(daily_dir.glob("*.md")) if path != preferred)
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        if any(
+            anchor.session == session_id
+            for anchor in flush.retrieve.parse_session_anchors(text)
+        ):
+            return True
+    return False
+
+
+@contextlib.contextmanager
+def flush_session_lock(
+    session_id: str,
+    state_dir: Path = STATE_DIR,
+) -> Iterator[None]:
+    """Hold the exact per-session lock used by live ``flush.py``."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = flush._session_lock_path(state_dir, session_id)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        _lock_exclusive(lock_file, blocking=True)
+        yield
 
 
 @contextlib.contextmanager

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+<!-- yazan: codex · gpt-5.6-sol -->
+- **Hookless transcript watcher** (`scripts/watcher.py`). Session capture was the
+  last memory surface that required Claude Code lifecycle hooks; a quiet
+  15-minute scanner now reuses the Claude/Codex ingest adapters, the shared
+  summarisation path, and `ingest-state.json` watermarks, so the hook becomes a
+  latency optimisation instead of a dependency. A minimal named-folder adapter
+  accepts finalized `.md` and `.jsonl` sessions. The watcher holds the existing
+  per-session flush lock and rechecks canonical daily anchors before every model
+  call, allowing hook and watcher capture to coexist without duplicate records.
+  Antigravity capture remains explicitly unimplemented because its official
+  documentation establishes only a local conversation-ID cache, not an on-disk
+  transcript layout; guessing a path would turn data loss into a silent success.
+  No scheduler is registered—the owner still controls that operating-system
+  decision. See [`docs/watcher.md`](docs/watcher.md).
+
 <!-- yazan: odena · claude-opus-5 -->
 - **Context bridge** (`scripts/context_bridge.py`). Per-message injection needs
   a prompt hook and only some hosts offer one; the bridge closes most of that

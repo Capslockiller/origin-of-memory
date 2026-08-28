@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 import flush
@@ -158,6 +159,9 @@ def candidates(
     state: dict[str, Any],
     sessions_root: Path | None = None,
     retry_failed: bool = False,
+    now_epoch: float | None = None,
+    fresh_seconds: float = 0,
+    after_watermark: str = "",
 ) -> tuple[list[Session], list[tuple[str, int, float, str]]]:
     """(işlenecek oturumlar, [(dosya, boyut, mtime, gerekçe)]) döndürür."""
     sessions_root = SESSIONS_ROOT if sessions_root is None else sessions_root
@@ -165,6 +169,7 @@ def candidates(
     rejects: list[tuple[str, int, float, str]] = []
     if not sessions_root.exists():
         return sessions, rejects
+    current = time.time() if now_epoch is None else now_epoch
 
     for path in sorted(sessions_root.glob("*/*/*/rollout-*.jsonl")):
         try:
@@ -172,6 +177,7 @@ def candidates(
         except OSError:
             continue
         name = path.name
+        watermark = ingest_common.file_watermark(path, file_stat)
         if not retry_failed and ingest_common.file_unchanged(
             state,
             SOURCE,
@@ -179,6 +185,8 @@ def candidates(
             file_stat.st_size,
             file_stat.st_mtime,
         ):
+            continue
+        if current - file_stat.st_mtime < fresh_seconds:
             continue
         try:
             session, reason = read_rollout(path)
@@ -195,5 +203,7 @@ def candidates(
                 (name, file_stat.st_size, file_stat.st_mtime, "done")
             )
             continue
-        sessions.append(session)
+        if after_watermark and watermark <= after_watermark and entry is None:
+            continue
+        sessions.append(session._replace(watermark=watermark))
     return sessions, rejects
