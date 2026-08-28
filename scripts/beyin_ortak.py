@@ -7,12 +7,20 @@ model: gpt-5.6-sol
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import os
 from pathlib import Path
 import time
 from typing import Any
+
+
+CALLS_LEDGER_NAME = "calls.jsonl"
+CALLS_LEDGER_MAX_BYTES = 5 * 1024 * 1024
+# Every token figure in the ledger is characters ÷ 4. It is an estimate, not a
+# provider count, which is why the fields carry the `_est` suffix.
+CHARS_PER_TOKEN_ESTIMATE = 4
 
 
 try:
@@ -69,6 +77,96 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def estimate_tokens(chars: int) -> int:
+    """Characters ÷ 4. An estimate — never call it a token count."""
+    return max(0, int(chars)) // CHARS_PER_TOKEN_ESTIMATE
+
+
+def _rotate_calls_ledger(path: Path, max_bytes: int) -> None:
+    """Past the cap, keep the newest lines that fit in half of it.
+
+    Halving rather than trimming one line per append keeps rotation amortised:
+    the rewrite happens once per half-cap of traffic instead of on every call.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size <= max_bytes:
+        return
+    try:
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - max_bytes // 2))
+            tail = handle.read()
+    except OSError:
+        return
+    # The seek lands mid-line; drop the partial head so every kept line parses.
+    newline = tail.find(b"\n")
+    tail = tail[newline + 1 :] if newline != -1 else b""
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(tail)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def record_call(
+    state_dir: Path,
+    *,
+    backend: str,
+    model_tier: str,
+    model_slug: str,
+    component: str,
+    input_chars: int,
+    output_chars: int,
+    duration_ms: int,
+    outcome: str,
+    ledger_name: str = CALLS_LEDGER_NAME,
+    max_bytes: int = CALLS_LEDGER_MAX_BYTES,
+) -> None:
+    """Append one accounting line for a model call: numbers, never content.
+
+    The signature is the guarantee. This function is handed character *counts*,
+    not the prompt and not the response, so there is no path by which either can
+    reach the file — a ledger is not a log. ``outcome`` carries the runner's
+    fixed error vocabulary (``claude-timeout``, ``ollama-model-unset``, …),
+    which is written by this repository rather than by a model.
+
+    Accounting must never break the call it is accounting for, so every failure
+    here is swallowed the way ``write_health`` swallows its own.
+    """
+    try:
+        record = {
+            "ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "backend": str(backend),
+            "component": str(component),
+            "model_tier": str(model_tier),
+            "model_slug": str(model_slug),
+            "input_chars": int(input_chars),
+            "output_chars": int(output_chars),
+            "input_tokens_est": estimate_tokens(input_chars),
+            "output_tokens_est": estimate_tokens(output_chars),
+            "duration_ms": int(duration_ms),
+            "outcome": str(outcome),
+        }
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+        state_dir = Path(state_dir)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = state_dir / ledger_name
+        _rotate_calls_ledger(path, max_bytes)
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(line)
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 def write_health(

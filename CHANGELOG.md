@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+<!-- yazan: claude · opus-5 -->
+- **Frontmatter schema gate** at the compiler's promotion path
+  (`scripts/sema.py`). The compiler's prompt always described the concept-note
+  schema; nothing enforced it, so a note with broken frontmatter entered the
+  index with its title degraded to the filename and empty tags. A staged note
+  that fails validation is now **not promoted** — it is routed to
+  `.stage/karantina/sema/` with a sidecar naming the problems, health records
+  `schema-invalid:<file>`, and its clean siblings in the same run still promote.
+  Nothing is ever auto-repaired: inventing a missing `created` date would file a
+  fabricated fact as permanent memory. The gate stops **new** damage only —
+  `retrieve.build_index` and `rootmap` keep their tolerant behaviour, so an
+  existing imperfect corpus keeps indexing and keeps being retrieved.
+- `beyin doktor` now surveys the live corpus read-only: `retrieve.py verify`
+  reports `schema_checked`, `schema_invalid_count` and up to five offending
+  notes with their problems. The survey never affects `ok` and never modifies or
+  blocks anything — it is a census of what predates the gate.
+- **Per-call accounting** in `.state/calls.jsonl`, appended by
+  `claude_runner.run_claude()` — the single choke point every model call already
+  passes through. One line per call: timestamp, backend, model tier and resolved
+  slug, component, character counts, chars ÷ 4 token estimates (`_est` in the
+  field name, because that is what they are), duration and outcome. **No prompt
+  or response content** — `record_call()` is handed counts rather than strings,
+  so content has no path into the file, and a test asserts the field set never
+  grows. Append-only, capped at 5 MB, rotated keeping the newest lines.
+- `python scripts/durum.py` gained a call-accounting section: the last 7 days
+  per backend with median and p95 duration, and estimated tokens per component.
+  `--json` adds a `calls` key alongside the unchanged `rows` contract. See
+  "Measuring your own setup" in [docs/local-models.md](docs/local-models.md) for
+  how to compare backends with it, and why the token figure skews low on
+  Turkish text.
+
 - Opt-in **hybrid retrieval** (`BEYIN_RETRIEVAL=rrf`): reciprocal rank fusion
   over BM25, tag/alias overlap and recency, with a bounded recency multiplier.
   Default stays `bm25` until the fused path is measured against the gold set —

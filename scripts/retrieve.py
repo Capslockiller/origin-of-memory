@@ -22,6 +22,7 @@ from typing import Any, Sequence
 # Module-level name, not a re-wrap: `retrieve._atomic_write_json` keeps resolving
 # for existing callers while there is one implementation. See AGENTS.md.
 from beyin_ortak import _atomic_write_json
+import sema
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -933,6 +934,11 @@ def verify_index(
 
     Expectation is recomputed from ``knowledge/concepts/*.md`` file names alone,
     so an unparsable note still shows up as missing instead of hiding the drift.
+
+    It also carries the frontmatter-schema survey: how many live notes would be
+    refused by the compiler's promotion gate if they were written today. That
+    number is a **census, not a verdict** — it never touches ``ok``, so a corpus
+    that predates the schema still verifies green and still retrieves.
     """
     vault_root = Path(vault_root)
     if db_path is not None:
@@ -946,6 +952,9 @@ def verify_index(
         target = resolved_state / DB_NAME
     concepts_dir = vault_root / "knowledge" / "concepts"
     expected = sorted(path.stem for path in concepts_dir.glob("*.md"))
+    # Surveyed before any early return: a missing index is exactly when an
+    # operator most wants to know the corpus is also drifting.
+    survey = sema.survey_concepts(concepts_dir)
     report: dict[str, Any] = {
         "ok": False,
         "db_path": str(target),
@@ -957,6 +966,9 @@ def verify_index(
         "extra": [],
         "schema_version": 0,
         "built_at": "",
+        "schema_checked": survey["checked"],
+        "schema_invalid_count": survey["invalid"],
+        "schema_invalid": survey["sample"],
     }
     if not target.is_file():
         report["error"] = "index-missing"

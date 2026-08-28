@@ -267,7 +267,7 @@ class GeminiCommandTests(unittest.TestCase):
     def test_gemini_local_summary_uses_backend_aware_bound(self) -> None:
         captured: list[str] = []
 
-        def stub(prompt: str, root: Path, timeout: int | None = None):
+        def stub(prompt: str, root: Path, timeout: int | None = None, **_kwargs):
             captured.append(prompt)
             return GOOD_SUMMARY, None
 
@@ -309,7 +309,7 @@ class GeminiCommandTests(unittest.TestCase):
     def test_gemini_local_summary_defaults_to_24k(self) -> None:
         captured: list[str] = []
 
-        def stub(prompt: str, root: Path, timeout: int | None = None):
+        def stub(prompt: str, root: Path, timeout: int | None = None, **_kwargs):
             captured.append(prompt)
             return GOOD_SUMMARY, None
 
@@ -359,7 +359,7 @@ class GeminiCommandTests(unittest.TestCase):
         for backend in ("claude", "antigravity"):
             captured: list[str] = []
 
-            def stub(prompt: str, root: Path, timeout: int | None = None):
+            def stub(prompt: str, root: Path, timeout: int | None = None, **_kwargs):
                 captured.append(prompt)
                 return GOOD_SUMMARY, None
 

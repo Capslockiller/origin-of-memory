@@ -32,6 +32,7 @@ import claude_runner
 import retrieve
 import rootmap
 import secret_guard
+import sema
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -399,6 +400,15 @@ def build_compact_registry(
     return result if with_stats else result.text
 
 
+def _quarantine_stamp(source_file: str) -> str:
+    """Date prefix for a held file: the source's own date, else today's."""
+    date_match = DATE_IN_NAME.search(Path(source_file).stem)
+    if date_match is None:
+        return dt.date.today().isoformat()
+    day = date_match.group("day") or "01"
+    return f"{date_match.group('year')}-{date_match.group('month')}-{day}"
+
+
 def _quarantine_content(
     vault_root: Path,
     source_file: str,
@@ -413,14 +423,7 @@ def _quarantine_content(
         if source_path is not None
         else hashlib.sha256(content.encode("utf-8")).hexdigest()
     )
-    date_match = DATE_IN_NAME.search(Path(source_file).stem)
-    if date_match is None:
-        date_text = dt.date.today().isoformat()
-    else:
-        day = date_match.group("day") or "01"
-        date_text = (
-            f"{date_match.group('year')}-{date_match.group('month')}-{day}"
-        )
+    date_text = _quarantine_stamp(source_file)
     quarantine_dir = vault_root / ".stage" / "karantina"
     quarantine_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     quarantine_dir.chmod(0o700)
@@ -439,6 +442,44 @@ def _quarantine_content(
         {
             "matched_pattern": match.group(0),
             "offending_excerpt": excerpt,
+            "timestamp": _iso_now(),
+            "source_file": source_file,
+        },
+    )
+    sidecar.chmod(0o600)
+    return destination
+
+
+def _quarantine_schema(
+    vault_root: Path,
+    source_file: str,
+    content: str,
+    problems: Sequence[str],
+) -> Path:
+    """Hold a staged note that misses the concept schema, plus its problem list.
+
+    Routed exactly like the directive-shaped gate — the file is preserved
+    verbatim under ``.stage/karantina/sema/`` beside a sidecar naming what was
+    wrong — because the same rule applies: removing or rewriting content is the
+    operator's decision, not the pipeline's. Nothing is repaired here. Guessing
+    a missing ``created`` date would invent a fact.
+    """
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    quarantine_root = vault_root / ".stage" / "karantina"
+    quarantine_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    quarantine_root.chmod(0o700)
+    quarantine_dir = quarantine_root / "sema"
+    quarantine_dir.mkdir(exist_ok=True, mode=0o700)
+    quarantine_dir.chmod(0o700)
+    destination = quarantine_dir / f"{_quarantine_stamp(source_file)}-{digest[:8]}.md"
+    destination.write_text(content, encoding="utf-8", newline="")
+    destination.chmod(0o600)
+
+    sidecar = destination.with_suffix(".json")
+    _atomic_write_json(
+        sidecar,
+        {
+            "problems": list(problems),
             "timestamp": _iso_now(),
             "source_file": source_file,
         },
@@ -814,6 +855,8 @@ def _run_claude(prompt: str, stage: Path) -> str | None:
         permission_mode="acceptEdits",
         allowed_tools="Read,Write,Edit,Glob,Grep",
         backend=backend,
+        component="compile",
+        state_dir=STATE_DIR,
     )
     return error
 
@@ -921,9 +964,39 @@ def _compile_one(
                 raise PolicyError(
                     f"secret-detected:{relative}:{','.join(hits)}"
                 )
-        _promote_changes(stage, vault_root, safe_files, live_baseline)
+
+        # Şema kapısı: frontmatter sözleşmesini tutturamayan kavram notu terfi
+        # etmez.  Sır taramasından SONRA çalışır — bir sır her koşulda koşuyu
+        # düşürmeli, şema hatası ise yalnız o dosyayı geride bırakmalı.
+        # index-full.md ve log.md kavram şemasına tabi değildir.
+        promoted_files = []
+        schema_rejected = []
+        for relative in safe_files:
+            if not _is_concept_note(relative):
+                promoted_files.append(relative)
+                continue
+            output = (stage / relative).read_text(encoding="utf-8")
+            problems = sema.validate_concept(output, Path(relative))
+            if not problems:
+                promoted_files.append(relative)
+                continue
+            _quarantine_schema(vault_root, relative, output, problems)
+            schema_rejected.append(relative)
+        schema_detail = ""
+        if schema_rejected:
+            schema_detail = "schema-invalid:" + ",".join(schema_rejected)
+            # When the directive gate also fired this run, that is the louder
+            # signal and owns the error slot; the schema line is preserved as a
+            # warning entry rather than overwriting it.
+            write_health(
+                state_dir, schema_detail, warning=bool(quarantined_outputs)
+            )
+
+        _promote_changes(stage, vault_root, promoted_files, live_baseline)
         if quarantined_outputs:
             return "output-quarantine", ",".join(quarantined_outputs)
+        if schema_rejected:
+            return "schema-invalid", schema_detail
         return None, ""
     except NoChangesError as exc:
         return "no-changes", str(exc)
@@ -1172,6 +1245,7 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
         return 0
 
     quarantine_seen = False
+    schema_error = ""
     for daily_path, digest in selected:
         timestamp = _iso_now()
         reason, detail = _compile_one(
@@ -1198,7 +1272,11 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
                 _release_trigger_claim(trigger_claim)
                 return 0
             continue
-        if reason is not None and reason not in {"no-changes", "output-quarantine"}:
+        if reason is not None and reason not in {
+            "no-changes",
+            "output-quarantine",
+            "schema-invalid",
+        }:
             _record_failure(
                 state_path,
                 state,
@@ -1217,6 +1295,12 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
         elif reason == "output-quarantine":
             status = "ok:output-quarantined"
             quarantine_seen = True
+        elif reason == "schema-invalid":
+            # Not a failed run: the daily was compiled, its clean siblings were
+            # promoted, and only the note that missed the schema was held back.
+            # Failing here instead would re-queue the same daily every night.
+            status = "ok:schema-invalid"
+            schema_error = detail
         else:
             status = "ok"
         state["ingested"][daily_path.name] = digest
@@ -1233,7 +1317,7 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
         # Success must clear the stale error flag, or the doctor keeps
         # reporting the last crash forever (ingest already follows this
         # convention: empty error string = healthy).
-        if not quarantine_seen:
+        if not quarantine_seen and not schema_error:
             write_health(STATE_DIR, "")
         try:
             import rootmap
@@ -1265,6 +1349,8 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             return 0
     if quarantine_seen:
         write_health(STATE_DIR, "quarantine:directive-shaped")
+    elif schema_error:
+        write_health(STATE_DIR, schema_error)
     return 0
 
 

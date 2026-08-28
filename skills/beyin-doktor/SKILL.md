@@ -72,9 +72,30 @@ fix suggestion on red rows. Close with a one-sentence verdict.
     The fix for every red variant is the same one line, so give it once:
     `python <vault>\.claude\scripts\retrieve.py build`.
 
+    The same JSON also carries a **frontmatter-schema survey** of the live
+    notes — `schema_checked`, `schema_invalid_count`, and `schema_invalid` with
+    up to five offenders and their problems. Report it as a separate row `14b`,
+    because it is a different question from index drift:
+
+    - `schema_invalid_count` is 0 → 🟢.
+    - Above 0 → 🟡, never 🔴. Give the count, the share of `schema_checked`,
+      and up to three note names with their first problem each.
+
+    This is a **survey, not a fault**. Those notes were written before the
+    compiler enforced the schema; they still index, still retrieve, and still
+    work. The number says how much of the corpus predates the gate, and it can
+    only shrink as notes are rewritten — it never blocks anything.
+
+    Never offer to fix these automatically, and never repair one yourself. A
+    missing `created` date cannot be recovered, only invented, and inventing it
+    puts a fabricated fact into permanent memory. If the operator asks, the
+    honest answer is to edit the note by hand with a date they actually know.
+
 15. **Quarantine** — has the compiler stopped directive-shaped content. Count
-    the `.md` files under `<vault>\.stage\karantina\` and read the `quarantined`
-    map in `<vault>\.claude\scripts\.state\compile-state.json`.
+    the `.md` files **directly under** `<vault>\.stage\karantina\` (not
+    recursively — the `sema\` subdirectory is row 16, a different gate) and read
+    the `quarantined` map in
+    `<vault>\.claude\scripts\.state\compile-state.json`.
 
     - Empty → 🟢.
     - Non-empty → 🔴. Report the **count** and the **newest entry**: its
@@ -102,6 +123,27 @@ fix suggestion on red rows. Close with a one-sentence verdict.
 
     Never automate release, and never move a file back unedited — that hands the
     original payload straight to the next compile.
+
+16. **Schema holds** — has the compiler refused to promote a note that missed
+    the frontmatter schema. Count the `.md` files under
+    `<vault>\.stage\karantina\sema\`.
+
+    - Empty → 🟢.
+    - Non-empty → 🟡. Report the count and, for the newest entry, the
+      `problems` list from the sidecar `.json` beside it.
+
+    This is not an injection and not a broken pipeline: the model wrote a note
+    with, say, no `created` field, the gate held that one file back, and its
+    clean siblings were promoted normally. Health will show
+    `schema-invalid:<file>` and the run status will be `ok:schema-invalid` —
+    read those as this row, not as three faults. The daily log was still
+    ingested, so nothing will be retried on its own.
+
+    The release path is the same shape as row 15 and equally manual: read the
+    `problems`, fix the frontmatter **by hand** in the quarantined file, and
+    move it into `<vault>\knowledge\concepts\`. Never fill in a missing
+    `created` date yourself — you would be inventing a fact and filing it as
+    memory. If the date is unknown, say so in the note rather than guessing.
 
 ## Report format
 

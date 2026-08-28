@@ -10,15 +10,20 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 from pathlib import Path
+import statistics
 from typing import Any, Sequence
+
+from beyin_ortak import CALLS_LEDGER_NAME
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_DIR = SCRIPT_DIR / ".state"
 SCHEMA_VERSION = 1
 COMPONENTS = ("flush", "compile", "ingest")
+CALLS_WINDOW_DAYS = 7
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -47,6 +52,111 @@ def _problem(health: dict[str, Any], component: str) -> str:
         if isinstance(reason, str) and reason:
             return reason
     return "unknown"
+
+
+def _percentile_ms(durations: Sequence[float], fraction: float) -> int:
+    """Nearest-rank percentile, the same convention ``retrieve.benchmark`` uses."""
+    ordered = sorted(durations)
+    index = max(0, math.ceil(fraction * len(ordered)) - 1)
+    return int(round(ordered[index]))
+
+
+def _read_calls(path: Path, cutoff: dt.datetime) -> list[dict[str, Any]]:
+    """Read ledger lines newer than ``cutoff``; unreadable lines are skipped.
+
+    A ledger is evidence, not state: a truncated or hand-edited line loses that
+    one call rather than the whole report.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return []
+    records = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        stamp = record.get("ts")
+        if not isinstance(stamp, str):
+            continue
+        try:
+            when = dt.datetime.fromisoformat(stamp)
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.astimezone()
+        if when >= cutoff:
+            records.append(record)
+    return records
+
+
+def _number(record: dict[str, Any], key: str) -> int:
+    value = record.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def summarize_calls(
+    state_dir: Path,
+    now: dt.datetime | None = None,
+) -> dict[str, Any]:
+    """Summarise the last 7 days of model calls from ``.state/calls.jsonl``.
+
+    Every token figure here is a chars ÷ 4 estimate carried straight from the
+    ledger, never a provider count — the field names keep saying so.
+    """
+    moment = (now or dt.datetime.now()).astimezone()
+    cutoff = moment - dt.timedelta(days=CALLS_WINDOW_DAYS)
+    records = _read_calls(Path(state_dir) / CALLS_LEDGER_NAME, cutoff)
+
+    backend_durations: dict[str, list[float]] = {}
+    component_totals: dict[str, dict[str, int]] = {}
+    ok_calls = 0
+    for record in records:
+        backend = str(record.get("backend", "unknown")) or "unknown"
+        component = str(record.get("component", "unknown")) or "unknown"
+        backend_durations.setdefault(backend, []).append(
+            float(_number(record, "duration_ms"))
+        )
+        totals = component_totals.setdefault(
+            component, {"calls": 0, "input_tokens_est": 0, "output_tokens_est": 0}
+        )
+        totals["calls"] += 1
+        totals["input_tokens_est"] += _number(record, "input_tokens_est")
+        totals["output_tokens_est"] += _number(record, "output_tokens_est")
+        if record.get("outcome") == "ok":
+            ok_calls += 1
+
+    backends = [
+        {
+            "backend": backend,
+            "calls": len(durations),
+            "median_ms": int(round(statistics.median(durations))),
+            "p95_ms": _percentile_ms(durations, 0.95),
+        }
+        for backend, durations in sorted(
+            backend_durations.items(), key=lambda item: (-len(item[1]), item[0])
+        )
+    ]
+    components = [
+        {"component": component, **totals}
+        for component, totals in sorted(
+            component_totals.items(), key=lambda item: (-item[1]["calls"], item[0])
+        )
+    ]
+    return {
+        "window_days": CALLS_WINDOW_DAYS,
+        "total_calls": len(records),
+        "ok_calls": ok_calls,
+        "failed_calls": len(records) - ok_calls,
+        "backends": backends,
+        "components": components,
+    }
 
 
 def build_summary(state_dir: Path) -> dict[str, Any]:
@@ -96,35 +206,81 @@ def build_summary(state_dir: Path) -> dict[str, Any]:
             "quarantine_count": quarantine_count,
         },
     ]
-    return {"schema_version": SCHEMA_VERSION, "rows": rows}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "rows": rows,
+        "calls": summarize_calls(state_dir),
+    }
 
 
-def _print_table(summary: dict[str, Any]) -> None:
-    headers = (
-        "component",
-        "last status",
-        "last run",
-        "last error/skip",
-        "quarantine",
-    )
-    rows = [
-        (
-            row["component"],
-            row["last_status"],
-            row["last_run"],
-            row["last_error_or_skip"],
-            str(row["quarantine_count"]),
-        )
-        for row in summary["rows"]
-    ]
+def _print_grid(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
+    # The list form, not `max(header, *cells)`: a grid with no rows must print
+    # its header rather than raise on an empty unpacking.
     widths = [
-        max(len(headers[index]), *(len(row[index]) for row in rows))
+        max([len(headers[index])] + [len(row[index]) for row in rows])
         for index in range(len(headers))
     ]
     print(" | ".join(value.ljust(widths[i]) for i, value in enumerate(headers)))
     print("-+-".join("-" * width for width in widths))
     for row in rows:
         print(" | ".join(value.ljust(widths[i]) for i, value in enumerate(row)))
+
+
+def _print_calls(calls: dict[str, Any]) -> None:
+    window = calls["window_days"]
+    total = calls["total_calls"]
+    print()
+    if not total:
+        print(f"model calls (last {window} days): none recorded")
+        return
+    print(
+        f"model calls (last {window} days): {total} "
+        f"({calls['ok_calls']} ok, {calls['failed_calls']} failed)"
+    )
+    print()
+    _print_grid(
+        ("backend", "calls", "median ms", "p95 ms"),
+        [
+            (
+                str(entry["backend"]),
+                str(entry["calls"]),
+                str(entry["median_ms"]),
+                str(entry["p95_ms"]),
+            )
+            for entry in calls["backends"]
+        ],
+    )
+    print()
+    # "est" is not decoration: these are characters ÷ 4, not provider counts.
+    _print_grid(
+        ("component", "calls", "in tokens (est)", "out tokens (est)"),
+        [
+            (
+                str(entry["component"]),
+                str(entry["calls"]),
+                str(entry["input_tokens_est"]),
+                str(entry["output_tokens_est"]),
+            )
+            for entry in calls["components"]
+        ],
+    )
+
+
+def _print_table(summary: dict[str, Any]) -> None:
+    _print_grid(
+        ("component", "last status", "last run", "last error/skip", "quarantine"),
+        [
+            (
+                row["component"],
+                row["last_status"],
+                row["last_run"],
+                row["last_error_or_skip"],
+                str(row["quarantine_count"]),
+            )
+            for row in summary["rows"]
+        ],
+    )
+    _print_calls(summary["calls"])
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

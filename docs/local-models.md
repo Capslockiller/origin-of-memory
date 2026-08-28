@@ -161,3 +161,39 @@ guessing.
 If flushes are timing out on a local model, raising the timeout is the first
 thing to try; lowering `BEYIN_FLUSH_CHUNK_CHARS` so the model has less to read is
 the second.
+
+## Measuring your own setup
+
+Whether a local model is worth it on *your* hardware is not a question this
+document can answer for you, so the pipeline records the evidence instead of
+guessing. Every model call appends one line to
+`<vault>\.claude\scripts\.state\calls.jsonl`: timestamp, backend, model tier and
+resolved slug, component, character counts, estimated tokens, duration in
+milliseconds, and outcome. No prompt or response text — it is a ledger, not a
+log.
+
+```powershell
+python scripts/durum.py            # last 7 days, per backend and per component
+python scripts/durum.py --json     # same numbers under the "calls" key
+```
+
+The practical way to compare: run a week on `claude`, note the median and p95
+durations, then switch `BEYIN_MODEL_BACKEND` and run another week. The ledger
+keeps both, labelled by backend, and the failure column tells you how often a
+local run timed out — usually the number that decides it, not the median.
+
+Two honest caveats about the token figures:
+
+- **They are characters ÷ 4, not a provider count.** The field names say `_est`
+  for that reason. No provider is asked what it actually billed, and nothing
+  here reads a usage header. Treat the numbers as a consistent yardstick for
+  comparing runs to each other, not as an invoice.
+- **Turkish tokenizes worse than English, so the estimate skews low.** The 4:1
+  ratio comes from English text. Turkish agglutination and non-ASCII characters
+  produce more tokens per character, so a Turkish corpus will use more real
+  tokens than this estimate suggests. The direction of the error is known; the
+  size of it is not measured here.
+
+Durations have no such caveat — they are wall-clock time around the call, which
+is exactly what you feel — but remember they include process startup for the CLI
+backends and model load time for a cold local server.

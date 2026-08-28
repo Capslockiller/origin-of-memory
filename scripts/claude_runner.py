@@ -15,8 +15,14 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Callable
 
+from beyin_ortak import record_call
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+STATE_DIR = SCRIPT_DIR / ".state"
 
 BACKEND_ENV = "BEYIN_MODEL_BACKEND"
 BACKEND_CLAUDE = "claude"
@@ -171,6 +177,32 @@ def run_in_isolated_dir(
         return None, exec_error
 
 
+def _resolved_slug(backend: str, model: str) -> str:
+    """The concrete slug the backend will use, recorded for the ledger only.
+
+    Resolution is a pure read of the environment, so asking a second time costs
+    nothing and cannot change what the call does. An unmapped tier records an
+    empty slug rather than a guess — the ledger says what ran, or says nothing.
+    """
+    try:
+        if backend == BACKEND_ANTIGRAVITY:
+            import agy_runner
+
+            return agy_runner.resolve_model(model)[0] or ""
+        if backend == BACKEND_OLLAMA:
+            import ollama_runner
+
+            return ollama_runner.resolve_model(model)[0] or ""
+        if backend == BACKEND_OPENAI_COMPAT:
+            import openai_runner
+
+            return openai_runner.resolve_model(model)[0] or ""
+    except Exception:
+        return ""
+    # The Claude CLI takes the tier name itself as its `--model` argument.
+    return model
+
+
 def run_claude(
     prompt: str,
     *,
@@ -183,14 +215,62 @@ def run_claude(
     permission_mode: str | None = None,
     allowed_tools: str | None = None,
     backend: str | None = None,
+    component: str = "unknown",
+    state_dir: Path | None = None,
 ) -> tuple[str | None, str | None]:
-    """Run the selected backend with the shared isolation and recursion hardening."""
+    """Run the selected backend, and account for the call in ``.state/calls.jsonl``.
+
+    Accounting sits here because this is the single choke point every model call
+    already passes through, so no caller can opt out of being measured. Only
+    counts and identifiers are written — see ``beyin_ortak.record_call``.
+    """
     _LAST_WARNINGS.clear()
     if backend is None:
         backend, warning = resolve_backend()
         if warning:
             _LAST_WARNINGS.append(warning)
 
+    started = time.monotonic()
+    output, error = _dispatch(
+        prompt,
+        model=model,
+        tools=tools,
+        timeout=timeout,
+        cwd=cwd,
+        vault_root=vault_root,
+        temporary_prefix=temporary_prefix,
+        permission_mode=permission_mode,
+        allowed_tools=allowed_tools,
+        backend=backend,
+    )
+    record_call(
+        STATE_DIR if state_dir is None else state_dir,
+        backend=backend,
+        model_tier=model,
+        model_slug=_resolved_slug(backend, model),
+        component=component,
+        input_chars=len(prompt),
+        output_chars=len(output or ""),
+        duration_ms=int((time.monotonic() - started) * 1000),
+        outcome="ok" if error is None else error,
+    )
+    return output, error
+
+
+def _dispatch(
+    prompt: str,
+    *,
+    model: str,
+    tools: str,
+    timeout: int,
+    cwd: Path | None,
+    vault_root: Path | None,
+    temporary_prefix: str,
+    permission_mode: str | None,
+    allowed_tools: str | None,
+    backend: str,
+) -> tuple[str | None, str | None]:
+    """Run the selected backend with the shared isolation and recursion hardening."""
     if backend == BACKEND_ANTIGRAVITY:
         if tools:
             # Tool-mode (compile) needs scoped write permission; agy only offers

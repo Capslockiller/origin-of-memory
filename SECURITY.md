@@ -176,13 +176,50 @@ automatically — the directory grows until you empty it.
 - **The gate is line-anchored.** A directive placed mid-line, or split across
   lines, is not matched.
 - **Partial promotion can leave a dangling index row.** When a concept note is
-  quarantined but a clean `index-full.md` in the same run is promoted, the index
-  can name an article that was never written. Harmless, and the next compile
-  corrects it, but it will look odd if you read the index first.
+  held back — by this gate or by the schema gate below — and a clean
+  `index-full.md` in the same run is promoted, the index can name an article
+  that was never written. Harmless, and the next compile corrects it, but it
+  will look odd if you read the index first.
 
 There is still no content exclusion list. If you fetch untrusted pages in a
 session, editing that day's `daily/` file before the evening compile remains the
 strongest thing you can do.
+
+#### The frontmatter schema gate
+
+A second, non-security gate runs in the same promotion path and is routed the
+same way, so the two are worth reading together. `scripts/sema.py` validates
+every staged concept note against the schema the compiler's own prompt asks
+for — a parsable frontmatter block with no duplicate keys, a non-empty string
+`title`, `created` and `updated` as real `YYYY-MM-DD` dates, `tags`, `aliases`
+and `sources` as lists, and a non-empty body. A note that misses any of these is
+**not promoted**. It is copied to `<vault>/.stage/karantina/sema/` (same `0700`
+directory, `0600` files) beside a sidecar `.json` listing the problems, health
+records the error `schema-invalid:<file>`, and its clean siblings in the same
+run still promote.
+
+It runs **after** `secret_guard.scan()`, deliberately. A secret must fail the
+whole run no matter what else is wrong with the file; a schema miss must only
+cost that one file.
+
+Three properties matter more than the rule list:
+
+- **Nothing is ever repaired.** Guessing a missing `created` date would invent a
+  fact and file it as permanent memory. The gate names the problem and stops;
+  filling it in is a human edit.
+- **It stops new damage only.** `retrieve.build_index` and `rootmap` stay
+  tolerant, so the notes already in `knowledge/` — written before the schema was
+  enforced — keep indexing and keep being retrieved. The gate is not applied to
+  them retroactively and cannot be.
+- **It is not a security boundary.** A schema-valid note can still be poisoned
+  prose, and a schema-invalid one is usually just a sloppy write. This gate
+  protects the corpus's shape, not its truth. The directive-shaped gates above
+  are the security ones.
+
+`beyin doktor` surveys the live corpus read-only and reports how many notes
+would fail today (`retrieve.py verify` carries `schema_invalid_count`). That
+number is a census of what predates the gate, never a verdict on the vault, and
+nothing acts on it automatically.
 
 ### 4. `claude -p` subprocess hardening
 
@@ -204,7 +241,14 @@ All model calls go through `scripts/claude_runner.py`, which:
   if that directory resolves inside the vault
   (`temporary-directory-inside-vault`);
 - for the compile call, runs with the staging tree as the working directory, so
-  the live vault is not reachable as a relative path.
+  the live vault is not reachable as a relative path;
+- appends one accounting line per call to `.state/calls.jsonl` — timestamp,
+  backend, model tier and resolved slug, component, character counts, estimated
+  tokens, duration and outcome. **No prompt and no response text.**
+  `beyin_ortak.record_call()` is handed character counts rather than the strings
+  themselves, so there is no path by which content can reach the file; the
+  outcome field carries this repository's own fixed error vocabulary, never
+  model output. It is a ledger, not a log, and a test asserts it stays one.
 
 The compiler's write policy is enforced after the model returns, not trusted from
 it: the staging tree is manifested before and after the run, deletions and type
@@ -216,7 +260,8 @@ resolve inside `knowledge/` before an atomic replace.
 
 - Runtime state lives in `.state/` directories next to the scripts and hooks:
   session timers, prompt counters, ingest and compile bookkeeping, the health
-  file, retrieval session ledgers, and the FTS5 database `notes.db`.
+  file, retrieval session ledgers, the model-call ledger `calls.jsonl` (capped
+  at 5 MB, oldest lines dropped), and the FTS5 database `notes.db`.
 - The staging tree lives at `<vault>/.stage/`, created with mode `0700` and
   removed after each run.
 - claude.ai export ZIPs are read from `<vault>/.import/`.

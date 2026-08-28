@@ -142,8 +142,8 @@ Related rules:
 | Path | What |
 | --- | --- |
 | `hooks/*.ps1` | Session hooks, registered at user level by the installer |
-| `scripts/*.py` | Flush, compile, root map, retrieval, ingest, secret guard |
-| `scripts/beyin_ortak.py` | Shared health, locking, atomic-write and hashing helpers |
+| `scripts/*.py` | Flush, compile, root map, retrieval, ingest, secret guard, schema gate |
+| `scripts/beyin_ortak.py` | Shared health, locking, atomic-write, hashing and call-ledger helpers |
 | `scripts/durum.py` | `python scripts/durum.py [--json]` — one-table health summary |
 | `scripts/tests/` | pytest suite |
 | `skills/` | Skills copied to `<user>\.claude\skills\`; see [skills/README.md](skills/README.md) |

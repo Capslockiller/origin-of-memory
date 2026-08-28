@@ -356,7 +356,12 @@ def _run_claude(
     prompt: str,
     vault_root: Path,
     timeout: int | None = None,
+    *,
+    component: str = "flush",
 ) -> tuple[str | None, str | None]:
+    # ``component`` is keyword-only and labels the call in `.state/calls.jsonl`.
+    # The ingest family borrows this runner for the default model, and a
+    # borrowed runner must not file its calls under flush's name.
     if timeout is None:
         timeout, _warning = claude_runner.resolve_timeout("flush")
     return claude_runner.run_claude(
@@ -366,6 +371,8 @@ def _run_claude(
         timeout=timeout,
         vault_root=vault_root,
         temporary_prefix="beyin-flush-",
+        component=component,
+        state_dir=STATE_DIR,
     )
 
 

@@ -229,6 +229,8 @@ def _run_claude_with_model(
         timeout=timeout,
         vault_root=vault_root,
         temporary_prefix="beyin-ingest-",
+        component="ingest",
+        state_dir=STATE_DIR,
     )
 
 
@@ -344,8 +346,8 @@ def _run_claude(
         timeout, _warning = claude_runner.resolve_timeout("ingest")
     if model == DEFAULT_MODEL:
         # flush's runner is reused for the default model, but the bound that
-        # applies here is the ingest one.
-        return flush._run_claude(prompt, vault_root, timeout)
+        # applies here is the ingest one — and so is the accounting label.
+        return flush._run_claude(prompt, vault_root, timeout, component="ingest")
     return _run_claude_with_model(prompt, vault_root, model, timeout)
 
 

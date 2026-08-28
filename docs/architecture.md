@@ -28,7 +28,8 @@ hook registration, automatic capture, and compile.
 │   └── scripts\                <- scripts\*.py
 │       ├── hub-config.json     <- from template\hub-config.example.json, written once
 │       └── .state\             <- compile-state.json, ingest state, health.json,
-│                                  notes.db, retrieve-session-*.json, hookin-*.json
+│                                  notes.db, calls.jsonl, retrieve-session-*.json,
+│                                  hookin-*.json
 ├── daily\                      <- machine-written daily logs
 ├── knowledge\                  <- machine-compiled knowledge base
 │   ├── index.md                <- compact root map (rootmap.py)
@@ -37,6 +38,8 @@ hook registration, automatic capture, and compile.
 │   ├── concepts\*.md           <- atomic concept articles (compile.py)
 │   └── log.md                  <- compile run log (compile.py)
 ├── .stage\compile-stage-*\     <- transient compile staging, mode 0700
+├── .stage\karantina\           <- held content: directive-shaped, and sema\ for
+│                                  notes that missed the frontmatter schema
 ├── .import\                    <- claude.ai export ZIPs you drop in
 └── <anything>850-Companion\    <- your own companion memory layer (not shipped)
 
@@ -157,7 +160,8 @@ any of this; a violation raises rather than proceeding.
 
 Every model call in the system — flush summarize, ingest summarize, compile
 distill — goes through one function, `claude_runner.run_claude()`. That function
-is also the backend switch. The exact CLI flag surface and HTTP endpoints each
+is also the backend switch, and the place every call is timed and accounted for
+(§5.8). The exact CLI flag surface and HTTP endpoints each
 backend was built against are in
 [docs/compatibility.md](compatibility.md); versions beyond those are untested.
 
@@ -333,10 +337,16 @@ After the model returns, nothing is trusted:
    siblings in the same run still promote. See
    [SECURITY.md](../SECURITY.md#quarantine--the-compilers-three-directive-shaped-gates)
    for all three gates and the manual release path.
-4. `secret_guard.scan()` runs over the output.
-5. `_validate_live_destination()` re-checks each promoted path against the
+4. `secret_guard.scan()` runs over the output. A hit raises `PolicyError` and
+   fails the whole run — a secret is never a per-file problem.
+5. `sema.validate_concept()` runs over every staged **concept note** (not
+   `index-full.md`, not `log.md`). A note that misses the frontmatter schema is
+   not promoted; it goes to `.stage/karantina/sema/` with a sidecar naming the
+   problems, health records `schema-invalid:<file>`, and its clean siblings
+   still promote. See §5.7.
+6. `_validate_live_destination()` re-checks each promoted path against the
    allow-list, resolves it, and confirms it lands inside `knowledge/`.
-6. Each file is written with `_atomic_copy()`; the recorded live baseline digest
+7. Each file is written with `_atomic_copy()`; the recorded live baseline digest
    is used to detect that the live file changed underneath the run.
 
 The staging tree is removed afterwards, including on failure —
@@ -399,6 +409,92 @@ suffix is what makes two machines that happen to share a hostname distinguishabl
 This is cooperative rather than a distributed lock — it can only work if the sync
 tool has actually propagated the lock file — and it is documented as partial in
 [SECURITY.md](../SECURITY.md).
+
+### 5.7 `sema.py` — the frontmatter schema gate
+
+The compiler's prompt has always described the concept-note schema, but until
+this gate nothing enforced it. `rootmap.load_concepts` reads frontmatter with
+`.get()` and falls back to defaults, so a note with a broken or missing block
+entered the index quietly, its title degraded to the filename and its tags
+empty. The result looked fine and ranked badly.
+
+`sema.validate_concept(text, path) -> list[str]` returns a list of problems;
+empty means valid. It checks that the frontmatter block is present and
+parsable, that there are no duplicate keys, that `title` is a non-empty string,
+that `created` and `updated` are real `YYYY-MM-DD` dates, that `tags`, `aliases`
+and `sources` are lists, and that the body after the block is non-empty.
+Messages carry the filename the way the rest of the pipeline reports
+(`key-missing:<file>:created`, `date-invalid:<file>:updated`, `body-empty:<file>`),
+so a problem list stays readable wherever it is copied.
+
+It lives in its own module rather than in `beyin_ortak.py` for two reasons: it
+needs rootmap's frontmatter dialect (`_unquote`, `_inline_list`), and
+`beyin_ortak` cannot import `rootmap` without a cycle — putting it there would
+have forced a second parser into the repository. `secret_guard.py` is the
+existing precedent for a gate rule in its own file.
+
+Its line grammar is deliberately **stricter than rootmap's**. rootmap skips a
+frontmatter line it cannot read; a gate that skips is not a gate. The clearest
+case is an unterminated inline list — `tags: [a, b` — which rootmap reads as an
+empty list and this module refuses as unparsable.
+
+Three boundaries define what this gate is:
+
+- **It stops new damage only.** `retrieve.build_index` and `rootmap` keep their
+  tolerant behaviour untouched, so an imperfect corpus keeps indexing and keeps
+  being retrieved. Nothing is applied retroactively.
+- **It never repairs.** A missing `created` date cannot be recovered, only
+  invented, and an invented date is a fabricated fact in permanent memory.
+- **The doctor surveys, it does not gate.** `retrieve.py verify` carries
+  `schema_checked`, `schema_invalid_count` and up to five `schema_invalid`
+  entries with their problems. Those fields never affect `ok`, so a vault full
+  of pre-schema notes still verifies green and still exits 0. The survey is
+  computed before the index checks, so a missing index still reports it.
+
+### 5.8 Per-call accounting — `.state/calls.jsonl`
+
+Nothing recorded what a model call cost or how long it took, which left the
+backend comparison in §4.4 — and the "is a local model worth it" question in
+[docs/local-models.md](local-models.md) — with no data behind it.
+
+`claude_runner.run_claude()` now appends one line per call, because it is the
+single choke point every model call already passes through and therefore the one
+place no caller can opt out of. `_dispatch()` holds the backend switch; the
+wrapper around it times the call and hands the numbers to
+`beyin_ortak.record_call()`:
+
+```json
+{"ts": "2026-08-28T02:10:00+03:00", "backend": "ollama", "component": "flush",
+ "model_tier": "haiku", "model_slug": "qwen3:8b", "input_chars": 12000,
+ "output_chars": 1800, "input_tokens_est": 3000, "output_tokens_est": 450,
+ "duration_ms": 5200, "outcome": "ok"}
+```
+
+`outcome` is `ok` or the runner's own error string (`claude-timeout`,
+`ollama-model-unset`, …). `model_slug` is what the backend actually resolved —
+the Claude CLI takes the tier name itself, the local backends map it through
+their `resolve_model()`; an unmapped tier records an empty slug rather than a
+guess.
+
+**It is a ledger, not a log.** `record_call()` is handed character *counts*, not
+the prompt and not the response, so there is no path by which content can reach
+the file. That is the signature doing the work rather than a rule someone has to
+remember, and a test asserts the field set never grows.
+
+The file is append-only and capped at 5 MB. Past the cap the newest lines that
+fit in half of it are kept and rewritten atomically — halving rather than
+trimming per line keeps rotation amortised, and the rewrite cuts at a newline so
+every kept line still parses. Accounting failures are swallowed the way
+`write_health` swallows its own: reporting must never break the call it reports.
+
+The `component` label follows the work, not the wrapper. The ingest family
+borrows flush's runner for the default model, so `flush._run_claude()` takes a
+keyword-only `component` (default `"flush"`) that `ingest_common` overrides —
+otherwise every default-model ingest call would file itself under flush.
+
+**Not covered:** `ingest_common._run_codex()` invokes the Codex CLI directly
+rather than through `claude_runner`, so Codex ingest calls do not appear in the
+ledger. Backend comparisons that include Codex have to account for that gap.
 
 ## 6. `rootmap.py` — the map layer
 
@@ -558,6 +654,29 @@ status, last run, last error or skip, quarantine count. **The exit code is alway
 file produces `unknown` rows rather than a failure. Like every other entry point
 it returns immediately when `BEYIN_INVOKED_BY` is set.
 
+Below that table it summarises the last 7 days of `.state/calls.jsonl` (§5.8):
+calls per backend with median and p95 duration, and estimated tokens per
+component.
+
+```text
+model calls (last 7 days): 9 (8 ok, 1 failed)
+
+backend | calls | median ms | p95 ms
+--------+-------+-----------+-------
+claude  | 6     | 610       | 2400
+ollama  | 3     | 5200      | 15300
+
+component | calls | in tokens (est) | out tokens (est)
+----------+-------+-----------------+-----------------
+flush     | 5     | 15475           | 2250
+```
+
+An absent or empty ledger prints `model calls (last 7 days): none recorded`
+rather than an empty grid, and a line that will not parse costs that one call
+rather than the report. p95 is nearest-rank, the same convention
+`retrieve.benchmark` uses. The token columns are the ledger's chars ÷ 4
+estimates — the `(est)` in the header is not decoration.
+
 `--json` emits the same data in the shape the future TUI health tab will consume,
 so treat it as a stable contract:
 
@@ -572,7 +691,20 @@ so treat it as a stable contract:
       "last_error_or_skip": "unknown",
       "quarantine_count": 1
     }
-  ]
+  ],
+  "calls": {
+    "window_days": 7,
+    "total_calls": 9,
+    "ok_calls": 8,
+    "failed_calls": 1,
+    "backends": [
+      {"backend": "claude", "calls": 6, "median_ms": 610, "p95_ms": 2400}
+    ],
+    "components": [
+      {"component": "flush", "calls": 5,
+       "input_tokens_est": 15475, "output_tokens_est": 2250}
+    ]
+  }
 }
 ```
 
@@ -580,6 +712,9 @@ Shape rules, so a consumer can rely on them:
 
 - `rows` is always present and always holds exactly three rows, in the order
   `flush`, `compile`, `ingest`, whether or not any state file exists.
+- `calls` is always present. Its `backends` and `components` lists are sorted by
+  call count descending, then by name, and are empty when nothing was recorded —
+  an empty ledger is not an absent key.
 - Every field is a string except `quarantine_count`, which is an integer.
 - Unknown values are the literal string `"unknown"`, never `null` or absent.
 - `last_run` is an ISO-8601 local-offset timestamp when known. Epoch seconds in
@@ -595,8 +730,15 @@ Shape rules, so a consumer can rely on them:
 `scripts/tests/` runs under `pytest` (configured in `pyproject.toml` via
 `testpaths`). Coverage includes compile state handling, flush summary shape and
 silent-skip behaviour, the retrieval index, root-map generation, the secret guard,
-each ingest source, and the model-backend dispatch (`test_agy_backend.py`, fully
-mocked — no test ever launches a real CLI).
+the frontmatter schema gate and its read-only survey (`test_sema_gate.py`), the
+per-call ledger and its content-leak guard (`test_call_ledger.py`), each ingest
+source, and the model-backend dispatch (`test_agy_backend.py`, fully mocked — no
+test ever launches a real CLI).
+
+`conftest.py` holds one autouse fixture: it redirects `claude_runner.STATE_DIR`
+to a temporary directory for every test. Accounting is on by default and no
+caller can opt out, so without it a mocked call would append to the developer's
+own `scripts/.state/calls.jsonl`.
 
 ```powershell
 python -m pytest
