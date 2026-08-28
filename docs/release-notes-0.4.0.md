@@ -67,3 +67,18 @@ false in 0.3.0. A correction has to reach every copy.
   exercised.
 - Tool-free compile and hybrid retrieval both remain unmeasured, so both remain
   off by default.
+
+## Getting it
+
+**`OriginOfMemory-Setup-0.4.0.exe`** is attached to this release. Download,
+double-click, done. It is unsigned, so read the "What Windows will do" section
+in [`docs/installer.md`](../docs/installer.md) before you click through the
+prompts — and verify the download first:
+
+```
+SHA256  0969aa4afa23150ba136b8e129e62d957cec32432ef74543cde7f50e53e42099
+```
+
+Prefer the source? The zip now carries **`Setup.cmd`** (starts the graphical
+wizard, falls back to the terminal one) and **`Local Brain.cmd`** (opens the
+panel). Neither needs a terminal. `kur.ps1` still works exactly as before.
