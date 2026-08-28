@@ -112,11 +112,16 @@ class GuiWizardServerTests(unittest.TestCase):
         host: str | None = None,
         body: bytes | None = None,
         last_event_id: int | None = None,
+        omit_origin: bool = False,
+        omit_content_type: bool = False,
     ) -> tuple[int, object, bytes]:
-        headers = {
-            "Content-Type": "application/json",
-            "Origin": origin if origin is not None else cls.base,
-        }
+        # A real browser omits both of these on a same-origin GET; the flags let
+        # a test reproduce that rather than always sending what urllib is told.
+        headers: dict[str, str] = {}
+        if not omit_content_type:
+            headers["Content-Type"] = "application/json"
+        if not omit_origin:
+            headers["Origin"] = origin if origin is not None else cls.base
         if cookie:
             headers["Cookie"] = cookie
         if host:
@@ -205,14 +210,51 @@ class GuiWizardServerTests(unittest.TestCase):
         with urllib.request.urlopen(request, timeout=10) as response:
             page = response.read().decode("utf-8")
             csp = response.headers["Content-Security-Policy"]
-        self.assertEqual(
-            csp,
-            "default-src 'none'; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self' 'unsafe-inline'",
-        )
+        directives = {
+            part.strip().split(" ", 1)[0]: part.strip()
+            for part in csp.split(";")
+            if part.strip()
+        }
+        self.assertEqual(directives["default-src"], "default-src 'none'")
+        # connect-src is load-bearing, not decoration: without it the page's own
+        # fetch() falls back to default-src 'none' and the browser blocks every
+        # API call. urllib does not enforce CSP, so only asserting it here keeps
+        # the regression visible to a suite that never opens a browser.
+        self.assertEqual(directives["connect-src"], "connect-src 'self'")
+        self.assertNotIn("'unsafe-eval'", csp)
+        for directive in ("style-src", "script-src"):
+            self.assertIn("'self'", directives[directive])
         self.assertIsNone(re.search(r"https?://", page, flags=re.IGNORECASE))
         self.assertNotIn("<link", page.lower())
         self.assertIn("<button", page.lower())
+
+    def test_a_bodyless_same_origin_request_is_accepted(self) -> None:
+        """A browser sends no Origin and no Content-Type on a same-origin GET.
+
+        Requiring both on every route rejected the page's own calls with 403 and
+        415 while every Python test passed, because urllib sends exactly what a
+        test hands it and a browser decides these headers for itself.
+        """
+        # /api/events rather than /api/detect: this asserts the envelope guard,
+        # and starting a real operation would renumber the events the SSE test
+        # asserts on.
+        status, _headers, body = self._request_raw(
+            "/api/events",
+            cookie=self.cookie,
+            last_event_id=0,
+            omit_origin=True,
+            omit_content_type=True,
+        )
+        self.assertEqual(status, 200, body.decode("utf-8", "replace"))
+
+    def test_a_wrong_origin_is_still_refused_when_present(self) -> None:
+        status, _headers, _body = self._request_raw(
+            "/api/events",
+            cookie=self.cookie,
+            last_event_id=0,
+            origin="http://evil.example",
+        )
+        self.assertEqual(status, 403)
 
     def test_sse_frames_are_well_formed_sequence_numbered_and_replayable(self) -> None:
         status, _, body = self._request_raw(
