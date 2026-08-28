@@ -86,13 +86,15 @@ Local-model guidance, including timeouts:
 
 ## Host surfaces
 
+<!-- yazan: codex · gpt-5.6-sol -->
+
 Not every host offers the same hooks, and the memory reaches each one through
 whatever it does offer.
 
 | Surface | What it needs from the host | Hosts known to provide it |
 | --- | --- | --- |
 | Per-message injection (3 notes per turn) | a prompt-submit hook | Claude Code |
-| Session capture | a session-end / pre-compact hook | Claude Code |
+| Session capture | a readable local transcript archive; lifecycle hooks only reduce latency | Claude Code and Codex through the [watcher](watcher.md), plus contract-compliant generic folders; Antigravity CLI capture is unimplemented because no local transcript layout is established |
 | Static root map in context | nothing — the agent reads its own context file | any agent with `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md` ([context bridge](context-bridge.md)) |
 | On-demand search | an MCP client | any MCP-speaking client ([`mcp.md`](mcp.md)) |
 | Manual paste | a clipboard | any |
