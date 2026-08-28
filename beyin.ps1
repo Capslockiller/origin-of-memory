@@ -5,8 +5,9 @@
 Starts the Origin of Memory operations panel on a loopback-only HTTP server.
 
 .DESCRIPTION
-Serves one self-contained page, reports health and today's activity, and runs
-four explicit maintenance operations. The panel has no destructive route.
+Serves one self-contained page, reports health, today's activity, and local
+model evidence, and runs explicit confirmed operations. The panel has no
+destructive route.
 #>
 [CmdletBinding()]
 param(
@@ -28,6 +29,7 @@ $script:TokenUsed = $false
 $script:QuitRequested = $false
 $script:ShutdownAt = $null
 $script:IdleSeconds = $GraceSeconds
+$script:AllowedBackends = @('claude', 'antigravity', 'ollama', 'openai-compat')
 
 function New-RandomToken {
   $bytes = New-Object byte[] 32
@@ -99,6 +101,21 @@ function New-PythonCommand([string[]]$Arguments) {
   return "`$env:PYTHONUTF8 = '1'; " + ($parts -join ' ') + '; exit $LASTEXITCODE'
 }
 
+function New-PythonStdinCommand([string]$Code, [string[]]$Arguments) {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $encodedCode = [Convert]::ToBase64String($script:Utf8.GetBytes($Code))
+  $parts = New-Object Collections.Generic.List[string]
+  $parts.Add('& ' + (ConvertTo-PowerShellLiteral $script:Python.Exe))
+  foreach ($item in @($script:Python.Prefix) + @('-u', '-') + @($Arguments)) {
+    $parts.Add((ConvertTo-PowerShellLiteral ([string]$item)))
+  }
+  return (
+    "`$env:PYTHONUTF8 = '1'; " +
+    "`$code = (New-Object Text.UTF8Encoding(`$false)).GetString([Convert]::FromBase64String('$encodedCode')); " +
+    "`$code | " + ($parts -join ' ') + '; exit $LASTEXITCODE'
+  )
+}
+
 function Add-PanelEvent([string]$Type, [Collections.IDictionary]$Payload) {
   $sequence = $script:NextSequence
   $script:NextSequence++
@@ -138,10 +155,9 @@ function Get-OperationCommand([string]$Kind) {
   return New-PythonCommand $arguments
 }
 
-function Start-PanelOperation([string]$Kind) {
+function Start-PanelCommand([string]$Kind, [string]$Command, [Collections.IDictionary]$Metadata = @{}) {
   if ($script:ActiveOperation -and -not $script:ActiveOperation.Process.HasExited) { return $false }
-  $command = Get-OperationCommand $Kind
-  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Command))
   $info = New-Object Diagnostics.ProcessStartInfo
   $info.FileName = Join-Path $PSHOME 'powershell.exe'
   $info.Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded"
@@ -164,9 +180,17 @@ function Start-PanelOperation([string]$Kind) {
     Process = $process
     OutSource = $outSource
     ErrSource = $errSource
+    CancelRequested = $false
+    Metadata = $Metadata
   }
-  Add-PanelEvent 'operation-started' ([ordered]@{ operation = $Kind; process_id = $process.Id })
+  $started = [ordered]@{ operation = $Kind; process_id = $process.Id }
+  foreach ($key in @($Metadata.Keys)) { $started[$key] = $Metadata[$key] }
+  Add-PanelEvent 'operation-started' $started
   return $true
+}
+
+function Start-PanelOperation([string]$Kind) {
+  return Start-PanelCommand $Kind (Get-OperationCommand $Kind)
 }
 
 function Read-OperationEvent([string]$Source, [bool]$IsError) {
@@ -194,7 +218,13 @@ function Update-PanelOperation {
   Read-OperationEvent $operation.OutSource $false
   Read-OperationEvent $operation.ErrSource $true
   $exitCode = $operation.Process.ExitCode
-  if ($exitCode -eq 0) {
+  if ($operation.CancelRequested) {
+    Add-PanelEvent 'operation-cancelled' ([ordered]@{
+      operation = $operation.Kind
+      exit_code = $exitCode
+      message = 'The model pull was cancelled. Ollama can resume its partial download.'
+    })
+  } elseif ($exitCode -eq 0) {
     Add-PanelEvent 'operation-completed' ([ordered]@{ operation = $operation.Kind; exit_code = $exitCode })
   } else {
     Add-PanelEvent 'operation-failed' ([ordered]@{
@@ -228,6 +258,263 @@ function Invoke-HealthSummary {
   }
   if ($exitCode -ne 0 -or $lines.Count -eq 0) { throw 'The health command produced no usable JSON.' }
   return (($lines -join [Environment]::NewLine) | ConvertFrom-Json)
+}
+
+function Invoke-PanelPythonJson([string[]]$Arguments, [string]$FailureMessage, [string]$StandardInput = $null) {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $allArguments = @($script:Python.Prefix) + @($Arguments)
+  $oldPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $lines = if ($null -ne $StandardInput) {
+      @($StandardInput | & $script:Python.Exe @allArguments 2>&1 | ForEach-Object { $_.ToString() })
+    } else {
+      @(& $script:Python.Exe @allArguments 2>&1 | ForEach-Object { $_.ToString() })
+    }
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $oldPreference
+  }
+  if ($exitCode -ne 0 -or $lines.Count -eq 0) { throw $FailureMessage }
+  try { return (($lines -join [Environment]::NewLine) | ConvertFrom-Json) } catch { throw $FailureMessage }
+}
+
+function Invoke-HardwareProbe {
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'donanim.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'donanim.py was not found.' }
+  return Invoke-PanelPythonJson @($scriptPath, '--json') 'The hardware probe produced no usable JSON.'
+}
+
+function Invoke-ModelRecommendations([object]$Probe) {
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'model_oneri.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'model_oneri.py was not found.' }
+  $probeJson = $Probe | ConvertTo-Json -Depth 100 -Compress
+  $encodedProbe = [Convert]::ToBase64String($script:Utf8.GetBytes($probeJson))
+  $code = @'
+import base64
+import os
+import runpy
+import sys
+
+script = sys.argv[1]
+probe = base64.b64decode(sys.argv[2]).decode("utf-8")
+sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
+sys.argv = [script, "--json", "--probe-json", probe]
+runpy.run_path(script, run_name="__main__")
+'@
+  return @(Invoke-PanelPythonJson @('-', $scriptPath, $encodedProbe) 'The model recommendation command produced no usable JSON.' $code)
+}
+
+function Get-BackendSummary {
+  $code = @'
+import json
+import os
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import claude_runner
+
+backend, warning = claude_runner.resolve_backend()
+compile_name, compile_warning = claude_runner.compile_backend()
+print(json.dumps({
+    "backend": backend,
+    "configured_value": os.environ.get("BEYIN_MODEL_BACKEND", ""),
+    "warning": warning,
+    "compile_backend": compile_name,
+    "compile_warning": compile_warning,
+    "models": {
+        "fast": claude_runner._resolved_slug(backend, "haiku") or None,
+        "smart": claude_runner._resolved_slug(backend, "sonnet") or None,
+    },
+}, ensure_ascii=False))
+'@
+  return Invoke-PanelPythonJson @('-', $script:PanelPaths.Scripts) 'The active backend could not be resolved through claude_runner.' $code
+}
+
+function Get-OllamaBaseUrl {
+  $configured = [Environment]::GetEnvironmentVariable('BEYIN_OLLAMA_URL')
+  $raw = if ($configured) { $configured.Trim() } else { 'http://localhost:11434' }
+  try { $uri = [Uri]$raw } catch { throw 'BEYIN_OLLAMA_URL is not a valid absolute URL.' }
+  if (-not $uri.IsAbsoluteUri -or $uri.Scheme -cne 'http') {
+    throw 'BEYIN_OLLAMA_URL must be an absolute http URL.'
+  }
+  $isLoopback = $uri.Host -ceq 'localhost'
+  $address = $null
+  if ([Net.IPAddress]::TryParse($uri.Host, [ref]$address)) {
+    $isLoopback = [Net.IPAddress]::IsLoopback($address)
+  }
+  if (-not $isLoopback) { throw 'BEYIN_OLLAMA_URL must name a loopback host.' }
+  return $raw.TrimEnd('/')
+}
+
+function Invoke-OllamaRequest([string]$Path) {
+  $baseUrl = Get-OllamaBaseUrl
+  $request = [Net.HttpWebRequest]::Create($baseUrl + $Path)
+  $request.Method = 'GET'
+  $request.Timeout = 1500
+  $request.ReadWriteTimeout = 1500
+  $request.AllowAutoRedirect = $false
+  $request.Proxy = $null
+  $response = $null
+  $reader = $null
+  try {
+    $response = $request.GetResponse()
+    if ([int]$response.StatusCode -ne 200) { throw "Ollama returned HTTP $([int]$response.StatusCode)." }
+    $reader = New-Object IO.StreamReader($response.GetResponseStream(), $script:Utf8)
+    $text = $reader.ReadToEnd()
+    return $text | ConvertFrom-Json
+  } finally {
+    if ($reader) { $reader.Dispose() }
+    if ($response) { $response.Dispose() }
+  }
+}
+
+function Get-OllamaInventory {
+  $commandPresent = [bool](Get-Command ollama -ErrorAction SilentlyContinue)
+  try { $baseUrl = Get-OllamaBaseUrl } catch {
+    return [ordered]@{
+      status = 'invalid-config'
+      message = 'Ollama inventory is unavailable because BEYIN_OLLAMA_URL is not a valid loopback HTTP URL.'
+      endpoint = $null
+      command_present = $commandPresent
+      models = $null
+      detail = $_.Exception.Message
+    }
+  }
+  try {
+    $payload = Invoke-OllamaRequest '/api/tags'
+    $models = @($payload.models | ForEach-Object {
+      [ordered]@{
+        name = $(if ($_.name) { [string]$_.name } else { [string]$_.model })
+        model = [string]$_.model
+        size_bytes = $(if ($null -ne $_.size) { [long]$_.size } else { $null })
+        modified_at = $(if ($_.modified_at) { [string]$_.modified_at } else { $null })
+        digest = $(if ($_.digest) { [string]$_.digest } else { $null })
+      }
+    })
+    return [ordered]@{
+      status = 'running'
+      message = $(if ($commandPresent) { 'Ollama is installed and running.' } else { 'Ollama is running, but its command is not on PATH.' })
+      endpoint = $baseUrl
+      command_present = $commandPresent
+      models = $models
+    }
+  } catch {
+    $message = if ($commandPresent) {
+      'Ollama is installed but is not running at its configured loopback endpoint.'
+    } else {
+      'Ollama is not installed (or is not on PATH), and its loopback API is unreachable.'
+    }
+    return [ordered]@{
+      status = $(if ($commandPresent) { 'not-running' } else { 'not-installed' })
+      message = $message
+      endpoint = $baseUrl
+      command_present = $commandPresent
+      models = $null
+      detail = $_.Exception.Message
+    }
+  }
+}
+
+function Get-LocalModelSummary {
+  $result = [ordered]@{
+    python_available = [bool]$script:Python
+    python_message = $null
+    computer = $null
+    recommendations = $null
+    ollama = Get-OllamaInventory
+    active_backend = $null
+    backend_storage = 'Windows user environment (HKCU\Environment)'
+  }
+  if (-not $script:Python) {
+    $result.python_message = 'Python was not found. Hardware, fit recommendations, backend resolution, and model smoke tests cannot be determined.'
+    return $result
+  }
+  try {
+    $probe = Invoke-HardwareProbe
+    $result.computer = $probe
+  } catch {
+    $result.python_message = $_.Exception.Message
+  }
+  if ($result.computer) {
+    try { $result.recommendations = @(Invoke-ModelRecommendations $result.computer) } catch { $result.python_message = $_.Exception.Message }
+  }
+  try { $result.active_backend = Get-BackendSummary } catch {
+    if (-not $result.python_message) { $result.python_message = $_.Exception.Message }
+  }
+  return $result
+}
+
+function Get-PullCommand([string]$Model, [string]$BaseUrl) {
+  $endpoint = $BaseUrl.TrimEnd('/') + '/api/pull'
+  $body = [Text.Encoding]::UTF8.GetBytes((([ordered]@{ model = $Model; stream = $true }) | ConvertTo-Json -Compress))
+  $bodyBase64 = [Convert]::ToBase64String($body)
+  $command = @"
+`$ErrorActionPreference = 'Stop'
+`$body = [Convert]::FromBase64String('$bodyBase64')
+`$request = [Net.HttpWebRequest]::Create($(ConvertTo-PowerShellLiteral $endpoint))
+`$request.Method = 'POST'
+`$request.ContentType = 'application/json'
+`$request.ContentLength = `$body.Length
+`$request.Timeout = 10000
+`$request.ReadWriteTimeout = 300000
+`$request.AllowAutoRedirect = `$false
+`$request.Proxy = `$null
+`$requestStream = `$request.GetRequestStream()
+try { `$requestStream.Write(`$body, 0, `$body.Length) } finally { `$requestStream.Dispose() }
+`$response = `$request.GetResponse()
+if ([int]`$response.StatusCode -ne 200) { throw "Ollama returned HTTP `$([int]`$response.StatusCode)." }
+`$reader = New-Object IO.StreamReader(`$response.GetResponseStream(), (New-Object Text.UTF8Encoding(`$false)))
+try {
+  while (-not `$reader.EndOfStream) {
+    `$line = `$reader.ReadLine()
+    if (`$line) { [Console]::Out.WriteLine(`$line); [Console]::Out.Flush() }
+  }
+} finally { `$reader.Dispose(); `$response.Dispose() }
+exit 0
+"@
+  return $command
+}
+
+function Get-SmokeTestCommand([string]$Backend, [string]$Tier) {
+  $code = @'
+import json
+from pathlib import Path
+import sys
+import time
+
+scripts = Path(sys.argv[1])
+vault = Path(sys.argv[2])
+state = Path(sys.argv[3])
+backend = sys.argv[4]
+tier = sys.argv[5]
+sys.path.insert(0, str(scripts))
+import claude_runner
+
+slug = claude_runner._resolved_slug(backend, tier) or None
+started = time.monotonic()
+answer, error = claude_runner.run_claude(
+    "Reply with one short sentence confirming this smoke test.",
+    model=tier,
+    tools="",
+    timeout=120,
+    cwd=vault,
+    vault_root=vault,
+    backend=backend,
+    component="panel-smoke",
+    state_dir=state,
+)
+payload = {
+    "backend": backend,
+    "model": slug,
+    "latency_ms": int((time.monotonic() - started) * 1000),
+    "answer": answer,
+    "error": error,
+}
+print(json.dumps(payload, ensure_ascii=False), flush=True)
+raise SystemExit(0 if error is None else 1)
+'@
+  return New-PythonStdinCommand $code @($script:PanelPaths.Scripts, $script:PanelPaths.Vault, $script:PanelPaths.State, $Backend, $Tier)
 }
 
 function Convert-StateTime([object]$Value) {
@@ -420,8 +707,9 @@ function Test-ApiEnvelope([object]$Request, [bool]$RequireCookie) {
 
 function Invoke-HttpRequest([object]$Request) {
   $allowed = @(
-    '/', '/panel.html', '/api/session', '/api/health', '/api/today', '/api/events',
-    '/api/action/doctor', '/api/action/compile', '/api/action/index', '/api/action/watcher', '/api/quit'
+    '/', '/panel.html', '/api/session', '/api/health', '/api/today', '/api/local-models', '/api/events',
+    '/api/action/doctor', '/api/action/compile', '/api/action/index', '/api/action/watcher',
+    '/api/action/pull', '/api/action/pull-cancel', '/api/action/backend', '/api/action/try', '/api/quit'
   )
   if ($allowed -cnotcontains $Request.Target) {
     Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'not_found' })
@@ -497,6 +785,15 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
+  if ($Request.Target -eq '/api/local-models') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    Write-JsonResponse $Request.Stream 200 'OK' (Get-LocalModelSummary)
+    return
+  }
+
   if ($Request.Target -eq '/api/events') {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
@@ -512,6 +809,182 @@ function Invoke-HttpRequest([object]$Request) {
     }
     if ($frames.Length -eq 0) { [void]$frames.Append(": keepalive$($script:Crlf)$($script:Crlf)") }
     Write-HttpResponse $Request.Stream 200 'OK' 'text/event-stream; charset=utf-8' $frames.ToString() ([ordered]@{ 'X-Accel-Buffering' = 'no' })
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/backend') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $backend = if ($body) { ([string]$body.backend).Trim().ToLowerInvariant() } else { '' }
+    if ($script:AllowedBackends -cnotcontains $backend) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{
+        error = 'invalid_backend'
+        allowed = $script:AllowedBackends
+      })
+      return
+    }
+    $confirmation = "Set BEYIN_MODEL_BACKEND=$backend in Windows user environment (HKCU\Environment)"
+    if ([string]$body.confirmation -cne $confirmation) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{
+        error = 'confirmation_required'
+        confirmation = $confirmation
+      })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Python is required to verify the resolved backend after the change.' })
+      return
+    }
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    try { [void](Get-BackendSummary) } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'backend_resolution_unavailable'; message = $_.Exception.Message })
+      return
+    }
+    Add-PanelEvent 'operation-started' ([ordered]@{ operation = 'backend'; value = $backend; storage = 'Windows user environment (HKCU\Environment)' })
+    $settingWritten = $false
+    try {
+      [Environment]::SetEnvironmentVariable('BEYIN_MODEL_BACKEND', $backend, 'User')
+      $settingWritten = $true
+      $env:BEYIN_MODEL_BACKEND = $backend
+      $resolved = Get-BackendSummary
+      Add-PanelEvent 'operation-completed' ([ordered]@{
+        operation = 'backend'
+        exit_code = 0
+        value = $backend
+        storage = 'Windows user environment (HKCU\Environment)'
+        resolved_backend = $resolved.backend
+      })
+      Write-JsonResponse $Request.Stream 200 'OK' ([ordered]@{
+        changed = $true
+        setting = 'BEYIN_MODEL_BACKEND'
+        value = $backend
+        storage = 'Windows user environment (HKCU\Environment)'
+        active_backend = $resolved
+      })
+    } catch {
+      $failure = if ($settingWritten) { "BEYIN_MODEL_BACKEND=$backend was written to the Windows user environment, but verification failed: $($_.Exception.Message)" } else { $_.Exception.Message }
+      Add-PanelEvent 'operation-failed' ([ordered]@{ operation = 'backend'; exit_code = 1; message = $failure; changed = $settingWritten; value = $backend; storage = 'Windows user environment (HKCU\Environment)' })
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'backend_switch_failed'; message = $failure; changed = $settingWritten; value = $backend; storage = 'Windows user environment (HKCU\Environment)' })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/pull') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Model pull refused because free model-store disk cannot be determined without Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $model = if ($body) { ([string]$body.model).Trim() } else { '' }
+    try {
+      $probe = Invoke-HardwareProbe
+      $recommendations = @(Invoke-ModelRecommendations $probe)
+      $candidate = @($recommendations | Where-Object { [string]$_.tag -ceq $model }) | Select-Object -First 1
+      if (-not $candidate) {
+        Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'unknown_model'; message = 'Only a model returned by model_oneri.py may be pulled.' })
+        return
+      }
+      if ($null -eq $probe.free_disk_gb) {
+        Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'disk_unknown'; message = "Model pull refused: free disk for $($probe.model_store) could not be determined." })
+        return
+      }
+      $size = [double]$candidate.size_gb
+      $required = [Math]::Round($size * 1.5, 2)
+      $free = [double]$probe.free_disk_gb
+      if ($free -lt $required) {
+        Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{
+          error = 'insufficient_disk'
+          message = ('Model pull refused: {0:N2} GB free, {1:N2} GB required for {2}.' -f $free, $required, $model)
+          free_disk_gb = $free
+          required_disk_gb = $required
+          model = $model
+        })
+        return
+      }
+      $inventory = Get-OllamaInventory
+      if ($inventory.status -cne 'running') {
+        Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'ollama_unavailable'; message = $inventory.message })
+        return
+      }
+      $command = Get-PullCommand $model $inventory.endpoint
+      [void](Start-PanelCommand 'pull' $command ([ordered]@{ model = $model; size_gb = $size; required_disk_gb = $required; free_disk_gb = $free }))
+      Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{
+        started = $true
+        operation = 'pull'
+        model = $model
+        size_gb = $size
+        free_disk_gb = $free
+        required_disk_gb = $required
+      })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'pull_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/pull-cancel') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if (-not $script:ActiveOperation -or $script:ActiveOperation.Kind -cne 'pull') {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'no_pull_in_progress' })
+      return
+    }
+    try {
+      $script:ActiveOperation.CancelRequested = $true
+      $script:ActiveOperation.Process.Kill()
+      Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ cancelling = $true; operation = 'pull'; resumable = $true })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'cancel_failed'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/try') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'The runner smoke test requires Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $backend = if ($body) { ([string]$body.backend).Trim().ToLowerInvariant() } else { '' }
+    $tier = if ($body) { ([string]$body.tier).Trim().ToLowerInvariant() } else { '' }
+    if ($script:AllowedBackends -cnotcontains $backend) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'invalid_backend'; allowed = $script:AllowedBackends })
+      return
+    }
+    if ($tier -cnotin @('haiku', 'sonnet')) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'invalid_model_tier'; allowed = @('haiku', 'sonnet') })
+      return
+    }
+    try {
+      [void](Start-PanelCommand 'try' (Get-SmokeTestCommand $backend $tier) ([ordered]@{ backend = $backend; tier = $tier }))
+      Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ started = $true; operation = 'try'; backend = $backend; tier = $tier })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'try_unavailable'; message = $_.Exception.Message })
+    }
     return
   }
 
