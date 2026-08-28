@@ -783,7 +783,14 @@ function Install-OllamaRuntime {
     Write-Warning 'winget is absent. The official installer fallback uses commonly reported InnoSetup silent flags that Ollama does not officially document.'
     Write-Warning 'Windows SmartScreen may prompt. Review it; this wizard never bypasses SmartScreen.'
     Write-Host ("[DOWNLOAD] https://ollama.com/download/OllamaSetup.exe -> {0}" -f $installer)
-    Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $installer -UseBasicParsing
+    $previousProgressPreference = $ProgressPreference
+    try {
+      # Windows PowerShell 5.1 renders progress slowly during large downloads.
+      $ProgressPreference = 'SilentlyContinue'
+      Invoke-WebRequest -Uri 'https://ollama.com/download/OllamaSetup.exe' -OutFile $installer -UseBasicParsing
+    } finally {
+      $ProgressPreference = $previousProgressPreference
+    }
     Write-Host ("[RUN] {0} /VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -f $installer)
     $process = Start-Process `
       -FilePath $installer `

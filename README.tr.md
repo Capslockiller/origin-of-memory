@@ -56,6 +56,18 @@ ayarlar, etkileşimsiz planlar, alt seviye `install.ps1`, yükseltme ve kaldırm
 | Yerelde çalışsın isteyen biri | Aynı hat, ama oturum özetlerini kendi modelin yazar — Ollama, LM Studio, llama.cpp, vLLM veya Antigravity. Kancalar ve gece derlemesi için `claude` yine gerekli | Yukarıdakiler + yerel bir sunucu ya da `agy` CLI | `local` veya `hybrid` |
 | Yalnızca eski konuşmalarında arama yapmak isteyen biri | claude.ai / Codex / Gemini dışa aktarımlarını içeri alır, MCP istemcisinden veya pano köprüsünden sorgularsın. Kanca yok, otomatik yakalama yok, derleme yok | Windows, Python 3.12+, MCP konuşan bir istemci ve içe aktarımları özetleyecek yerel bir backend | `lite` |
 
+## Diğer ajanlar
+
+Her mesaja ilgili üç notu iten mesaj başına enjeksiyon, Claude Code'un sunduğu
+bir prompt-submit kancası gerektirir. Diğer ajanlar yine de
+[bağlam köprüsü](docs/context-bridge.md) aracılığıyla **statik** kök haritayı
+okuyabilir; köprü bunu vault kökündeki mevcut `AGENTS.md`, `GEMINI.md` veya
+`CLAUDE.md` dosyalarına yazar. Ayrıca [MCP sunucusuyla](docs/mcp.md) talep üzerine
+ya da pano köprüsüyle elle arama yapılabilir. Statik bağlam retrieval değildir;
+kancasız otomatik yakalama planlanıyor ama henüz mevcut değil. Kesin sınırlar
+için [host yüzeyleri karşılaştırmasına](docs/compatibility.md#host-surfaces)
+bakın.
+
 ## Nasıl çalışıyor
 
 ```
@@ -207,6 +219,7 @@ Tam soyağacı ve gerekçesi: [docs/attribution.md](docs/attribution.md)
 | [docs/retrieval.md](docs/retrieval.md) | Sıralama, oturum çıpaları, bilinen sınırlar (İngilizce) |
 | [docs/evaluation.md](docs/evaluation.md) | Gold set, ölçüt, düzeltme (İngilizce) |
 | [docs/mcp.md](docs/mcp.md) · [docs/local-models.md](docs/local-models.md) · [docs/compatibility.md](docs/compatibility.md) | MCP kurulumu, yerel model rehberi, ne test edildi (İngilizce) |
+| [docs/context-bridge.md](docs/context-bridge.md) · [docs/tool-free-compile.md](docs/tool-free-compile.md) | Diğer ajanlar için statik bağlam, araçsız derleme modu (İngilizce) |
 
 **Ajanlar için:** bir kodlama ajanını [INSTALL-AGENT.md](INSTALL-AGENT.md)
 dosyasına yönlendirdiğinde kurulumun tamamını kendisi koşabilir. Bu deponun

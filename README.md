@@ -56,6 +56,18 @@ non-interactive plans, the lower-level `install.ps1`, upgrading and uninstalling
 | Someone who wants it local | Same pipeline, but session summaries are written by your own model — Ollama, LM Studio, llama.cpp, vLLM or Antigravity. `claude` is still required for the hooks and the nightly compile | The above, plus a local server or the `agy` CLI | `local` or `hybrid` |
 | Someone who just wants to search past conversations | Import claude.ai / Codex / Gemini exports and query them from any MCP client or the clipboard bridge. No hooks, no automatic capture, no compile | Windows, Python 3.12+, an MCP-capable client, and a local backend to summarise the imports | `lite` |
 
+## Other agents
+
+Per-message injection — three relevant notes pushed into every turn — requires a
+prompt-submit hook, which Claude Code provides. Other agents can still read the
+**static** root map through the [context bridge](docs/context-bridge.md), which
+writes it into existing `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md` files at the
+vault root, and can search on demand through the [MCP server](docs/mcp.md) or
+manually through the clipboard bridge. Static context is not retrieval, and
+automatic hookless capture is planned but not yet available. See the
+[host-surfaces comparison](docs/compatibility.md#host-surfaces) for the exact
+boundaries.
+
 ## How it works
 
 ```
@@ -204,6 +216,7 @@ Full lineage and reasoning: [docs/attribution.md](docs/attribution.md).
 | [docs/retrieval.md](docs/retrieval.md) | Ranking, session anchors, known limits |
 | [docs/evaluation.md](docs/evaluation.md) | The gold set, the metric, the correction |
 | [docs/mcp.md](docs/mcp.md) · [docs/local-models.md](docs/local-models.md) · [docs/compatibility.md](docs/compatibility.md) | MCP setup, local model guidance, what was tested |
+| [docs/context-bridge.md](docs/context-bridge.md) · [docs/tool-free-compile.md](docs/tool-free-compile.md) | Static context for other agents, tool-free compile mode |
 
 **For agents:** point a coding agent at [INSTALL-AGENT.md](INSTALL-AGENT.md) and
 it can run the whole install for you. Agents working *inside* this repository
