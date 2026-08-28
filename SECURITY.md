@@ -105,7 +105,8 @@ Defences in place:
   executed as an instruction, system message or tool call.
 - Both scripts carry a `DIRECTIVE_SHAPED` pattern that recognises
   instruction-shaped lines (`INSTRUCTION:`, `SYSTEM:`, `TALİMAT:`,
-  `IGNORE ALL PREVIOUS:`, …).
+  `IGNORE ALL PREVIOUS:`, …). In the compiler this pattern is a **gate**, not a
+  note — see *Quarantine* below.
 - Retrieved notes injected by `memory-retrieve.ps1` are prefixed with an explicit
   statement that their contents are data and that no sentence inside them is to be
   applied as an instruction.
@@ -113,12 +114,75 @@ Defences in place:
   still cannot write outside `knowledge/concepts/**`, `knowledge/index-full.md`
   and `knowledge/log.md`.
 
-Residual risk: **prompt-injected content can still become a knowledge note.** A
-poisoned page that reaches a transcript may end up summarised into `daily/`,
-compiled into a concept, and then retrieved into future sessions as apparently
-trusted memory. There is no content exclusion list yet. If you fetch untrusted
-pages in a session, consider editing that day's `daily/` file before the evening
-compile.
+#### Quarantine — the compiler's three directive-shaped gates
+
+Until 2026-08, a `DIRECTIVE_SHAPED` hit only wrote `warn:directive-shaped-input`
+to health and the compile proceeded, so injected text could become a permanent
+concept note. It now stops the content instead. `compile.py` checks three places
+and **quarantines rather than deletes** — removing content is the operator's
+decision, not the pipeline's:
+
+1. **Daily body.** That daily log is not compiled this run. It is copied
+   verbatim to `<vault>/.stage/karantina/<YYYY-MM-DD>-<sha8>.md` (directory mode
+   `0700`, files `0600`) beside a sidecar `.json` recording the matched pattern,
+   up to 300 characters of the offending excerpt, the timestamp and the source
+   filename. Health records the **error** `quarantine:directive-shaped`, and the
+   file's SHA-256 is written to the `quarantined` map in `compile-state.json` so
+   the next run does not re-quarantine it. Because the key is a content hash,
+   **editing the file makes it eligible again** — no manual un-flagging step.
+2. **Root map or duplicate-check registry.** A hit here means the vault itself is
+   already poisoned, so nothing is salvageable in isolation: the run raises
+   `PolicyError("directive-shaped-registry")` and aborts. Nothing is promoted,
+   the model is never called, and `last_status` becomes `fail:policy`.
+3. **Model output, before promotion.** Every staged file that would be promoted
+   is scanned. A hit means that file is not promoted and its content goes to
+   quarantine with the same error; its clean siblings in the same run still
+   promote. This is what stops a poisoned daily that slipped past gate 1 from
+   being laundered into a concept note by the model.
+
+**Manual release path** — deliberately not automated:
+
+1. `python scripts/durum.py` shows the quarantine count; `beyin-doktor` reports
+   it as 🔴 with the newest entry.
+2. Read `<vault>/.stage/karantina/<entry>.json` to see what matched and why.
+3. Read the `.md` beside it. Decide whether the content is worth keeping.
+4. To release it, **edit out the directive-shaped lines** and move the file back
+   into `daily/`. The next compile sees a new hash and processes it normally.
+5. To discard it, delete both files. Nothing else references them.
+
+Never script step 4. An automatic release is the same thing as no gate at all.
+
+`.stage/` is gitignored and skipped by the uninstaller, so quarantined evidence
+is neither committed nor swept away by a reinstall. It is also never pruned
+automatically — the directory grows until you empty it.
+
+**Residual risk — what quarantine still does not catch:**
+
+- **Malicious but not directive-shaped content.** The pattern matches a line that
+  *opens like an instruction* (`SYSTEM:`, `TALİMAT:`, `IGNORE ALL PREVIOUS:`, …).
+  Prose that persuades rather than commands — a plausible false "fact" about your
+  project, a poisoned definition, a fabricated decision written in ordinary
+  sentences — matches nothing and compiles normally. This is the larger half of
+  the injection problem and it remains open.
+- **Prose-shaped injection is the expected evasion.** Anyone who knows this gate
+  exists can trivially rewrite around it. Treat it as removing the laziest class
+  of attack, not as a boundary.
+- **Retrieval is not gated.** The pattern guards the compile path. Notes already
+  in `knowledge/` from before this gate existed are not rescanned, and
+  `memory-retrieve.ps1` injects what the index holds.
+- **False positives cost you a compile.** A legitimate daily log that quotes a
+  system prompt, or pastes a transcript containing `SYSTEM:`, is quarantined too.
+  That is the intended trade — the recovery is an edit, not data loss.
+- **The gate is line-anchored.** A directive placed mid-line, or split across
+  lines, is not matched.
+- **Partial promotion can leave a dangling index row.** When a concept note is
+  quarantined but a clean `index-full.md` in the same run is promoted, the index
+  can name an article that was never written. Harmless, and the next compile
+  corrects it, but it will look odd if you read the index first.
+
+There is still no content exclusion list. If you fetch untrusted pages in a
+session, editing that day's `daily/` file before the evening compile remains the
+strongest thing you can do.
 
 ### 4. `claude -p` subprocess hardening
 
@@ -170,8 +234,17 @@ it.
 - Multi-user machines. The design assumes a single trusted user; hooks are
   registered in that user's `settings.json` and state files carry no
   authentication.
-- Two machines sharing one synced vault. The compile trigger claim is a local
-  file, so concurrent compiles from different machines are not prevented.
+- Two machines sharing one synced vault are **partially** handled as of 2026-08.
+  `compile.lock` now records `{machine, pid, started_at, hostname}`, and a run
+  that finds a live lock owned by another machine refuses with
+  `skip:compile-locked-by:<machine>` instead of compiling alongside it. The
+  machine id is the hostname plus a random per-install suffix stored in
+  `.state/machine-id`; it carries no user identity beyond the hostname. This is
+  cooperative, not a distributed lock: it depends on the sync tool having
+  propagated the lock file, so a fast enough race between two machines can still
+  slip through. Stale locks older than `BEYIN_COMPILE_LOCK_TTL_MIN` (default 120
+  minutes) are broken with a health warning naming the previous owner, which
+  means a machine that dies mid-compile costs at most that delay.
 
 ---
 

@@ -117,3 +117,47 @@ instead of guessing or making an unconsented HTTP request.
 Local model live flushes use a 24,000-character transcript bound. Set
 `BEYIN_FLUSH_CHUNK_CHARS` to a positive integer to override it. Invalid values
 are ignored and recorded as a health warning.
+
+## Timeouts
+
+Local inference is far slower than a hosted API. An 8B model summarising a
+15,000-character transcript on CPU can take longer than the 240-second bound the
+hosted path uses, and the call is then killed and recorded as a timeout — the
+session's content is not summarised, and the daily log simply never gets that
+block.
+
+So the **default** depends on the resolved backend:
+
+| Call | `claude` / `antigravity` | `ollama` / `openai-compat` | Variable |
+| --- | ---: | ---: | --- |
+| flush | 240 s | **900 s** | `BEYIN_FLUSH_TIMEOUT` |
+| ingest | 240 s | **900 s** | `BEYIN_INGEST_TIMEOUT` |
+| compile | 900 s | 900 s | `BEYIN_COMPILE_TIMEOUT` |
+
+Compile is not raised because it is already at 900 s and always runs on `claude`
+— the local backends refuse the tool-mode call. The Codex ingest path takes
+`BEYIN_INGEST_TIMEOUT` but never the local bump, since it is its own CLI rather
+than a `BEYIN_MODEL_BACKEND` target.
+
+An explicit variable always wins, on every backend:
+
+```text
+BEYIN_FLUSH_TIMEOUT=1800
+```
+
+The value is seconds, and must be a positive integer. Anything else — a
+non-number, `0`, a negative, or an empty string — is **ignored in favour of the
+default** and recorded as the health warning
+`warn:timeout-invalid:<VARIABLE>:<value>`, because a typo in a variable must
+never break the session the hook is attached to. Check for it with
+`python scripts/durum.py` if a timeout you set does not seem to apply.
+
+The effective value is recorded where each component keeps its state —
+`last-flush.json` and `compile-state.json` carry a `timeout` field, and ingest's
+`last_run` carries one — so a `claude-timeout`, `agy-timeout`, `ollama-timeout`
+or `codex-timeout` can be read against the bound that produced it instead of
+guessing.
+
+If flushes are timing out on a local model, raising the timeout is the first
+thing to try; lowering `BEYIN_FLUSH_CHUNK_CHARS` so the model has less to read is
+the second.

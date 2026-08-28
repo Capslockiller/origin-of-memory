@@ -13,9 +13,9 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
-import time
 from typing import Any, Iterable
 
+from beyin_ortak import _atomic_write_json, write_health
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 VAULT_ROOT = SCRIPT_DIR.parent.parent
@@ -49,49 +49,6 @@ class Concept:
 def turkish_fold(value: str) -> str:
     """Fold text without locale-dependent lower/upper operations."""
     return value.translate(_TURKISH_I).casefold()
-
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def write_health(state_dir: Path, error: str, warning: bool = False) -> None:
-    """Record root-map status while preserving the shared warning history."""
-    try:
-        health_path = state_dir / "health.json"
-        payload: dict[str, Any] = {}
-        if health_path.exists():
-            try:
-                loaded = json.loads(health_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    payload.update(loaded)
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
-        payload.update(
-            {"ts": int(time.time()), "component": "rootmap", "error": error}
-        )
-        if warning:
-            warnings = payload.get("warnings", [])
-            if not isinstance(warnings, list):
-                warnings = []
-            if error not in warnings:
-                warnings.append(error)
-            payload["warnings"] = warnings[-20:]
-        _atomic_write_json(health_path, payload)
-    except OSError:
-        pass
 
 
 def _unquote(value: str) -> str:
@@ -471,9 +428,14 @@ def regenerate(
         _publish(staged)
         parity = f"{len(rows)}/{len(concepts)}"
         if len(rows) != len(concepts):
-            write_health(state_dir, f"index-full-parity:{parity}", warning=True)
+            write_health(
+                state_dir,
+                f"index-full-parity:{parity}",
+                warning=True,
+                component="rootmap",
+            )
         else:
-            write_health(state_dir, "")
+            write_health(state_dir, "", component="rootmap")
         return {
             "index_chars": len(root_text),
             "hub_chars": {hub_id: len(text) for hub_id, text in hub_texts.items()},
@@ -487,7 +449,7 @@ def regenerate(
             "migrated": migrating,
         }
     except Exception as exc:
-        write_health(state_dir, str(exc))
+        write_health(state_dir, str(exc), component="rootmap")
         raise
     finally:
         if temp_root is not None:

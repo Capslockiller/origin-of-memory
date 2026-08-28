@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `beyin doktor` gained an index-consistency check: what the FTS index should
   contain, recomputed from `knowledge/concepts/` and diffed against `notes.db`.
 
+<!-- yazan: claude · opus-5 -->
+- `python scripts/durum.py [--json]` — a one-table health summary (component,
+  last status, last run, last error/skip, quarantine count) built from
+  `health.json`, `ingest-health.json`, `compile-state.json` and
+  `last-flush.json`, always exiting 0, with the JSON shape documented as a stable
+  contract for the future TUI health tab.
+- CI now runs the suite across Python 3.12 and 3.13 on `windows-latest`, and a
+  new [docs/compatibility.md](docs/compatibility.md) states the external CLI flag
+  surface and HTTP endpoints this was built against — and that anything beyond
+  them is untested.
+- `beyin doktor` gained a quarantine check reporting the count and newest entry,
+  red when non-empty, with the manual release steps.
+
 <!-- yazan: codex · gpt-5.6-sol -->
 - Two-screen, one-Enter recommended setup with deterministic JSON planning,
   `-Recommended` agent automation, visible custom defaults, and seven-step
@@ -108,6 +121,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     user-global allow-list or `--dangerously-skip-permissions`, which this
     repository does not ship. In `antigravity` mode compile keeps using
     `claude` when that binary is on `PATH` and fails loud otherwise.
+
+### Changed
+
+<!-- yazan: claude · opus-5 -->
+- The duplicate-check registry is now bounded instead of one row per concept for
+  the whole corpus: hub-scoped to the daily log's topics plus the
+  `BEYIN_REGISTRY_RECENT` (default 50) most recently updated concepts, hard-capped
+  at `BEYIN_REGISTRY_MAX_ROWS` (default 400), with a one-line truncation notice in
+  the prompt and a `warn:registry-truncated:<shown>/<total>` health warning —
+  67,800 → 15,806 characters on a synthetic 1000-concept corpus.
+- `write_health`, `write_health_skip`, `_atomic_write_json`, `_lock_exclusive` and
+  `_sha256` now have one implementation in the new `scripts/beyin_ortak.py`, which
+  `flush.py`, `compile.py`, `rootmap.py`, `ingest_common.py` and `retrieve.py`
+  import; the module-level names they bind keep `flush._sha256`-style access
+  working and are asserted to be the same object.
+- Model-call timeouts are configurable and backend-aware: `BEYIN_FLUSH_TIMEOUT`,
+  `BEYIN_INGEST_TIMEOUT` (both default 240 s, raised to 900 s when the resolved
+  backend is `ollama` or `openai-compat`, because local inference is slow) and
+  `BEYIN_COMPILE_TIMEOUT` (900 s). An unusable value is ignored with a
+  `warn:timeout-invalid:<name>:<value>` health warning, the effective value is
+  recorded in each component's state so a timeout is diagnosable, and the
+  `claude`/`antigravity` defaults are unchanged. See
+  [docs/local-models.md](docs/local-models.md).
+
+### Security
+
+<!-- yazan: claude · opus-5 -->
+- Directive-shaped content is now **quarantined instead of noted**: a poisoned
+  daily body is copied to `<vault>/.stage/karantina/` with a forensic sidecar and
+  is not compiled, a poisoned root map or registry aborts the run with
+  `PolicyError("directive-shaped-registry")`, and a poisoned model output is held
+  back while its clean siblings still promote — each raising the health *error*
+  `quarantine:directive-shaped`, with a documented, deliberately manual release
+  path (see [SECURITY.md](SECURITY.md)).
+- The compile lock now records `{machine, pid, started_at, hostname}` so a vault
+  synced across machines no longer compiles twice: a live lock owned by another
+  machine refuses with `skip:compile-locked-by:<machine>`, and a lock older than
+  `BEYIN_COMPILE_LOCK_TTL_MIN` (default 120) is broken with a health warning
+  naming the previous owner.
 
 ### Fixed
 

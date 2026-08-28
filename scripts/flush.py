@@ -14,41 +14,18 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Sequence
+from typing import Callable, Sequence
 
+from beyin_ortak import (
+    _atomic_write_json,
+    _lock_exclusive,
+    _sha256,
+    write_health,
+    write_health_skip,
+)
 import claude_runner
 import retrieve
 import secret_guard
-
-
-try:
-    import fcntl
-except ImportError:  # Windows has no fcntl; msvcrt region locks stand in.
-    fcntl = None  # type: ignore[assignment]
-    import msvcrt
-
-
-def _lock_exclusive(lock_file: Any, blocking: bool) -> None:
-    """Exclusive lock on an open file, portable across POSIX and Windows."""
-    if fcntl is not None:
-        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
-        fcntl.flock(lock_file.fileno(), flags)
-        return
-    lock_file.seek(0)
-    if blocking:
-        deadline = time.time() + 300
-        while True:
-            try:
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                return
-            except OSError:
-                if time.time() >= deadline:
-                    raise
-                time.sleep(1)
-    try:
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError as exc:
-        raise BlockingIOError(str(exc)) from exc
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -82,95 +59,6 @@ DIRECTIVE_SHAPED = re.compile(
 HOOK_INPUT_NAME = re.compile(r"hookin-[^/]+\.json\Z")
 INVALID_UNICODE_ESCAPE = re.compile(r"\\u(?![0-9a-fA-F]{4})")
 INVALID_JSON_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')
-
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def write_health(state_dir: Path, error: str, warning: bool = False) -> None:
-    """Record the latest flush problem without letting reporting crash."""
-    try:
-        payload: dict[str, Any] = {}
-        health_path = state_dir / "health.json"
-        if health_path.exists():
-            try:
-                loaded = json.loads(health_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    payload.update(loaded)
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
-        payload.update(
-            {
-                "ts": int(time.time()),
-                "component": "flush",
-                "error": error,
-            }
-        )
-        if warning:
-            warnings = payload.get("warnings", [])
-            if not isinstance(warnings, list):
-                warnings = []
-            if error not in warnings:
-                warnings.append(error)
-            payload["warnings"] = warnings[-20:]
-        _atomic_write_json(health_path, payload)
-    except OSError:
-        pass
-
-
-def write_health_skip(state_dir: Path, reason: str, component: str = "flush") -> None:
-    """Record a skipped-on-purpose decision without raising the error flag.
-
-    A skip is not a failure, so it must not land in ``error`` where the doctor
-    reads breakage — but it must never be silent either, or "why did nothing
-    compile last night?" has no answer anywhere.
-    """
-    try:
-        payload: dict[str, Any] = {}
-        health_path = state_dir / "health.json"
-        if health_path.exists():
-            try:
-                loaded = json.loads(health_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    payload.update(loaded)
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
-        now = int(time.time())
-        skips = payload.get("skips", [])
-        if not isinstance(skips, list):
-            skips = []
-        entries = [item for item in skips if isinstance(item, dict)]
-        existing = next(
-            (item for item in entries if item.get("reason") == reason), None
-        )
-        if existing is None:
-            entries.append({"reason": reason, "ts": now, "count": 1})
-        else:
-            existing["ts"] = now
-            count = existing.get("count", 0)
-            existing["count"] = (count if isinstance(count, int) else 0) + 1
-        payload["skips"] = entries[-20:]
-        payload["last_skip"] = {
-            "ts": now,
-            "component": component,
-            "reason": reason,
-        }
-        _atomic_write_json(health_path, payload)
-    except OSError:
-        pass
 
 
 def resolve_compile_min_interval_hours(
@@ -412,6 +300,11 @@ def _write_flush_state(
         "session_id": session_id,
         "ts": int(now_epoch),
         "status": status,
+        # The effective timeout is stamped on every state write so that a
+        # `claude-timeout` failure can be read against the bound that produced
+        # it.  Resolution is a pure environment read, so recomputing is cheaper
+        # than threading the value through every caller.
+        "timeout": claude_runner.resolve_timeout("flush")[0],
     }
     if detail:
         payload["detail"] = detail
@@ -419,7 +312,9 @@ def _write_flush_state(
     try:
         _atomic_write_json(state_dir / "last-flush.json", payload)
     except OSError:
-        write_health(state_dir, "last-flush-compat-write-failed")
+        write_health(
+            state_dir, "last-flush-compat-write-failed", component="flush"
+        )
 
 
 def _record_flush_failure(
@@ -444,7 +339,7 @@ def _record_flush_failure(
         )
     except OSError:
         pass
-    write_health(state_dir, error)
+    write_health(state_dir, error, component="flush")
 
 
 def _session_lock_path(state_dir: Path, session_id: str) -> Path:
@@ -457,12 +352,18 @@ def _session_state_path(state_dir: Path, session_id: str) -> Path:
     return state_dir / f"flush-{key}.json"
 
 
-def _run_claude(prompt: str, vault_root: Path) -> tuple[str | None, str | None]:
+def _run_claude(
+    prompt: str,
+    vault_root: Path,
+    timeout: int | None = None,
+) -> tuple[str | None, str | None]:
+    if timeout is None:
+        timeout, _warning = claude_runner.resolve_timeout("flush")
     return claude_runner.run_claude(
         prompt,
         model="haiku",
         tools="",
-        timeout=240,
+        timeout=timeout,
         vault_root=vault_root,
         temporary_prefix="beyin-flush-",
     )
@@ -513,14 +414,6 @@ def _append_daily(
     )
     with daily_path.open("a", encoding="utf-8") as daily_file:
         daily_file.write(entry)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _effective_hour(now: dt.datetime) -> int:
@@ -592,6 +485,7 @@ def maybe_trigger_compile(
         write_health_skip(
             state_dir,
             f"skip:compile-trigger:min-interval:{elapsed:.1f}h<{minimum_hours:g}h",
+            component="flush",
         )
         return False
 
@@ -600,7 +494,11 @@ def maybe_trigger_compile(
     try:
         descriptor = os.open(trigger, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
-        write_health_skip(state_dir, "skip:compile-trigger:day-already-claimed")
+        write_health_skip(
+            state_dir,
+            "skip:compile-trigger:day-already-claimed",
+            component="flush",
+        )
         return False
     os.close(descriptor)
 
@@ -708,7 +606,15 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
 
         chunk_chars, chunk_warning = resolve_flush_chunk_chars()
         if chunk_warning:
-            write_health(STATE_DIR, chunk_warning, warning=True)
+            write_health(
+                STATE_DIR, chunk_warning, warning=True, component="flush"
+            )
+
+        timeout, timeout_warning = claude_runner.resolve_timeout("flush")
+        if timeout_warning:
+            write_health(
+                STATE_DIR, timeout_warning, warning=True, component="flush"
+            )
 
         try:
             turns = read_transcript(transcript_path)
@@ -738,6 +644,7 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 STATE_DIR,
                 "warn:directive-shaped-transcript",
                 warning=True,
+                component="flush",
             )
 
         # Sır bekçisi (giriş): kimlik bilgisi kalıpları özetçiye hiç gitmesin.
@@ -747,11 +654,16 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 STATE_DIR,
                 "warn:secret-redacted-input:" + ",".join(input_hits),
                 warning=True,
+                component="flush",
             )
 
-        summary, error = _run_claude(build_flush_prompt(transcript), VAULT_ROOT)
+        summary, error = _run_claude(
+            build_flush_prompt(transcript), VAULT_ROOT, timeout
+        )
         for backend_warning in claude_runner.last_warnings():
-            write_health(STATE_DIR, backend_warning, warning=True)
+            write_health(
+                STATE_DIR, backend_warning, warning=True, component="flush"
+            )
         if error is not None:
             _record_flush_failure(
                 STATE_DIR,
@@ -796,6 +708,7 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 STATE_DIR,
                 "warn:secret-redacted-output:" + ",".join(output_hits),
                 warning=True,
+                component="flush",
             )
 
         try:
@@ -826,7 +739,7 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
         try:
             maybe_trigger_compile(VAULT_ROOT, event_time)
         except (OSError, ValueError, json.JSONDecodeError):
-            write_health(STATE_DIR, "compile-trigger-failed")
+            write_health(STATE_DIR, "compile-trigger-failed", component="flush")
     return 0
 
 
@@ -838,7 +751,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _parse_args(argv)
     except SystemExit as exc:
         if exc.code:
-            write_health(STATE_DIR, "invalid-arguments")
+            write_health(STATE_DIR, "invalid-arguments", component="flush")
         return 0
 
     managed_input = _managed_hook_input(args.hook_input, STATE_DIR)
@@ -853,10 +766,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _flush_once(args, event_time)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         error = str(exc) or exc.__class__.__name__
-        write_health(STATE_DIR, f"input:{error}")
+        write_health(STATE_DIR, f"input:{error}", component="flush")
         return 0
     except Exception as exc:  # Defensive hook boundary: hooks must never fail.
-        write_health(STATE_DIR, f"unexpected:{exc.__class__.__name__}")
+        write_health(
+            STATE_DIR, f"unexpected:{exc.__class__.__name__}", component="flush"
+        )
         return 0
     finally:
         if managed_input:
@@ -865,7 +780,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             except FileNotFoundError:
                 pass
             except OSError:
-                write_health(STATE_DIR, "hook-input-cleanup-failed")
+                write_health(
+                    STATE_DIR, "hook-input-cleanup-failed", component="flush"
+                )
 
 
 if __name__ == "__main__":

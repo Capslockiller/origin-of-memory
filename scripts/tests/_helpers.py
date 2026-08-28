@@ -31,12 +31,16 @@ BEGIN_MARKER = "--- BEGIN UNTRUSTED TRANSCRIPT DATA ---"
 END_MARKER = "--- END UNTRUSTED TRANSCRIPT DATA ---"
 
 
-def canned_stub(_prompt: str, _vault_root: Path) -> tuple[str | None, str | None]:
+def canned_stub(
+    _prompt: str, _vault_root: Path, _timeout: int | None = None
+) -> tuple[str | None, str | None]:
     """Sabit, sözleşmeye uygun özet döndürür."""
     return GOOD_SUMMARY, None
 
 
-def echo_stub(prompt: str, _vault_root: Path) -> tuple[str | None, str | None]:
+def echo_stub(
+    prompt: str, _vault_root: Path, _timeout: int | None = None
+) -> tuple[str | None, str | None]:
     """Transkripti özetin gövdesine aynen kopyalar (sır sızıntısı testi için)."""
     body = prompt.split(BEGIN_MARKER, 1)[1].split(END_MARKER, 1)[0]
     return (

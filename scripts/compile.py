@@ -17,41 +17,21 @@ import stat
 import subprocess
 import tempfile
 import time
-from typing import Any, Sequence
+from typing import Any, NamedTuple, Sequence
+import socket
+import uuid
 
+from beyin_ortak import (
+    _atomic_write_json,
+    _lock_exclusive,
+    _sha256,
+    write_health,
+    write_health_skip,
+)
 import claude_runner
 import retrieve
+import rootmap
 import secret_guard
-
-
-try:
-    import fcntl
-except ImportError:  # Windows has no fcntl; msvcrt region locks stand in.
-    fcntl = None  # type: ignore[assignment]
-    import msvcrt
-
-
-def _lock_exclusive(lock_file: Any, blocking: bool) -> None:
-    """Exclusive lock on an open file, portable across POSIX and Windows."""
-    if fcntl is not None:
-        flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
-        fcntl.flock(lock_file.fileno(), flags)
-        return
-    lock_file.seek(0)
-    if blocking:
-        deadline = time.time() + 300
-        while True:
-            try:
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                return
-            except OSError:
-                if time.time() >= deadline:
-                    raise
-                time.sleep(1)
-    try:
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError as exc:
-        raise BlockingIOError(str(exc)) from exc
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -62,6 +42,9 @@ STATE_DIR = SCRIPT_DIR / ".state"
 # acceptEdits. Vault-root dot-dir keeps data on the same disk and out of Obsidian.
 STAGE_ROOT = VAULT_ROOT / ".stage"
 DEFAULT_MAX_CALLS = 3
+DEFAULT_REGISTRY_RECENT = 50
+DEFAULT_REGISTRY_MAX_ROWS = 400
+DEFAULT_COMPILE_LOCK_TTL_MIN = 120
 
 DATE_IN_NAME = re.compile(
     r"(?<!\d)(?P<year>\d{4})-(?P<month>\d{2})"
@@ -152,98 +135,6 @@ def _iso_now() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        # Yer değiştirmeden önce fsync: değiştirme işlemi atomik olsa da
-        # veri blokları diske inmemişse çökme/elektrik kesintisi dosyayı
-        # yarım JSON olarak bırakır ve state okunamaz hale gelir.
-        with temporary.open("w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def write_health(state_dir: Path, error: str, warning: bool = False) -> None:
-    """Record the latest compiler problem and preserve warning history."""
-    try:
-        payload: dict[str, Any] = {}
-        health_path = state_dir / "health.json"
-        if health_path.exists():
-            try:
-                loaded = json.loads(health_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    payload.update(loaded)
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
-        payload.update(
-            {
-                "ts": int(time.time()),
-                "component": "compile",
-                "error": error,
-            }
-        )
-        if warning:
-            warnings = payload.get("warnings", [])
-            if not isinstance(warnings, list):
-                warnings = []
-            if error not in warnings:
-                warnings.append(error)
-            payload["warnings"] = warnings[-20:]
-        _atomic_write_json(health_path, payload)
-    except OSError:
-        pass
-
-
-def write_health_skip(state_dir: Path, reason: str, component: str = "compile") -> None:
-    """Record a skipped-on-purpose decision without raising the error flag.
-
-    Mirrors ``flush.write_health_skip``: a deliberate skip belongs in the health
-    state where it can be read back, but not in ``error``, which the doctor
-    treats as breakage.
-    """
-    try:
-        payload: dict[str, Any] = {}
-        health_path = state_dir / "health.json"
-        if health_path.exists():
-            try:
-                loaded = json.loads(health_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    payload.update(loaded)
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
-        now = int(time.time())
-        skips = payload.get("skips", [])
-        if not isinstance(skips, list):
-            skips = []
-        entries = [item for item in skips if isinstance(item, dict)]
-        existing = next(
-            (item for item in entries if item.get("reason") == reason), None
-        )
-        if existing is None:
-            entries.append({"reason": reason, "ts": now, "count": 1})
-        else:
-            existing["ts"] = now
-            count = existing.get("count", 0)
-            existing["count"] = (count if isinstance(count, int) else 0) + 1
-        payload["skips"] = entries[-20:]
-        payload["last_skip"] = {
-            "ts": now,
-            "component": component,
-            "reason": reason,
-        }
-        _atomic_write_json(health_path, payload)
-    except OSError:
-        pass
-
-
 def _default_state() -> dict[str, Any]:
     return {
         "ingested": {},
@@ -252,6 +143,7 @@ def _default_state() -> dict[str, Any]:
         "last_status": "ok",
         "runs": [],
         "concepts_manifest": "",
+        "quarantined": {},
     }
 
 
@@ -263,10 +155,12 @@ def load_state(path: Path) -> dict[str, Any]:
         raise ValueError("compile-state-not-object")
     ingested = state.get("ingested", {})
     runs = state.get("runs", [])
+    quarantined = state.get("quarantined", {})
     cursor = state.get("cursor", "")
     if (
         not isinstance(ingested, dict)
         or not isinstance(runs, list)
+        or not isinstance(quarantined, dict)
         or not isinstance(cursor, str)
     ):
         raise ValueError("compile-state-schema-invalid")
@@ -275,6 +169,7 @@ def load_state(path: Path) -> dict[str, Any]:
     normalized["ingested"] = ingested
     normalized["cursor"] = cursor
     normalized["runs"] = runs[-20:]
+    normalized["quarantined"] = quarantined
     return normalized
 
 
@@ -304,15 +199,10 @@ def _quarantine_state(path: Path, error: str) -> None:
 
 def _save_state(path: Path, state: dict[str, Any]) -> None:
     state["runs"] = state.get("runs", [])[-20:]
+    # Stamp the model-call bound in force so a compile that dies on
+    # `claude-timeout` can be read against the value that produced it.
+    state["timeout"] = claude_runner.resolve_timeout("compile")[0]
     _atomic_write_json(path, state)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def concepts_manifest_hash(vault_root: Path) -> str:
@@ -352,6 +242,7 @@ def _daily_sort_key(path: Path) -> tuple[dt.date, str]:
 def changed_daily_logs(
     vault_root: Path,
     ingested: dict[str, str],
+    quarantined: dict[str, Any] | None = None,
 ) -> list[tuple[Path, str]]:
     daily_dir = vault_root / "daily"
     if not daily_dir.exists():
@@ -365,12 +256,13 @@ def changed_daily_logs(
     ):
         raise PolicyError("daily-directory-escape")
     changed = []
+    quarantined = quarantined or {}
     for path in sorted(daily_dir.glob("*.md"), key=_daily_sort_key):
         file_stat = path.lstat()
         if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
             raise PolicyError(f"unsafe-daily-source:{path.name}")
         digest = _sha256(path)
-        if ingested.get(path.name) != digest:
+        if ingested.get(path.name) != digest and digest not in quarantined:
             changed.append((path, digest))
     return changed
 
@@ -391,23 +283,168 @@ def build_compile_prompt(
     )
 
 
-def build_compact_registry(index_full_text: str, concepts_dir: Path) -> str:
-    """Build the duplicate-check registry in full-index row order."""
-    import rootmap
+class RegistrySelection(NamedTuple):
+    text: str
+    total_rows: int
+    shown_rows: int
+    truncated: bool
 
-    aliases = {
-        rootmap.turkish_fold(concept.name): concept.aliases
-        for concept in rootmap.load_concepts(concepts_dir)
+
+def _bounded_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    return max(0, value)
+
+
+def build_compact_registry(
+    index_full_text: str,
+    concepts_dir: Path,
+    daily_body: str = "",
+    *,
+    config: dict[str, Any] | None = None,
+    recent: int | None = None,
+    max_rows: int | None = None,
+    with_stats: bool = False,
+) -> str | RegistrySelection:
+    """Build a hub-scoped duplicate registry with a bounded recency margin."""
+    concepts = rootmap.load_concepts(concepts_dir)
+    concept_by_name = {
+        rootmap.turkish_fold(concept.name): concept for concept in concepts
     }
+    rows = rootmap._parse_index_rows(index_full_text)
+    total_rows = len(rows)
+    if recent is None:
+        recent = _bounded_env_int("BEYIN_REGISTRY_RECENT", DEFAULT_REGISTRY_RECENT)
+    if max_rows is None:
+        max_rows = _bounded_env_int(
+            "BEYIN_REGISTRY_MAX_ROWS", DEFAULT_REGISTRY_MAX_ROWS
+        )
+
+    if config is None and daily_body and rootmap.CONFIG_PATH.is_file():
+        config = rootmap._load_config(rootmap.CONFIG_PATH)
+
+    selected: list[str] = []
+    selected_set: set[str] = set()
+    if config is not None and daily_body:
+        daily_probe = rootmap.Concept(
+            name=daily_body,
+            title="",
+            aliases=(),
+            tags=(),
+            updated="",
+            body="",
+            links=(),
+        )
+        daily_memberships = rootmap.assign_memberships([daily_probe], config)
+        matched_hubs = {
+            hub_id for hub_id, members in daily_memberships.items() if members
+        }
+        concept_memberships = rootmap.assign_memberships(concepts, config)
+        topical = {
+            rootmap.turkish_fold(concept.name)
+            for hub_id, members in concept_memberships.items()
+            if hub_id in matched_hubs
+            for concept in members
+        }
+        for name, _summary, _line in rows:
+            folded = rootmap.turkish_fold(name)
+            if folded in topical and folded not in selected_set:
+                selected.append(folded)
+                selected_set.add(folded)
+
+    recent_concepts = sorted(
+        concepts,
+        key=lambda concept: (concept.updated, rootmap.turkish_fold(concept.name)),
+        reverse=True,
+    )[:recent]
+    for concept in recent_concepts:
+        folded = rootmap.turkish_fold(concept.name)
+        if folded not in selected_set:
+            selected.append(folded)
+            selected_set.add(folded)
+
+    # Backward-compatible direct use without a daily topic keeps the full view;
+    # compiler calls always pass daily_body and therefore take the bounded path.
+    if not daily_body and config is None:
+        selected = [rootmap.turkish_fold(name) for name, _summary, _line in rows]
+        selected_set = set(selected)
+
+    selected = selected[:max_rows]
+    selected_set = set(selected)
     lines = []
-    for name, _summary, _line in rootmap._parse_index_rows(index_full_text):
+    for name, _summary, _line in rows:
+        folded = rootmap.turkish_fold(name)
+        if folded not in selected_set:
+            continue
+        concept = concept_by_name.get(folded)
+        aliases = concept.aliases if concept is not None else ()
         clean_name = " ".join(name.replace("|", " ").split())
         clean_aliases = [
-            " ".join(alias.replace("|", " ").split())
-            for alias in aliases.get(rootmap.turkish_fold(name), ())
+            " ".join(alias.replace("|", " ").split()) for alias in aliases
         ]
         lines.append(f"{clean_name} | {'; '.join(clean_aliases)}")
-    return "\n".join(lines) + ("\n" if lines else "")
+
+    shown_rows = len(lines)
+    truncated = shown_rows < total_rows
+    if truncated:
+        lines.insert(
+            0,
+            "registry truncated: "
+            f"{shown_rows} of {total_rows} rows shown, selected by topic and recency",
+        )
+    text = "\n".join(lines) + ("\n" if lines else "")
+    result = RegistrySelection(text, total_rows, shown_rows, truncated)
+    return result if with_stats else result.text
+
+
+def _quarantine_content(
+    vault_root: Path,
+    source_file: str,
+    content: str,
+    match: re.Match[str],
+    *,
+    source_path: Path | None = None,
+) -> Path:
+    """Preserve suspicious content and a bounded forensic sidecar."""
+    digest = (
+        _sha256(source_path)
+        if source_path is not None
+        else hashlib.sha256(content.encode("utf-8")).hexdigest()
+    )
+    date_match = DATE_IN_NAME.search(Path(source_file).stem)
+    if date_match is None:
+        date_text = dt.date.today().isoformat()
+    else:
+        day = date_match.group("day") or "01"
+        date_text = (
+            f"{date_match.group('year')}-{date_match.group('month')}-{day}"
+        )
+    quarantine_dir = vault_root / ".stage" / "karantina"
+    quarantine_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    quarantine_dir.chmod(0o700)
+    destination = quarantine_dir / f"{date_text}-{digest[:8]}.md"
+    if source_path is not None:
+        shutil.copy2(source_path, destination, follow_symlinks=False)
+    else:
+        destination.write_text(content, encoding="utf-8", newline="")
+    destination.chmod(0o600)
+
+    excerpt_start = max(0, match.start() - 100)
+    excerpt = content[excerpt_start : excerpt_start + 300]
+    sidecar = destination.with_suffix(".json")
+    _atomic_write_json(
+        sidecar,
+        {
+            "matched_pattern": match.group(0),
+            "offending_excerpt": excerpt,
+            "timestamp": _iso_now(),
+            "source_file": source_file,
+        },
+    )
+    sidecar.chmod(0o600)
+    return destination
 
 
 def _path_within(path: Path, root: Path) -> bool:
@@ -763,11 +800,16 @@ def _run_claude(prompt: str, stage: Path) -> str | None:
     backend, warning = claude_runner.compile_backend()
     if warning:
         write_health(STATE_DIR, warning, warning=True)
+    timeout, timeout_warning = claude_runner.resolve_timeout(
+        "compile", backend=backend
+    )
+    if timeout_warning:
+        write_health(STATE_DIR, timeout_warning, warning=True)
     _output, error = claude_runner.run_claude(
         prompt,
         model="sonnet",
         tools="Read,Write,Edit,Glob,Grep",
-        timeout=900,
+        timeout=timeout,
         cwd=stage,
         permission_mode="acceptEdits",
         allowed_tools="Read,Write,Edit,Glob,Grep",
@@ -800,21 +842,37 @@ def _compile_one(
         index_full_text = (stage / "knowledge" / "index-full.md").read_text(
             encoding="utf-8"
         )
-        registry_text = build_compact_registry(
+        registry = build_compact_registry(
             index_full_text,
             stage / "knowledge" / "concepts",
+            staged_daily.read_text(encoding="utf-8"),
+            with_stats=True,
         )
+        assert isinstance(registry, RegistrySelection)
+        registry_text = registry.text
+        if registry.truncated:
+            write_health(
+                state_dir,
+                f"warn:registry-truncated:{registry.shown_rows}/{registry.total_rows}",
+                warning=True,
+            )
         daily_body = staged_daily.read_text(encoding="utf-8")
         if (
             DIRECTIVE_SHAPED.search(root_map_text)
             or DIRECTIVE_SHAPED.search(registry_text)
-            or DIRECTIVE_SHAPED.search(daily_body)
         ):
-            write_health(
-                state_dir,
-                "warn:directive-shaped-input",
-                warning=True,
+            raise PolicyError("directive-shaped-registry")
+        daily_match = DIRECTIVE_SHAPED.search(daily_body)
+        if daily_match is not None:
+            destination = _quarantine_content(
+                vault_root,
+                daily_path.name,
+                daily_body,
+                daily_match,
+                source_path=daily_path,
             )
+            write_health(state_dir, "quarantine:directive-shaped")
+            return "input-quarantine", destination.as_posix()
         prompt = build_compile_prompt(
             root_map_text,
             registry_text,
@@ -835,9 +893,27 @@ def _compile_one(
             carry_source_anchors(stage, changed_files, daily_body)
         except (OSError, UnicodeError):
             write_health(state_dir, "anchor-carry-failed", warning=True)
+        safe_files = []
+        quarantined_outputs = []
+        for relative in changed_files:
+            output = (stage / relative).read_text(encoding="utf-8")
+            output_match = DIRECTIVE_SHAPED.search(output)
+            if output_match is None:
+                safe_files.append(relative)
+                continue
+            destination = _quarantine_content(
+                vault_root,
+                relative,
+                output,
+                output_match,
+            )
+            quarantined_outputs.append(f"{relative}->{destination.name}")
+        if quarantined_outputs:
+            write_health(state_dir, "quarantine:directive-shaped")
+
         # Sır bekçisi: kimlik bilgisi kalıbı taşıyan hiçbir dosya vault'a
         # terfi edemez — model bir sırrı makaleye taşıdıysa koşu reddedilir.
-        for relative in changed_files:
+        for relative in safe_files:
             hits = secret_guard.scan(
                 (stage / relative).read_text(encoding="utf-8")
             )
@@ -845,7 +921,9 @@ def _compile_one(
                 raise PolicyError(
                     f"secret-detected:{relative}:{','.join(hits)}"
                 )
-        _promote_changes(stage, vault_root, changed_files, live_baseline)
+        _promote_changes(stage, vault_root, safe_files, live_baseline)
+        if quarantined_outputs:
+            return "output-quarantine", ",".join(quarantined_outputs)
         return None, ""
     except NoChangesError as exc:
         return "no-changes", str(exc)
@@ -918,6 +996,111 @@ def _validated_trigger_claim(path: Path | None) -> Path | None:
     return path
 
 
+def _machine_identity(state_dir: Path) -> tuple[str, str]:
+    """Create once and reuse a hostname-derived per-install machine id."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    hostname = socket.gethostname() or "unknown-host"
+    safe_hostname = re.sub(r"[^A-Za-z0-9_.-]+", "-", hostname).strip("-")
+    safe_hostname = safe_hostname or "unknown-host"
+    path = state_dir / "machine-id"
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        existing = ""
+    if existing:
+        return existing, hostname
+    machine = f"{safe_hostname}-{uuid.uuid4().hex[:16]}"
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        existing = path.read_text(encoding="utf-8").strip()
+        if not existing:
+            raise OSError("machine-id-empty")
+        return existing, hostname
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(machine + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return machine, hostname
+
+
+def _compile_lock_ttl_minutes() -> int:
+    return _bounded_env_int(
+        "BEYIN_COMPILE_LOCK_TTL_MIN", DEFAULT_COMPILE_LOCK_TTL_MIN
+    )
+
+
+def _read_lock_metadata(lock_file: Any) -> dict[str, Any]:
+    lock_file.seek(0)
+    raw = lock_file.read().strip()
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _lock_is_live(metadata: dict[str, Any], now: dt.datetime) -> bool:
+    started_at = metadata.get("started_at")
+    if not isinstance(started_at, str):
+        return False
+    try:
+        started = dt.datetime.fromisoformat(started_at)
+    except ValueError:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=dt.timezone.utc)
+    age = (now.astimezone(dt.timezone.utc) - started.astimezone(dt.timezone.utc))
+    return age.total_seconds() <= _compile_lock_ttl_minutes() * 60
+
+
+def _write_lock_metadata(lock_file: Any, payload: dict[str, Any]) -> None:
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    lock_file.flush()
+    os.fsync(lock_file.fileno())
+
+
+def _claim_machine_lock(lock_file: Any, state_dir: Path) -> bool:
+    machine, hostname = _machine_identity(state_dir)
+    previous = _read_lock_metadata(lock_file)
+    previous_machine = previous.get("machine")
+    now = dt.datetime.now().astimezone()
+    if (
+        isinstance(previous_machine, str)
+        and previous_machine
+        and previous_machine != machine
+    ):
+        if _lock_is_live(previous, now):
+            write_health_skip(
+                state_dir,
+                f"skip:compile-locked-by:{previous_machine}",
+            )
+            return False
+        write_health(
+            state_dir,
+            f"warn:stale-compile-lock-broken:{previous_machine}",
+            warning=True,
+        )
+    _write_lock_metadata(
+        lock_file,
+        {
+            "machine": machine,
+            "pid": os.getpid(),
+            "started_at": now.isoformat(timespec="seconds"),
+            "hostname": hostname,
+        },
+    )
+    return True
+
+
+def _clear_lock_metadata(lock_file: Any) -> None:
+    _write_lock_metadata(lock_file, {})
+
+
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
@@ -956,7 +1139,11 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
         )
         return 0
     try:
-        changed = changed_daily_logs(VAULT_ROOT, state["ingested"])
+        changed = changed_daily_logs(
+            VAULT_ROOT,
+            state["ingested"],
+            state.get("quarantined", {}),
+        )
     except (OSError, ValueError, PolicyError) as exc:
         _record_failure(
             state_path,
@@ -984,6 +1171,7 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             _release_trigger_claim(trigger_claim)
         return 0
 
+    quarantine_seen = False
     for daily_path, digest in selected:
         timestamp = _iso_now()
         reason, detail = _compile_one(
@@ -993,7 +1181,24 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             digest,
             timestamp,
         )
-        if reason is not None and reason != "no-changes":
+        if reason == "input-quarantine":
+            quarantine_seen = True
+            state.setdefault("quarantined", {})[digest] = {
+                "source_file": daily_path.name,
+                "quarantined_at": timestamp,
+                "quarantine_file": detail,
+            }
+            state["last_run"] = timestamp
+            state["last_status"] = "quarantined"
+            _append_run(state, timestamp, daily_path.name, "quarantined")
+            try:
+                _save_state(state_path, state)
+            except OSError:
+                write_health(STATE_DIR, "state-write-failed")
+                _release_trigger_claim(trigger_claim)
+                return 0
+            continue
+        if reason is not None and reason not in {"no-changes", "output-quarantine"}:
             _record_failure(
                 state_path,
                 state,
@@ -1007,7 +1212,13 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
         # "no-changes" hata değil, iyi huylu son durum: günlükten çıkarılacak
         # kalıcı bilgi yok. Digest'i yazıp kuyruğu durdurmadan sıradakine
         # geçilir; aksi halde aynı dosya her koşuda yeniden model çağırır.
-        status = "ok:no-changes" if reason == "no-changes" else "ok"
+        if reason == "no-changes":
+            status = "ok:no-changes"
+        elif reason == "output-quarantine":
+            status = "ok:output-quarantined"
+            quarantine_seen = True
+        else:
+            status = "ok"
         state["ingested"][daily_path.name] = digest
         state["cursor"] = daily_path.name
         state["last_run"] = timestamp
@@ -1022,7 +1233,8 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
         # Success must clear the stale error flag, or the doctor keeps
         # reporting the last crash forever (ingest already follows this
         # convention: empty error string = healthy).
-        write_health(STATE_DIR, "")
+        if not quarantine_seen:
+            write_health(STATE_DIR, "")
         try:
             import rootmap
 
@@ -1051,6 +1263,8 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             write_health(STATE_DIR, "state-write-failed")
             _release_trigger_claim(trigger_claim)
             return 0
+    if quarantine_seen:
+        write_health(STATE_DIR, "quarantine:directive-shaped")
     return 0
 
 
@@ -1091,27 +1305,39 @@ def main(argv: Sequence[str] | None = None) -> int:
             write_health(STATE_DIR, "lock-failed")
             _release_trigger_claim(trigger_claim)
             return 0
+        claimed = False
         try:
-            return _run_locked(args, trigger_claim)
-        except Exception as exc:  # Compiler must preserve the hook exit contract.
-            state_path = STATE_DIR / "compile-state.json"
+            if not _claim_machine_lock(lock_file, STATE_DIR):
+                _release_trigger_claim(trigger_claim)
+                return 0
+            claimed = True
             try:
-                state = load_state(state_path)
-            except (OSError, ValueError, json.JSONDecodeError) as state_exc:
-                _quarantine_state(
+                return _run_locked(args, trigger_claim)
+            except Exception as exc:  # Compiler preserves the hook exit contract.
+                state_path = STATE_DIR / "compile-state.json"
+                try:
+                    state = load_state(state_path)
+                except (OSError, ValueError, json.JSONDecodeError) as state_exc:
+                    _quarantine_state(
+                        state_path,
+                        f"{state_exc.__class__.__name__}: {state_exc}",
+                    )
+                    state = _default_state()
+                _record_failure(
                     state_path,
-                    f"{state_exc.__class__.__name__}: {state_exc}",
+                    state,
+                    "",
+                    "unexpected",
+                    exc.__class__.__name__,
+                    trigger_claim,
                 )
-                state = _default_state()
-            _record_failure(
-                state_path,
-                state,
-                "",
-                "unexpected",
-                exc.__class__.__name__,
-                trigger_claim,
-            )
-            return 0
+                return 0
+        finally:
+            if claimed:
+                try:
+                    _clear_lock_metadata(lock_file)
+                except OSError:
+                    write_health(STATE_DIR, "lock-clear-failed")
 
 
 if __name__ == "__main__":

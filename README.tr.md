@@ -409,10 +409,18 @@ biçimde örnek bir kurallar dosyası.
   **yakalamıyor.** Oturumlarında bu tür malzeme varsa özetlenir, derlenir ve
   saklanır. Bu bilinen bir açık; dürüst hâliyle [SECURITY.md](SECURITY.md)
   içinde.
-- **Derleyici maliyeti korpusla büyüyor.** Kök harita katmanı çağrı başı tabanı
-  %63 kesti, ama mükerrer kontrol registry'si hâlâ kavram sayısıyla ölçekleniyor.
-- **Gece derlemesi tek makinelik.** Tetik talebi yerel bir dosya; tek bir senkron
-  vault'u paylaşan iki makine aynı anda derleyebilir.
+- **Derleyici girdisi artık sınırlı, ama bedava değil.** Kök harita katmanı çağrı
+  başı tabanı %63 kesti; kavram başına bir satırla sonsuza dek büyüyen mükerrer
+  kontrol registry'si ise artık günlüğün eşleştiği hub'lar ile en son güncellenen
+  50 kavrama daraltılıyor ve 400 satırda sert tavana vuruyor. Sentetik 1000
+  kavramlık korpusta 67.800 → 15.806 karakter. Bedeli gerçek: model kısmi bir
+  mükerrer görüşü görüyor, bunu prompt'ta tek satırla öğreniyor ve seçilen
+  satırların dışında kalan bir mükerreri kaçırabiliyor.
+- **Makineler arası derleme işbirliğiyle önleniyor, garanti edilmiyor.** Derleme
+  kilidi kendisini hangi makinenin tuttuğunu kaydediyor; başka bir makinenin
+  canlı kilidini gören koşu onun yanında derlemek yerine atlıyor. Bu, senkron
+  aracının kilit dosyasını yaymış olmasına bağlı; yeterince hızlı bir yarış hâlâ
+  aradan sıyrılabilir.
 
 ## Atıf
 

@@ -19,6 +19,10 @@ import tempfile
 import time
 from typing import Any, Sequence
 
+# Module-level name, not a re-wrap: `retrieve._atomic_write_json` keeps resolving
+# for existing callers while there is one implementation. See AGENTS.md.
+from beyin_ortak import _atomic_write_json
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 VAULT_ROOT = SCRIPT_DIR.parent.parent
@@ -838,22 +842,6 @@ def _read_ledger(path: Path) -> set[str]:
     if not isinstance(returned, list):
         return set()
     return {item for item in returned if isinstance(item, str)}
-
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def hook_result(

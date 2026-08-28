@@ -31,7 +31,54 @@ OPENAI_COMPAT_COMPILE_UNSUPPORTED = (
     "openai-compat-backend-unsupported:compile"
 )
 
+# Model-call timeouts.  Historical values: flush and ingest 240 s, compile 900 s.
+# Local inference is far slower than a hosted API — an 8B model summarising a
+# 15k-character transcript on CPU can exceed 240 s — so the ollama and
+# openai-compat backends raise the *default* for the text-mode calls.  An explicit
+# environment value always wins, and the claude/antigravity defaults are unchanged.
+TIMEOUT_ENV = {
+    "flush": "BEYIN_FLUSH_TIMEOUT",
+    "compile": "BEYIN_COMPILE_TIMEOUT",
+    "ingest": "BEYIN_INGEST_TIMEOUT",
+}
+DEFAULT_TIMEOUTS = {"flush": 240, "compile": 900, "ingest": 240}
+LOCAL_INFERENCE_TIMEOUT = 900
+# Compile is excluded: it already sits at 900 s and never runs on a local backend.
+LOCAL_TIMEOUT_KINDS = ("flush", "ingest")
+
 _LAST_WARNINGS: list[str] = []
+
+
+def resolve_timeout(
+    kind: str,
+    environment: dict[str, str] | None = None,
+    backend: str | None = None,
+) -> tuple[int, str | None]:
+    """Resolve one model call's timeout in seconds plus an optional warning.
+
+    Mirrors ``flush.resolve_flush_chunk_chars``: an unusable environment value is
+    reported through health and ignored rather than failing the run, because a
+    typo in a variable must never break the session the hook is attached to.
+    """
+    name = TIMEOUT_ENV[kind]
+    env = os.environ if environment is None else environment
+    warning = None
+    if name in env:
+        raw = env.get(name) or ""
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value > 0:
+            return value, None
+        warning = f"warn:timeout-invalid:{name}:{raw}"
+
+    if kind in LOCAL_TIMEOUT_KINDS:
+        if backend is None:
+            backend, _backend_warning = resolve_backend(env)
+        if backend in (BACKEND_OLLAMA, BACKEND_OPENAI_COMPAT):
+            return LOCAL_INFERENCE_TIMEOUT, warning
+    return DEFAULT_TIMEOUTS[kind], warning
 
 
 def last_warnings() -> list[str]:

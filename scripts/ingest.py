@@ -187,7 +187,12 @@ def _persist(
     try:
         ingest_common.save_state(state, state_dir)
     except OSError:
-        ingest_common.write_health(state_dir, "state-write-failed")
+        ingest_common.write_health(
+            state_dir,
+            "state-write-failed",
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
+        )
 
 
 def _finish(
@@ -200,13 +205,28 @@ def _finish(
         "source": source,
         "ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "counts": counts,
+        # Effective model-call bound, so an `agy-timeout`/`codex-timeout` in this
+        # run can be read against the value that produced it.
+        "timeout": ingest_common.claude_runner.resolve_timeout("ingest")[0],
     }
     state["last_run"] = last_run
     try:
         ingest_common.save_state(state, state_dir)
     except OSError:
-        ingest_common.write_health(state_dir, "state-write-failed")
-    ingest_common.write_health(state_dir, "", counts=counts, last_run=last_run)
+        ingest_common.write_health(
+            state_dir,
+            "state-write-failed",
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
+        )
+    ingest_common.write_health(
+        state_dir,
+        "",
+        counts=counts,
+        last_run=last_run,
+        component="ingest",
+        health_name=ingest_common.HEALTH_NAME,
+    )
 
 
 def run_claude(args: argparse.Namespace, state_dir: Path, vault_root: Path) -> int:
@@ -269,7 +289,12 @@ def run_web(args: argparse.Namespace, state_dir: Path, vault_root: Path) -> int:
         zip_path = ingest_web.newest_zip()
     if zip_path is None:
         print("İçe aktarılacak ZIP bulunamadı (.import klasörü boş).")
-        ingest_common.write_health(state_dir, "web-zip-missing")
+        ingest_common.write_health(
+            state_dir,
+            "web-zip-missing",
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
+        )
         return 0
     sessions, error = ingest_web.candidates(
         state,
@@ -280,7 +305,12 @@ def run_web(args: argparse.Namespace, state_dir: Path, vault_root: Path) -> int:
     )
     if error:
         print(f"ZIP okunamadı: {error}")
-        ingest_common.write_health(state_dir, f"web:{error}")
+        ingest_common.write_health(
+            state_dir,
+            f"web:{error}",
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
+        )
         return 0
     sessions = _ordered(sessions, ingest_web.SOURCE)
     if args.dry_run:
@@ -306,7 +336,12 @@ def run_gemini(args: argparse.Namespace, state_dir: Path, vault_root: Path) -> i
     )
     if error:
         print(f"Gemini kayıtları okunamadı: {error}")
-        ingest_common.write_health(state_dir, error)
+        ingest_common.write_health(
+            state_dir,
+            error,
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
+        )
         return 0
     sessions = _ordered(sessions, ingest_gemini.SOURCE)
     if args.dry_run:
@@ -443,11 +478,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _parse_args(argv)
     except SystemExit as exc:
         if exc.code:
-            ingest_common.write_health(state_dir, "invalid-arguments")
+            ingest_common.write_health(
+                state_dir,
+                "invalid-arguments",
+                component="ingest",
+                health_name=ingest_common.HEALTH_NAME,
+            )
         return 0
 
     if args.max_sessions < 1 or args.sleep < 0:
-        ingest_common.write_health(state_dir, "invalid-limits")
+        ingest_common.write_health(
+            state_dir,
+            "invalid-limits",
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
+        )
         return 0
 
     vault_root = ingest_common.VAULT_ROOT
@@ -463,12 +508,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         ingest_common.write_health(
             state_dir,
             f"input:{str(exc) or exc.__class__.__name__}",
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
         )
         return 0
     except Exception as exc:  # İçe aktarıcı asla yükselmez.
         ingest_common.write_health(
             state_dir,
             f"unexpected:{exc.__class__.__name__}",
+            component="ingest",
+            health_name=ingest_common.HEALTH_NAME,
         )
         return 0
 

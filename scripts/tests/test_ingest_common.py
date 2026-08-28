@@ -98,7 +98,7 @@ class SummaryContractTests(unittest.TestCase):
     def test_short_session_is_bos_without_model_call(self) -> None:
         calls: list[str] = []
 
-        def tripwire(prompt: str, vault_root: Path):
+        def tripwire(prompt: str, vault_root: Path, timeout: int | None = None):
             calls.append(prompt)
             return GOOD_SUMMARY, None
 
@@ -118,7 +118,7 @@ class SummaryContractTests(unittest.TestCase):
         with mock.patch.object(
             flush,
             "_run_claude",
-            lambda prompt, root: ("FLUSH_BOS", None),
+            lambda prompt, root, timeout=None: ("FLUSH_BOS", None),
         ):
             self.assertEqual(
                 ingest_common.summarize_session(
@@ -129,7 +129,10 @@ class SummaryContractTests(unittest.TestCase):
         with mock.patch.object(
             flush,
             "_run_claude",
-            lambda prompt, root: ("## Bağlam\nsadece bir başlık", None),
+            lambda prompt, root, timeout=None: (
+                "## Bağlam\nsadece bir başlık",
+                None,
+            ),
         ):
             result = ingest_common.summarize_session(
                 session, self.root, self.state_dir
@@ -139,7 +142,7 @@ class SummaryContractTests(unittest.TestCase):
         with mock.patch.object(
             flush,
             "_run_claude",
-            lambda prompt, root: (None, "claude-timeout"),
+            lambda prompt, root, timeout=None: (None, "claude-timeout"),
         ):
             result = ingest_common.summarize_session(
                 session, self.root, self.state_dir
@@ -176,7 +179,7 @@ class SummaryContractTests(unittest.TestCase):
         turns = [("user", f"tur {index}") for index in range(6)]
         leaked = "ghp_" + "d" * 36
 
-        def leaking(prompt: str, vault_root: Path):
+        def leaking(prompt: str, vault_root: Path, timeout: int | None = None):
             return GOOD_SUMMARY.replace("Karar yok.", f"Token {leaked}"), None
 
         with mock.patch.object(flush, "_run_claude", leaking):
@@ -312,7 +315,7 @@ class LedgerTests(unittest.TestCase):
         with mock.patch.object(
             ingest_codex, "SESSIONS_ROOT", self.sessions_root
         ), mock.patch.object(
-            flush, "_run_claude", lambda prompt, root: (None, "claude-timeout")
+            flush, "_run_claude", lambda prompt, root, timeout=None: (None, "claude-timeout")
         ):
             ingest.run_codex(args, self.state_dir, self.vault)
         state = ingest_common.load_state(self.state_dir)

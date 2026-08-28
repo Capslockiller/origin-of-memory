@@ -157,7 +157,9 @@ any of this; a violation raises rather than proceeding.
 
 Every model call in the system — flush summarize, ingest summarize, compile
 distill — goes through one function, `claude_runner.run_claude()`. That function
-is also the backend switch.
+is also the backend switch. The exact CLI flag surface and HTTP endpoints each
+backend was built against are in
+[docs/compatibility.md](compatibility.md); versions beyond those are untested.
 
 `resolve_backend()` reads `BEYIN_MODEL_BACKEND`: unset or `claude` selects the
 Claude CLI path, `antigravity` selects `agy_runner`, `ollama` selects its native
@@ -275,6 +277,47 @@ The prompt (`COMPILE_PROMPT`) carries:
 The root map (about 4 KB) plus a compact `name | aliases` registry replaced
 sending the full index on every call. That is the 63% input-base reduction.
 
+#### The bounded duplicate-check registry
+
+The root map is a fixed ~4 KB, but the registry was one row per concept for the
+whole corpus, so compile input still grew linearly with the knowledge base.
+`build_compact_registry()` now sends only the rows a run can plausibly collide
+with:
+
+1. **Hub-scoped.** The daily body is run through `rootmap.assign_memberships()`
+   as a probe concept — the same hub-matching logic the root map uses, imported
+   rather than reimplemented — and the concepts belonging to the matched hubs are
+   selected. A concept in an unrelated hub is not sent.
+2. **Recency margin.** The `BEYIN_REGISTRY_RECENT` most recently updated concepts
+   (default 50) are added regardless of hub, because a duplicate is most likely
+   against something written recently, and hub assignment is imperfect.
+3. **Hard ceiling.** `BEYIN_REGISTRY_MAX_ROWS` (default 400) caps the result, so
+   input is bounded even when one hub holds the entire corpus.
+
+When rows are dropped the prompt says so on its first line — `registry
+truncated: N of M rows shown, selected by topic and recency` — so the model knows
+its dedupe view is partial rather than assuming a name it cannot see is free.
+The same event is recorded in health as the warning
+`warn:registry-truncated:<shown>/<total>`.
+
+Measured on a synthetic 1000-concept fixture (five hubs, 200 concepts each, two
+aliases per concept):
+
+| Registry | Rows | Characters |
+| --- | --- | --- |
+| Before — one row per concept | 1000 | 67,800 |
+| After — daily matching one hub | 237 | 15,806 |
+| After — daily matching the largest hub | 241 | 17,216 |
+| After — every concept in the matched hub (ceiling binds) | 400 | 27,194 |
+
+That is a 76.7% reduction in the typical case, and the last row is the point:
+past 400 eligible rows the registry stops growing, so compile input no longer
+tracks corpus size. `RegistrySelection` (`text`, `total_rows`, `shown_rows`,
+`truncated`) is what the compiler reads to decide whether to warn.
+
+Both variables are read through `_bounded_env_int()`, which clamps to ≥ 0 and
+falls back to the default on a non-integer value.
+
 ### 5.3 Promotion gates
 
 After the model returns, nothing is trusted:
@@ -285,22 +328,33 @@ After the model returns, nothing is trusted:
    that is not `knowledge/index-full.md`, `knowledge/log.md`, or a `.md` under
    `knowledge/concepts/`. No changed file at all raises `NoChangesError`, which is
    benign — the daily log is marked ingested and the queue moves on.
-3. `secret_guard.scan()` runs over the output.
-4. `_validate_live_destination()` re-checks each promoted path against the
+3. `DIRECTIVE_SHAPED` runs over every staged file that would be promoted. A hit
+   means that file is **not** promoted and its content is quarantined; its clean
+   siblings in the same run still promote. See
+   [SECURITY.md](../SECURITY.md#quarantine--the-compilers-three-directive-shaped-gates)
+   for all three gates and the manual release path.
+4. `secret_guard.scan()` runs over the output.
+5. `_validate_live_destination()` re-checks each promoted path against the
    allow-list, resolves it, and confirms it lands inside `knowledge/`.
-5. Each file is written with `_atomic_copy()`; the recorded live baseline digest
+6. Each file is written with `_atomic_copy()`; the recorded live baseline digest
    is used to detect that the live file changed underneath the run.
 
-The staging tree is removed afterwards, including on failure.
+The staging tree is removed afterwards, including on failure —
+`.stage/karantina/` is not part of it and survives.
 
 ### 5.4 Run bookkeeping
 
 `compile-state.json` holds `ingested` (daily filename → SHA-256), `cursor`,
-`last_run`, `last_status` and a run history. Corrupt state is quarantined rather
-than overwritten. At most `DEFAULT_MAX_CALLS = 3` daily logs are processed per
-run. A successful run writes an **empty** health error, clearing any stale
+`last_run`, `last_status`, a run history, and `quarantined` (content SHA-256 →
+`{source_file, quarantined_at, quarantine_file}`). Corrupt state is quarantined
+rather than overwritten. At most `DEFAULT_MAX_CALLS = 3` daily logs are processed
+per run. A successful run writes an **empty** health error, clearing any stale
 failure flag — otherwise the health check keeps reporting a crash that was fixed
 days ago.
+
+`changed_daily_logs()` skips a file whose digest is in `quarantined`, so a held
+daily is not retried every night. Keying on content rather than filename is what
+makes an edited file eligible again with no separate release step.
 
 ### 5.5 Post-compile regeneration
 
@@ -310,6 +364,41 @@ After each successful daily log, in order:
    and does not abort the compile.
 2. `retrieve.build_index()` — rebuilds the FTS5 database. Same warning-only
    handling.
+
+### 5.6 The machine-identified compile lock
+
+`.state/compile.lock` is held with an OS-level exclusive lock
+(`_lock_exclusive`), which settles concurrency **on one machine**. It says
+nothing about a vault synced across machines by Drive, Dropbox or git, where two
+installs can reach their evening trigger independently and both compile.
+
+The lock file therefore also carries JSON identifying its owner:
+
+```json
+{"machine": "<host>-<16 hex>", "pid": 4812,
+ "started_at": "2026-08-28T02:10:00+03:00", "hostname": "<host>"}
+```
+
+`_claim_machine_lock()` reads it before taking ownership:
+
+- **Same machine, or no previous owner** → claim it and overwrite the metadata.
+  Behaviour is unchanged from before this layer existed.
+- **Another machine, still live** → refuse. `write_health_skip()` records
+  `skip:compile-locked-by:<machine>` and the run returns 0 without compiling.
+- **Another machine, older than `BEYIN_COMPILE_LOCK_TTL_MIN`** (default 120
+  minutes) → break it, but loudly: the health warning
+  `warn:stale-compile-lock-broken:<machine>` names the previous owner, so a
+  machine that dies mid-compile is visible rather than silently overridden.
+
+The machine id comes from `_machine_identity()`: the hostname, sanitised to
+`[A-Za-z0-9_.-]`, plus a random 16-hex suffix generated once and stored in
+`.state/machine-id` (mode `0600`, written with `O_EXCL` so a race cannot produce
+two ids). It deliberately carries no user identity beyond the hostname. The
+suffix is what makes two machines that happen to share a hostname distinguishable.
+
+This is cooperative rather than a distributed lock — it can only work if the sync
+tool has actually propagated the lock file — and it is documented as partial in
+[SECURITY.md](../SECURITY.md).
 
 ## 6. `rootmap.py` — the map layer
 
@@ -453,8 +542,53 @@ Scripts write a shared `.state/health.json` through `write_health()`. An empty
 error string means healthy; the warning flag preserves history rather than
 overwriting it. The `beyin doktor` skill (installed to
 `<user>\.claude\skills\beyin-doktor`) renders hook wiring, script presence,
-interpreter and CLI availability, daily-log freshness and last compile status as a
-single table.
+interpreter and CLI availability, daily-log freshness, last compile status and
+the quarantine count as a single table.
+
+### 9.1 `durum.py` — the health summary command
+
+```powershell
+python scripts/durum.py [--json] [--state-dir <path>]
+```
+
+It reads `health.json`, `ingest-health.json`, `compile-state.json` and
+`last-flush.json` from the state directory and prints one table: component, last
+status, last run, last error or skip, quarantine count. **The exit code is always
+0** — this is a reporting surface, not a gate, and a missing or corrupt state
+file produces `unknown` rows rather than a failure. Like every other entry point
+it returns immediately when `BEYIN_INVOKED_BY` is set.
+
+`--json` emits the same data in the shape the future TUI health tab will consume,
+so treat it as a stable contract:
+
+```json
+{
+  "schema_version": 1,
+  "rows": [
+    {
+      "component": "flush",
+      "last_status": "ok",
+      "last_run": "2026-08-28T10:10:00+03:00",
+      "last_error_or_skip": "unknown",
+      "quarantine_count": 1
+    }
+  ]
+}
+```
+
+Shape rules, so a consumer can rely on them:
+
+- `rows` is always present and always holds exactly three rows, in the order
+  `flush`, `compile`, `ingest`, whether or not any state file exists.
+- Every field is a string except `quarantine_count`, which is an integer.
+- Unknown values are the literal string `"unknown"`, never `null` or absent.
+- `last_run` is an ISO-8601 local-offset timestamp when known. Epoch seconds in
+  the source files are converted; strings are passed through unchanged.
+- `quarantine_count` is `len(compile-state.json["quarantined"])`. It is
+  compile-owned and **repeated on every row** rather than being per-component, so
+  the table has one column instead of a footnote. Read it once, not three times.
+- Add fields in a later version rather than renaming or reordering these, and
+  raise `schema_version` when the meaning of an existing field changes.
 
 ## 10. Tests
 

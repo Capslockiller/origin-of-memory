@@ -403,11 +403,18 @@ in the form the hook expects.
   third parties who never consented to being written down. If your sessions
   contain that material, it will be summarised, compiled and stored. This is a
   known open gap, described honestly in [SECURITY.md](SECURITY.md).
-- **Compiler cost grows with the corpus.** The root-map layer cut the per-call
-  base by 63%, but the duplicate-check registry still scales with the number of
-  concepts.
-- **Nightly compile is single-machine.** The trigger claim is a local file; two
-  machines sharing one synced vault can both compile.
+- **Compiler input is now bounded, not free.** The root-map layer cut the
+  per-call base by 63%, and the duplicate-check registry — which used to grow one
+  row per concept forever — is now scoped to the daily log's hubs plus the 50
+  most recently updated concepts, hard-capped at 400 rows. On a synthetic
+  1000-concept corpus that is 67,800 → 15,806 characters. The trade is real: the
+  model sees a partial dedupe view, is told so in one line of the prompt, and can
+  therefore miss a duplicate that lives outside the selected rows.
+- **Cross-machine compile is prevented cooperatively, not guaranteed.** The
+  compile lock records which machine holds it, and a run that finds a live lock
+  from another machine skips instead of compiling alongside it. It depends on
+  your sync tool having propagated the lock file, so a fast enough race can still
+  slip through.
 
 ## Attribution
 

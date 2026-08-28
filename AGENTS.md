@@ -34,6 +34,39 @@ a development dependency and is used only under `scripts/tests/`.
 If a task seems to need a package, it needs a different design. Raising this
 with the operator is correct; adding the dependency quietly is not.
 
+### Shared helpers live in `scripts/beyin_ortak.py`
+
+`write_health`, `write_health_skip`, `_atomic_write_json`, `_lock_exclusive` and
+`_sha256` have **one implementation**, in `scripts/beyin_ortak.py`. `flush.py`,
+`compile.py`, `rootmap.py`, `ingest_common.py` and `retrieve.py` import from it.
+
+These were previously copy-pasted into each module, and the duplication was
+documented here as deliberate: each script had to stay independently runnable,
+and nothing outside the standard library could be imported. Both goals survive a
+shared module, because `beyin_ortak.py` ships in the same directory as its
+callers and is imported the same way as `claude_runner` or `secret_guard` — it is
+not a package, not a dependency, and not an install step. Five copies of an
+`fsync`-and-`os.replace` helper was not independence, it was five places to fix
+the next bug in.
+
+**Import the names directly, do not re-wrap them:**
+
+```python
+from beyin_ortak import _atomic_write_json, _lock_exclusive, _sha256, write_health
+```
+
+The leading underscores are kept, and the import is at module level, because a
+plain `from … import` binds the name into the importing module — so `flush._sha256`
+and `compile._sha256` still resolve, and are the *same object*. Tests and callers
+that reach for those names keep working untouched; that compatibility is the
+reason the aliases exist, and `test_hardening.py::SharedHelperTests` asserts the
+identity so a future refactor cannot quietly fork them again.
+
+If you need module-local behaviour, pass a parameter rather than redefining the
+helper. `write_health()` already takes `component` and `health_name` for exactly
+this reason — that is how `ingest_common.py` writes to `ingest-health.json`
+instead of `health.json`.
+
 ### Bilingual naming is intentional
 
 Turkish and English are deliberately mixed and **must not be "cleaned up":**
@@ -110,10 +143,12 @@ Related rules:
 | --- | --- |
 | `hooks/*.ps1` | Session hooks, registered at user level by the installer |
 | `scripts/*.py` | Flush, compile, root map, retrieval, ingest, secret guard |
+| `scripts/beyin_ortak.py` | Shared health, locking, atomic-write and hashing helpers |
+| `scripts/durum.py` | `python scripts/durum.py [--json]` — one-table health summary |
 | `scripts/tests/` | pytest suite |
 | `skills/` | Skills copied to `<user>\.claude\skills\`; see [skills/README.md](skills/README.md) |
 | `template/` | Vault skeleton, hub config example, rules example |
 | `tools/` | One-off migration helpers, not part of the runtime |
-| `docs/` | Architecture, evaluation, attribution, discoverability |
+| `docs/` | Architecture, compatibility, evaluation, attribution, discoverability |
 
 Contribution process: [CONTRIBUTING.md](CONTRIBUTING.md).

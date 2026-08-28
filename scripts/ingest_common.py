@@ -19,9 +19,9 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from typing import Any, Iterator, NamedTuple, Sequence
 
+from beyin_ortak import _atomic_write_json, _lock_exclusive, write_health
 import claude_runner
 import flush
 import secret_guard
@@ -100,51 +100,6 @@ def health_path(state_dir: Path = STATE_DIR) -> Path:
     return state_dir / HEALTH_NAME
 
 
-def write_health(
-    state_dir: Path,
-    error: str = "",
-    warning: bool = False,
-    counts: dict[str, int] | None = None,
-    last_run: dict[str, Any] | None = None,
-) -> None:
-    """flush.write_health mantığı, ayrı ``ingest-health.json`` dosyasına yazar.
-
-    flush.write_health yolu ``health.json`` olarak sabitlediği için imza
-    üzerinden yönlendirilemiyor; içerik sözleşmesi birebir korunarak kopyalandı.
-    """
-    try:
-        payload: dict[str, Any] = {}
-        path = health_path(state_dir)
-        if path.exists():
-            try:
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    payload.update(loaded)
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
-        payload.update(
-            {
-                "ts": int(time.time()),
-                "component": "ingest",
-                "error": error,
-            }
-        )
-        if warning:
-            warnings = payload.get("warnings", [])
-            if not isinstance(warnings, list):
-                warnings = []
-            if error not in warnings:
-                warnings.append(error)
-            payload["warnings"] = warnings[-20:]
-        if counts is not None:
-            payload["counts"] = counts
-        if last_run is not None:
-            payload["last_run"] = last_run
-        flush._atomic_write_json(path, payload)
-    except OSError:
-        pass
-
-
 def default_state() -> dict[str, Any]:
     return {"version": STATE_VERSION, "sources": {}, "last_run": {}}
 
@@ -167,7 +122,7 @@ def load_state(state_dir: Path = STATE_DIR) -> dict[str, Any]:
 
 
 def save_state(state: dict[str, Any], state_dir: Path = STATE_DIR) -> None:
-    flush._atomic_write_json(state_path(state_dir), state)
+    _atomic_write_json(state_path(state_dir), state)
 
 
 def source_bucket(state: dict[str, Any], source: str) -> dict[str, Any]:
@@ -262,13 +217,16 @@ def _run_claude_with_model(
     prompt: str,
     vault_root: Path,
     model: str,
+    timeout: int | None = None,
 ) -> tuple[str | None, str | None]:
     """Run Claude with a selectable model through the shared hardened runner."""
+    if timeout is None:
+        timeout, _warning = claude_runner.resolve_timeout("ingest")
     return claude_runner.run_claude(
         prompt,
         model=model,
         tools="",
-        timeout=240,
+        timeout=timeout,
         vault_root=vault_root,
         temporary_prefix="beyin-ingest-",
     )
@@ -278,8 +236,15 @@ def _run_codex(
     prompt: str,
     vault_root: Path,
     model: str = DEFAULT_CODEX_MODEL,
+    timeout: int | None = None,
 ) -> tuple[str | None, str | None]:
     """Codex CLI'yi vault dışında, salt-okunur sandbox ve stdin ile çalıştırır."""
+    if timeout is None:
+        # Codex is its own CLI, not a BEYIN_MODEL_BACKEND target, so it takes the
+        # BEYIN_INGEST_TIMEOUT override but never the local-inference bump.
+        timeout, _warning = claude_runner.resolve_timeout(
+            "ingest", backend=claude_runner.BACKEND_CLAUDE
+        )
     codex = shutil.which("codex")
     if codex is None:
         return None, "codex-cli-missing"
@@ -343,7 +308,7 @@ def _run_codex(
                 capture_output=True,
                 cwd=temporary_path,
                 env=environment,
-                timeout=240,
+                timeout=timeout,
                 check=False,
             )
             if result.returncode != 0:
@@ -367,14 +332,21 @@ def _run_claude(
     prompt: str,
     vault_root: Path,
     model: str = DEFAULT_MODEL,
+    timeout: int | None = None,
 ) -> tuple[str | None, str | None]:
+    # The codex branches resolve their own timeout: they are not a
+    # BEYIN_MODEL_BACKEND target, so the local-inference bump must not reach them.
     if model == "codex":
         return _run_codex(prompt, vault_root, DEFAULT_CODEX_MODEL)
     if model.startswith("codex:") and model.removeprefix("codex:"):
         return _run_codex(prompt, vault_root, model.removeprefix("codex:"))
+    if timeout is None:
+        timeout, _warning = claude_runner.resolve_timeout("ingest")
     if model == DEFAULT_MODEL:
-        return flush._run_claude(prompt, vault_root)
-    return _run_claude_with_model(prompt, vault_root, model)
+        # flush's runner is reused for the default model, but the bound that
+        # applies here is the ingest one.
+        return flush._run_claude(prompt, vault_root, timeout)
+    return _run_claude_with_model(prompt, vault_root, model, timeout)
 
 
 def summarize_session(
@@ -400,7 +372,13 @@ def summarize_session(
             ):
                 max_chars, chunk_warning = flush.resolve_flush_chunk_chars()
                 if chunk_warning:
-                    write_health(state_dir, chunk_warning, warning=True)
+                    write_health(
+                        state_dir,
+                        chunk_warning,
+                        warning=True,
+                        component="ingest",
+                        health_name=HEALTH_NAME,
+                    )
         transcript, turn_count = flush.format_turns(
             session.turns,
             max_turns=max(1, len(session.turns)),
@@ -412,7 +390,13 @@ def summarize_session(
         return SummaryResult("", "bos", "below-minimum-turns")
 
     if flush.DIRECTIVE_SHAPED.search(transcript):
-        write_health(state_dir, "warn:directive-shaped-transcript", warning=True)
+        write_health(
+            state_dir,
+            "warn:directive-shaped-transcript",
+            warning=True,
+            component="ingest",
+            health_name=HEALTH_NAME,
+        )
 
     # Sır bekçisi (giriş): kimlik bilgisi kalıpları özetçiye hiç gitmesin.
     transcript, input_hits = secret_guard.redact(transcript)
@@ -421,15 +405,33 @@ def summarize_session(
             state_dir,
             "warn:secret-redacted-input:" + ",".join(input_hits),
             warning=True,
+            component="ingest",
+            health_name=HEALTH_NAME,
         )
 
+    timeout, timeout_warning = claude_runner.resolve_timeout("ingest")
+    if timeout_warning:
+        write_health(
+            state_dir,
+            timeout_warning,
+            warning=True,
+            component="ingest",
+            health_name=HEALTH_NAME,
+        )
     summary, error = _run_claude(
         flush.build_flush_prompt(transcript),
         vault_root,
         model,
+        timeout,
     )
     for backend_warning in claude_runner.last_warnings():
-        write_health(state_dir, backend_warning, warning=True)
+        write_health(
+            state_dir,
+            backend_warning,
+            warning=True,
+            component="ingest",
+            health_name=HEALTH_NAME,
+        )
     if error is not None:
         return SummaryResult("", "fail", error)
     if not summary:
@@ -446,6 +448,8 @@ def summarize_session(
             state_dir,
             "warn:secret-redacted-output:" + ",".join(output_hits),
             warning=True,
+            component="ingest",
+            health_name=HEALTH_NAME,
         )
     return SummaryResult(summary, "ok", "")
 
@@ -491,7 +495,7 @@ def exclusive_lock(state_dir: Path = STATE_DIR) -> Iterator[bool]:
     lock_file = (state_dir / LOCK_NAME).open("a+", encoding="utf-8")
     try:
         try:
-            flush._lock_exclusive(lock_file, blocking=False)
+            _lock_exclusive(lock_file, blocking=False)
         except (BlockingIOError, OSError):
             yield False
             return
