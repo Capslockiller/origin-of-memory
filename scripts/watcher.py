@@ -102,7 +102,7 @@ def generic_candidates(
             file_stat = path.stat()
         except OSError:
             continue
-        if current - file_stat.st_mtime < fresh_seconds:
+        if fresh_seconds > 0 and current - file_stat.st_mtime < fresh_seconds:
             continue
         if ingest_common.file_unchanged(
             state, source, str(path),

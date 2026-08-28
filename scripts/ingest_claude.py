@@ -157,7 +157,7 @@ def candidates(
             watermark = ingest_common.file_watermark(path, file_stat)
             if after_watermark and watermark <= after_watermark and entry is None:
                 continue
-            if current - file_stat.st_mtime < fresh_seconds:
+            if fresh_seconds > 0 and current - file_stat.st_mtime < fresh_seconds:
                 continue
             if _live_flushed(state_dir, key):
                 skips.append((key, "skipped-live"))
