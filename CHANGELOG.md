@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-28
+
+### Added
+
+<!-- yazan: claude · opus-5 -->
+- **Local models tab** in the panel. Backend independence was built but not
+  usable: switching to a local model meant editing an environment variable in a
+  terminal. The tab shows the machine's hardware and the ranked recommendations
+  from `donanim.py` and `model_oneri.py`, the installed inventory from Ollama's
+  own `/api/tags`, and which backend the next pipeline run will actually use.
+  Three actions, each confirming first: **pull** streams Ollama's real completed
+  and total bytes and refuses up front with a number when the disk cannot hold
+  the model; **switch** names the exact `BEYIN_MODEL_BACKEND` value and the
+  exact place it will be stored before writing it, because nothing a live
+  pipeline reads may appear behind the owner's back; **try** sends one fixed
+  prompt through the existing runners and reports the answer, model and latency.
+  When Ollama is unreachable the tab says so rather than showing an empty
+  inventory that reads like a measurement. Model deletion is deliberately
+  absent — the panel deletes nothing.
+- **`Setup.cmd` and `Local Brain.cmd`** at the repository root, so someone who
+  downloaded the source zip can double-click instead of knowing to run a
+  PowerShell script. `Setup.cmd` starts the graphical wizard and falls back to
+  the terminal one; both only launch what already exists.
+- The built installer is now **attached to the release** as
+  `OriginOfMemory-Setup-<version>.exe`, with its SHA256 in the release notes —
+  an unsigned binary people are asked to double-click should at least be
+  verifiable.
+
 ## [0.4.0] - 2026-08-28
 
 ### Added
@@ -511,7 +539,8 @@ see [docs/attribution.md](docs/attribution.md) for the lineage.
   Untrusted-data delimiters are in place, but there is no exclusion list.
 - Windows only; no tested macOS or Linux path.
 
-[Unreleased]: https://github.com/Capslockiller/origin-of-memory/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Capslockiller/origin-of-memory/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Capslockiller/origin-of-memory/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Capslockiller/origin-of-memory/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Capslockiller/origin-of-memory/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Capslockiller/origin-of-memory/compare/v0.1.0...v0.2.0
