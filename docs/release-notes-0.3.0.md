@@ -70,6 +70,15 @@ otherwise. The product was never affected; the test was.
 `kur.ps1` no longer leaves Windows PowerShell's progress rendering enabled
 during the Ollama installer download, which severely slowed the transfer.
 
+`ingest_claude`, `ingest_codex` and the new watcher shared a settle-window
+check written as `current - mtime < fresh_seconds`. With the window set to
+zero — which every caller reads as "disabled" — a file whose mtime landed a
+fraction ahead of the clock was still skipped, and a skipped candidate is
+never classified, so its rejection simply vanished. Measured here, roughly one
+freshly written file in eight carries a future mtime, which made the suite fail
+about two runs in three while passing in isolation. The window now has to be
+positive to filter anything.
+
 ## Still open, on purpose
 
 - Tool-free compile is unmeasured; the default stays `tools`.

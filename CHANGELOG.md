@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-08-28
 
+### Fixed
+
+<!-- yazan: claude · opus-5 -->
+- A settle-window check shared by `ingest_claude`, `ingest_codex` and the
+  watcher skipped files whose mtime landed a fraction ahead of the clock, even
+  when the window was zero and therefore meant "disabled". A skipped candidate
+  is never classified, so its rejection vanished and the suite failed
+  intermittently while passing in isolation. The window must now be positive to
+  filter anything.
+
 ### Added
 
 <!-- yazan: codex · gpt-5.6-sol -->

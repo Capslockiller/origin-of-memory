@@ -7,6 +7,8 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 import tempfile
+import os
+import time
 import unittest
 from unittest import mock
 
@@ -206,3 +208,58 @@ class CodexRolloutTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreshnessFilterTests(unittest.TestCase):
+    """A zero settle window must mean 'disabled', not 'sometimes skips'.
+
+    A file written moments ago can carry an mtime a fraction AHEAD of
+    ``time.time()`` — measured here at roughly one write in eight. With a bare
+    ``current - mtime < fresh_seconds`` test and ``fresh_seconds == 0`` that
+    negative delta silently skipped the file, which made the suite flaky
+    rather than wrong: the skipped candidate was never classified, so its
+    rejection simply vanished.
+    """
+
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.root = Path(self._temporary.name).resolve()
+
+    def _rollout(self, name: str, records: list[dict]) -> Path:
+        target = self.root / "2026" / "08" / "24" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_jsonl(target, records)
+        return target
+
+    def test_future_mtime_is_not_skipped_when_the_window_is_zero(self) -> None:
+        path = self._rollout(
+            "rollout-2026-08-24T02-00-00-user.jsonl",
+            [
+                codex_meta("user-1"),
+                codex_message("user", "merhaba", "2026-08-24T05:00:02.000Z"),
+            ],
+        )
+        ahead = time.time() + 30
+        os.utime(path, (ahead, ahead))
+        state = {"version": 1, "sources": {}, "last_run": {}}
+
+        sessions, _rejects = ingest_codex.candidates(state, sessions_root=self.root)
+
+        self.assertEqual([item.key for item in sessions], ["user-1"])
+
+    def test_a_positive_window_still_skips_a_fresh_file(self) -> None:
+        self._rollout(
+            "rollout-2026-08-24T02-00-00-user.jsonl",
+            [
+                codex_meta("user-1"),
+                codex_message("user", "merhaba", "2026-08-24T05:00:02.000Z"),
+            ],
+        )
+        state = {"version": 1, "sources": {}, "last_run": {}}
+
+        sessions, _rejects = ingest_codex.candidates(
+            state, sessions_root=self.root, fresh_seconds=3600
+        )
+
+        self.assertEqual(sessions, [])

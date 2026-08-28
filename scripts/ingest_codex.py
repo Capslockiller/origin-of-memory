@@ -186,7 +186,7 @@ def candidates(
             file_stat.st_mtime,
         ):
             continue
-        if current - file_stat.st_mtime < fresh_seconds:
+        if fresh_seconds > 0 and current - file_stat.st_mtime < fresh_seconds:
             continue
         try:
             session, reason = read_rollout(path)
