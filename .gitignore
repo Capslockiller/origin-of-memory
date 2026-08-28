@@ -9,3 +9,6 @@ __pycache__/
 
 # Inno Setup build output - a 2 MB binary does not belong in the repo.
 installer/output/
+
+# Compiled launcher - a binary does not belong in the repo.
+LocalBrain.exe

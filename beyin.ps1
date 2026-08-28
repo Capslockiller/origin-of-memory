@@ -1,0 +1,623 @@
+# yazan: codex
+# model: gpt-5.6-sol
+<#
+.SYNOPSIS
+Starts the Origin of Memory operations panel on a loopback-only HTTP server.
+
+.DESCRIPTION
+Serves one self-contained page, reports health and today's activity, and runs
+four explicit maintenance operations. The panel has no destructive route.
+#>
+[CmdletBinding()]
+param(
+  [switch]$NoBrowser,
+  [ValidateRange(2, 3600)]
+  [int]$GraceSeconds = 300
+)
+
+$ErrorActionPreference = 'Stop'
+if ([Environment]::GetEnvironmentVariable('BEYIN_INVOKED_BY')) { exit 0 }
+
+$script:RepoRoot = $PSScriptRoot
+$script:Utf8 = New-Object Text.UTF8Encoding($false)
+$script:Crlf = [string][char]13 + [char]10
+$script:Events = New-Object Collections.ArrayList
+$script:NextSequence = 1
+$script:ActiveOperation = $null
+$script:TokenUsed = $false
+$script:QuitRequested = $false
+$script:ShutdownAt = $null
+$script:IdleSeconds = $GraceSeconds
+
+function New-RandomToken {
+  $bytes = New-Object byte[] 32
+  $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
+  return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+function Read-JsonObject([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @{} }
+  try {
+    $value = [IO.File]::ReadAllText($Path, $script:Utf8) | ConvertFrom-Json
+    if ($null -eq $value) { return @{} }
+    return $value
+  } catch {
+    return @{}
+  }
+}
+
+function Resolve-PanelPaths {
+  $configured = [Environment]::GetEnvironmentVariable('BEYIN_VAULT')
+  $vault = if ($configured) {
+    [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($configured))
+  } else {
+    $script:RepoRoot
+  }
+  $installedScripts = Join-Path $vault '.claude\scripts'
+  $sourceScripts = Join-Path $script:RepoRoot 'scripts'
+  $scripts = if (Test-Path -LiteralPath (Join-Path $installedScripts 'durum.py') -PathType Leaf) {
+    $installedScripts
+  } else {
+    $sourceScripts
+  }
+  return [pscustomobject]@{
+    Vault = $vault
+    Scripts = $scripts
+    State = Join-Path $scripts '.state'
+  }
+}
+
+function Find-PythonCommand {
+  $candidate = $null
+  if ($env:BEYIN_PYTHON) {
+    $command = Get-Command $env:BEYIN_PYTHON -ErrorAction SilentlyContinue
+    if ($command) { $candidate = $command.Source }
+    elseif (Test-Path -LiteralPath $env:BEYIN_PYTHON -PathType Leaf) { $candidate = $env:BEYIN_PYTHON }
+  }
+  if (-not $candidate) {
+    $command = Get-Command python -ErrorAction SilentlyContinue
+    if ($command) { $candidate = $command.Source }
+  }
+  if ($candidate) { return [pscustomobject]@{ Exe = $candidate; Prefix = @() } }
+  $command = Get-Command py -ErrorAction SilentlyContinue
+  if ($command) { return [pscustomobject]@{ Exe = $command.Source; Prefix = @('-3') } }
+  return $null
+}
+
+function ConvertTo-PowerShellLiteral([string]$Value) {
+  return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function New-PythonCommand([string[]]$Arguments) {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $parts = New-Object Collections.Generic.List[string]
+  $parts.Add('& ' + (ConvertTo-PowerShellLiteral $script:Python.Exe))
+  foreach ($item in @($script:Python.Prefix) + @($Arguments)) {
+    $parts.Add((ConvertTo-PowerShellLiteral ([string]$item)))
+  }
+  return "`$env:PYTHONUTF8 = '1'; " + ($parts -join ' ') + '; exit $LASTEXITCODE'
+}
+
+function Add-PanelEvent([string]$Type, [Collections.IDictionary]$Payload) {
+  $sequence = $script:NextSequence
+  $script:NextSequence++
+  $data = [ordered]@{
+    sequence = $sequence
+    type = $Type
+    time = [DateTime]::UtcNow.ToString('o')
+  }
+  if ($Payload) {
+    foreach ($key in $Payload.Keys) { $data[$key] = $Payload[$key] }
+  }
+  [void]$script:Events.Add([pscustomobject]@{
+    Sequence = $sequence
+    Type = $Type
+    Json = ($data | ConvertTo-Json -Depth 30 -Compress)
+  })
+  while ($script:Events.Count -gt 500) { $script:Events.RemoveAt(0) }
+}
+
+function Get-OperationCommand([string]$Kind) {
+  $scriptPath = switch ($Kind) {
+    'doctor' { Join-Path $script:PanelPaths.Scripts 'durum.py' }
+    'compile' { Join-Path $script:PanelPaths.Scripts 'compile.py' }
+    'index' { Join-Path $script:PanelPaths.Scripts 'retrieve.py' }
+    'watcher' { Join-Path $script:PanelPaths.Scripts 'watcher.py' }
+    default { throw "Unknown operation: $Kind" }
+  }
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+    throw "Operation script was not found: $scriptPath"
+  }
+  $arguments = switch ($Kind) {
+    'doctor' { @($scriptPath, '--json', '--state-dir', $script:PanelPaths.State) }
+    'compile' { @($scriptPath) }
+    'index' { @($scriptPath, 'build', '--vault-root', $script:PanelPaths.Vault, '--state-dir', $script:PanelPaths.State) }
+    'watcher' { @($scriptPath, '--once') }
+  }
+  return New-PythonCommand $arguments
+}
+
+function Start-PanelOperation([string]$Kind) {
+  if ($script:ActiveOperation -and -not $script:ActiveOperation.Process.HasExited) { return $false }
+  $command = Get-OperationCommand $Kind
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+  $info = New-Object Diagnostics.ProcessStartInfo
+  $info.FileName = Join-Path $PSHOME 'powershell.exe'
+  $info.Arguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded"
+  $info.WorkingDirectory = $script:PanelPaths.Vault
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  $process = New-Object Diagnostics.Process
+  $process.StartInfo = $info
+  if (-not $process.Start()) { throw "Could not start $Kind." }
+  $outSource = "oom-panel-out-$($process.Id)-$([Guid]::NewGuid().ToString('N'))"
+  $errSource = "oom-panel-err-$($process.Id)-$([Guid]::NewGuid().ToString('N'))"
+  Register-ObjectEvent -InputObject $process -EventName OutputDataReceived -SourceIdentifier $outSource | Out-Null
+  Register-ObjectEvent -InputObject $process -EventName ErrorDataReceived -SourceIdentifier $errSource | Out-Null
+  $process.BeginOutputReadLine()
+  $process.BeginErrorReadLine()
+  $script:ActiveOperation = [pscustomobject]@{
+    Kind = $Kind
+    Process = $process
+    OutSource = $outSource
+    ErrSource = $errSource
+  }
+  Add-PanelEvent 'operation-started' ([ordered]@{ operation = $Kind; process_id = $process.Id })
+  return $true
+}
+
+function Read-OperationEvent([string]$Source, [bool]$IsError) {
+  while ($true) {
+    $eventRecord = Get-Event -SourceIdentifier $Source -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $eventRecord) { break }
+    Remove-Event -EventIdentifier $eventRecord.EventIdentifier -ErrorAction SilentlyContinue
+    $line = $eventRecord.SourceEventArgs.Data
+    if ($null -eq $line -or $line -eq '') { continue }
+    Add-PanelEvent 'operation-output' ([ordered]@{
+      operation = $script:ActiveOperation.Kind
+      stream = $(if ($IsError) { 'stderr' } else { 'stdout' })
+      line = $line
+    })
+  }
+}
+
+function Update-PanelOperation {
+  if (-not $script:ActiveOperation) { return }
+  Read-OperationEvent $script:ActiveOperation.OutSource $false
+  Read-OperationEvent $script:ActiveOperation.ErrSource $true
+  if (-not $script:ActiveOperation.Process.HasExited) { return }
+  $operation = $script:ActiveOperation
+  $operation.Process.WaitForExit()
+  Read-OperationEvent $operation.OutSource $false
+  Read-OperationEvent $operation.ErrSource $true
+  $exitCode = $operation.Process.ExitCode
+  if ($exitCode -eq 0) {
+    Add-PanelEvent 'operation-completed' ([ordered]@{ operation = $operation.Kind; exit_code = $exitCode })
+  } else {
+    Add-PanelEvent 'operation-failed' ([ordered]@{
+      operation = $operation.Kind
+      exit_code = $exitCode
+      message = "$($operation.Kind) failed with exit code $exitCode."
+    })
+  }
+  Unregister-Event -SourceIdentifier $operation.OutSource -ErrorAction SilentlyContinue
+  Unregister-Event -SourceIdentifier $operation.ErrSource -ErrorAction SilentlyContinue
+  $operation.Process.Dispose()
+  $script:ActiveOperation = $null
+  $script:ShutdownAt = [DateTime]::UtcNow.AddSeconds($script:IdleSeconds)
+}
+
+function Invoke-HealthSummary {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $arguments = @($script:Python.Prefix) + @(
+    (Join-Path $script:PanelPaths.Scripts 'durum.py'),
+    '--json',
+    '--state-dir',
+    $script:PanelPaths.State
+  )
+  $oldPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $lines = @(& $script:Python.Exe @arguments 2>&1 | ForEach-Object { $_.ToString() })
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $oldPreference
+  }
+  if ($exitCode -ne 0 -or $lines.Count -eq 0) { throw 'The health command produced no usable JSON.' }
+  return (($lines -join [Environment]::NewLine) | ConvertFrom-Json)
+}
+
+function Convert-StateTime([object]$Value) {
+  if ($Value -is [ValueType] -and $Value -isnot [bool]) {
+    try { return [DateTimeOffset]::FromUnixTimeSeconds([long]$Value).ToLocalTime().ToString('o') } catch {}
+  }
+  if ($Value -is [string] -and $Value) { return $Value }
+  return 'unknown'
+}
+
+function Get-TodaySummary {
+  $today = [DateTime]::Now.ToString('yyyy-MM-dd')
+  $dailyName = "$today.md"
+  $dailyPath = Join-Path (Join-Path $script:PanelPaths.Vault 'daily') $dailyName
+  $dailyText = ''
+  if (Test-Path -LiteralPath $dailyPath -PathType Leaf) {
+    try { $dailyText = [IO.File]::ReadAllText($dailyPath, $script:Utf8) } catch { $dailyText = '' }
+  }
+
+  $ingestState = Read-JsonObject (Join-Path $script:PanelPaths.State 'ingest-state.json')
+  $todaySources = New-Object Collections.Generic.HashSet[string]([StringComparer]::OrdinalIgnoreCase)
+  if ($ingestState.sources) {
+    foreach ($sourceProperty in @($ingestState.sources.PSObject.Properties)) {
+      foreach ($doneProperty in @($sourceProperty.Value.done.PSObject.Properties)) {
+        if ([string]$doneProperty.Value.daily -ceq $dailyName) { [void]$todaySources.Add($sourceProperty.Name) }
+      }
+    }
+  }
+
+  $sessions = New-Object Collections.ArrayList
+  $matches = [regex]::Matches($dailyText, '(?m)^### Oturum \((?<time>\d{2}:\d{2})\)(?<suffix>[^\r\n]*)$')
+  for ($index = 0; $index -lt $matches.Count; $index++) {
+    $match = $matches[$index]
+    $end = if ($index + 1 -lt $matches.Count) { $matches[$index + 1].Index } else { $dailyText.Length }
+    $block = $dailyText.Substring($match.Index, $end - $match.Index)
+    $agent = 'unknown'
+    if ($block -match '<!--\s*session:\S+\s+ts:\S+\s+source:(?<source>[a-z]+)\s*-->') {
+      $agent = $Matches['source']
+    }
+    $suffix = $match.Groups['suffix'].Value.Trim()
+    if ($suffix -match '^[—-]\s*(?<writer>[^·]+)') {
+      $writer = $Matches['writer'].Trim()
+      if ($writer) { $agent = $writer }
+    }
+    if ($agent -eq 'unknown' -and $todaySources.Count -eq 1) {
+      $agent = @($todaySources)[0]
+    }
+    [void]$sessions.Add([ordered]@{ time = $match.Groups['time'].Value; agent = $agent })
+  }
+
+  $lastFlushState = Read-JsonObject (Join-Path $script:PanelPaths.State 'last-flush.json')
+  $compileState = Read-JsonObject (Join-Path $script:PanelPaths.State 'compile-state.json')
+  $lastCompileRun = $null
+  foreach ($run in @($compileState.runs)) {
+    if ([string]$run.daily_file -ceq $dailyName) { $lastCompileRun = $run }
+  }
+
+  $sessionIds = @([regex]::Matches($dailyText, '<!--\s*session:(?<id>\S+)\s+ts:') | ForEach-Object { $_.Groups['id'].Value } | Select-Object -Unique)
+  $conceptCount = 0
+  if ($sessionIds.Count -gt 0 -and $lastCompileRun) {
+    $conceptRoot = Join-Path $script:PanelPaths.Vault 'knowledge\concepts'
+    if (Test-Path -LiteralPath $conceptRoot -PathType Container) {
+      foreach ($concept in @(Get-ChildItem -LiteralPath $conceptRoot -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+        try { $conceptText = [IO.File]::ReadAllText($concept.FullName, $script:Utf8) } catch { continue }
+        $traced = $false
+        foreach ($sessionId in $sessionIds) {
+          if ($conceptText -match ('<!--\s*session:' + [regex]::Escape($sessionId) + '\s')) { $traced = $true; break }
+        }
+        if ($traced) { $conceptCount++ }
+      }
+    }
+  }
+
+  $compileStatus = if ($lastCompileRun) { [string]$lastCompileRun.status } elseif ($compileState.last_status) { [string]$compileState.last_status } else { 'unknown' }
+  $compileAt = if ($lastCompileRun) { Convert-StateTime $lastCompileRun.ts } else { Convert-StateTime $compileState.last_run }
+  $ingestLast = $ingestState.last_run
+  return [ordered]@{
+    date = $today
+    daily_present = [bool]$dailyText
+    sessions = @($sessions)
+    last_flush = [ordered]@{
+      status = $(if ($lastFlushState.status) { [string]$lastFlushState.status } else { 'unknown' })
+      at = Convert-StateTime $lastFlushState.ts
+      detail = $(if ($lastFlushState.detail) { [string]$lastFlushState.detail } else { '' })
+    }
+    last_compile = [ordered]@{ status = $compileStatus; at = $compileAt }
+    concepts_count = $conceptCount
+    ingest = [ordered]@{
+      source = $(if ($ingestLast.source) { [string]$ingestLast.source } else { 'unknown' })
+      at = Convert-StateTime $ingestLast.ts
+      sources_for_today = @($todaySources)
+    }
+  }
+}
+
+function Receive-HttpRequest([Net.Sockets.TcpClient]$Client) {
+  $stream = $Client.GetStream()
+  $stream.ReadTimeout = 5000
+  $memory = New-Object IO.MemoryStream
+  $buffer = New-Object byte[] 4096
+  $separator = $script:Crlf + $script:Crlf
+  $headerEnd = -1
+  $contentLength = 0
+  while ($memory.Length -lt 65536) {
+    $read = $stream.Read($buffer, 0, $buffer.Length)
+    if ($read -le 0) { break }
+    $memory.Write($buffer, 0, $read)
+    $bytes = $memory.ToArray()
+    $text = [Text.Encoding]::ASCII.GetString($bytes)
+    if ($headerEnd -lt 0) {
+      $headerEnd = $text.IndexOf($separator, [StringComparison]::Ordinal)
+      if ($headerEnd -ge 0) {
+        $headerText = $text.Substring(0, $headerEnd)
+        foreach ($line in @($headerText -split $script:Crlf | Select-Object -Skip 1)) {
+          if ($line -match '^(?i:Content-Length):\s*(\d+)\s*$') { $contentLength = [int]$Matches[1] }
+        }
+        if ($contentLength -gt 32768) { throw 'Request body is too large.' }
+      }
+    }
+    if ($headerEnd -ge 0 -and $memory.Length -ge ($headerEnd + 4 + $contentLength)) { break }
+  }
+  if ($headerEnd -lt 0) { throw 'Incomplete HTTP headers.' }
+  $allBytes = $memory.ToArray()
+  $headerText = [Text.Encoding]::ASCII.GetString($allBytes, 0, $headerEnd)
+  $lines = @($headerText -split $script:Crlf)
+  if ($lines[0] -notmatch '^([A-Z]+) ([^ ]+) HTTP/1\.[01]$') { throw 'Invalid request line.' }
+  $method = $Matches[1]
+  $target = $Matches[2]
+  $headers = @{}
+  foreach ($line in @($lines | Select-Object -Skip 1)) {
+    $colon = $line.IndexOf(':')
+    if ($colon -le 0) { throw 'Invalid HTTP header.' }
+    $name = $line.Substring(0, $colon).Trim().ToLowerInvariant()
+    if ($headers.ContainsKey($name)) { throw 'Duplicate HTTP header.' }
+    $headers[$name] = $line.Substring($colon + 1).Trim()
+  }
+  if ($headers.ContainsKey('transfer-encoding')) { throw 'Transfer-Encoding is not supported.' }
+  $body = if ($contentLength -gt 0) { $script:Utf8.GetString($allBytes, $headerEnd + 4, $contentLength) } else { '' }
+  return [pscustomobject]@{ Method = $method; Target = $target; Headers = $headers; Body = $body; Stream = $stream }
+}
+
+function Write-HttpResponse(
+  [IO.Stream]$Stream,
+  [int]$Status,
+  [string]$Reason,
+  [string]$ContentType,
+  [string]$Body,
+  [Collections.IDictionary]$ExtraHeaders
+) {
+  $bodyBytes = $script:Utf8.GetBytes($Body)
+  $lines = New-Object Collections.Generic.List[string]
+  $lines.Add("HTTP/1.1 $Status $Reason")
+  $lines.Add("Content-Type: $ContentType")
+  $lines.Add("Content-Length: $($bodyBytes.Length)")
+  $lines.Add('Connection: close')
+  $lines.Add('Cache-Control: no-store')
+  $lines.Add('X-Content-Type-Options: nosniff')
+  foreach ($key in @($ExtraHeaders.Keys)) { $lines.Add("$($key): $($ExtraHeaders[$key])") }
+  $headerText = ($lines -join $script:Crlf) + $script:Crlf + $script:Crlf
+  $headerBytes = [Text.Encoding]::ASCII.GetBytes($headerText)
+  $Stream.Write($headerBytes, 0, $headerBytes.Length)
+  if ($bodyBytes.Length -gt 0) { $Stream.Write($bodyBytes, 0, $bodyBytes.Length) }
+  $Stream.Flush()
+}
+
+function Write-JsonResponse([IO.Stream]$Stream, [int]$Status, [string]$Reason, [object]$Value, [Collections.IDictionary]$Headers = @{}) {
+  Write-HttpResponse $Stream $Status $Reason 'application/json; charset=utf-8' ($Value | ConvertTo-Json -Depth 30 -Compress) $Headers
+}
+
+function Test-ApiEnvelope([object]$Request, [bool]$RequireCookie) {
+  if ($Request.Headers['host'] -cne $script:ExpectedHost) { return 403 }
+  $origin = [string]$Request.Headers['origin']
+  if ($origin) {
+    if ($origin -cne $script:ExpectedOrigin) { return 403 }
+  } else {
+    $site = [string]$Request.Headers['sec-fetch-site']
+    if ($site -and $site -cne 'same-origin') { return 403 }
+  }
+  if ([string]$Request.Body) {
+    $mediaType = @($Request.Headers['content-type'] -split ';', 2)[0].Trim().ToLowerInvariant()
+    if ($mediaType -ne 'application/json') { return 415 }
+  }
+  if ($RequireCookie) {
+    $cookie = [string]$Request.Headers['cookie']
+    $escaped = [regex]::Escape($script:SessionToken)
+    if ($cookie -notmatch "(?:^|;\s*)oom_panel_session=$escaped(?:;|$)") { return 401 }
+  }
+  return 0
+}
+
+function Invoke-HttpRequest([object]$Request) {
+  $allowed = @(
+    '/', '/panel.html', '/api/session', '/api/health', '/api/today', '/api/events',
+    '/api/action/doctor', '/api/action/compile', '/api/action/index', '/api/action/watcher', '/api/quit'
+  )
+  if ($allowed -cnotcontains $Request.Target) {
+    Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'not_found' })
+    return
+  }
+
+  if ($Request.Target -in @('/', '/panel.html')) {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if ($Request.Headers['host'] -cne $script:ExpectedHost) {
+      Write-JsonResponse $Request.Stream 403 'Forbidden' ([ordered]@{ error = 'invalid_host' })
+      return
+    }
+    $html = [IO.File]::ReadAllText((Join-Path $script:RepoRoot 'gui\panel.html'), $script:Utf8)
+    $securityHeaders = [ordered]@{
+      'Content-Security-Policy' = "default-src 'none'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+      'Referrer-Policy' = 'no-referrer'
+      'X-Frame-Options' = 'DENY'
+    }
+    Write-HttpResponse $Request.Stream 200 'OK' 'text/html; charset=utf-8' $html $securityHeaders
+    return
+  }
+
+  if ($Request.Target -eq '/api/session') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    $guard = Test-ApiEnvelope $Request $false
+    if ($guard -ne 0) {
+      Write-JsonResponse $Request.Stream $guard $(if ($guard -eq 415) { 'Unsupported Media Type' } else { 'Forbidden' }) ([ordered]@{ error = 'request_rejected' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    if ($script:TokenUsed -or -not $body -or [string]$body.token -cne $script:LaunchToken) {
+      Write-JsonResponse $Request.Stream 401 'Unauthorized' ([ordered]@{ error = 'invalid_or_used_token' })
+      return
+    }
+    $script:TokenUsed = $true
+    $cookieHeaders = [ordered]@{ 'Set-Cookie' = "oom_panel_session=$($script:SessionToken); Path=/; HttpOnly; SameSite=Strict" }
+    Write-JsonResponse $Request.Stream 200 'OK' ([ordered]@{ ok = $true }) $cookieHeaders
+    return
+  }
+
+  $guard = Test-ApiEnvelope $Request $true
+  if ($guard -ne 0) {
+    $reason = if ($guard -eq 401) { 'Unauthorized' } elseif ($guard -eq 415) { 'Unsupported Media Type' } else { 'Forbidden' }
+    Write-JsonResponse $Request.Stream $guard $reason ([ordered]@{ error = 'request_rejected' })
+    return
+  }
+
+  if ($Request.Target -eq '/api/health') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    try {
+      Write-JsonResponse $Request.Stream 200 'OK' (Invoke-HealthSummary)
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'health_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/today') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    Write-JsonResponse $Request.Stream 200 'OK' (Get-TodaySummary)
+    return
+  }
+
+  if ($Request.Target -eq '/api/events') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    $lastId = 0
+    [void][int]::TryParse([string]$Request.Headers['last-event-id'], [ref]$lastId)
+    $frames = New-Object Text.StringBuilder
+    foreach ($item in @($script:Events | Where-Object { $_.Sequence -gt $lastId })) {
+      [void]$frames.Append("id: $($item.Sequence)$($script:Crlf)")
+      [void]$frames.Append("event: $($item.Type)$($script:Crlf)")
+      [void]$frames.Append("data: $($item.Json)$($script:Crlf)$($script:Crlf)")
+    }
+    if ($frames.Length -eq 0) { [void]$frames.Append(": keepalive$($script:Crlf)$($script:Crlf)") }
+    Write-HttpResponse $Request.Stream 200 'OK' 'text/event-stream; charset=utf-8' $frames.ToString() ([ordered]@{ 'X-Accel-Buffering' = 'no' })
+    return
+  }
+
+  if ($Request.Target -like '/api/action/*') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    $kind = $Request.Target.Substring('/api/action/'.Length)
+    try {
+      [void](Start-PanelOperation $kind)
+      Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ started = $true; operation = $kind })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'operation_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/quit') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    $script:QuitRequested = $true
+    Write-JsonResponse $Request.Stream 200 'OK' ([ordered]@{ stopping = $true; operation_continues = [bool]$script:ActiveOperation })
+  }
+}
+
+function Open-PanelBrowser([string]$Url) {
+  if ($NoBrowser) {
+    Write-Output "PANEL_READY $Url"
+    return
+  }
+  $edge = Get-Command msedge.exe -ErrorAction SilentlyContinue
+  $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+  $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles')
+  $candidates = @(
+    $(if ($edge) { $edge.Source } else { $null }),
+    $(if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft\Edge\Application\msedge.exe' } else { $null }),
+    $(if ($programFiles) { Join-Path $programFiles 'Microsoft\Edge\Application\msedge.exe' } else { $null })
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+  foreach ($candidate in $candidates) {
+    try {
+      Start-Process -FilePath $candidate -ArgumentList "--app=$Url" -ErrorAction Stop | Out-Null
+      return
+    } catch {
+      Write-Warning "Microsoft Edge could not be launched: $($_.Exception.Message)"
+    }
+  }
+  try {
+    Start-Process $Url -ErrorAction Stop | Out-Null
+  } catch {
+    Write-Warning "No browser could be launched: $($_.Exception.Message)"
+    Write-Host "Open this URL manually: $Url"
+  }
+}
+
+$listener = $null
+try {
+  $script:PanelPaths = Resolve-PanelPaths
+  $script:Python = Find-PythonCommand
+  $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $endpoint = [Net.IPEndPoint]$listener.LocalEndpoint
+  $port = $endpoint.Port
+  $script:ExpectedHost = "127.0.0.1:$port"
+  $script:ExpectedOrigin = "http://$($script:ExpectedHost)"
+  $script:LaunchToken = New-RandomToken
+  $script:SessionToken = New-RandomToken
+  $url = "$($script:ExpectedOrigin)/#$($script:LaunchToken)"
+  Write-Host "PANEL_LISTENING $($endpoint.Address):$port"
+  $script:ShutdownAt = [DateTime]::UtcNow.AddSeconds($script:IdleSeconds)
+  Open-PanelBrowser $url
+
+  while ($true) {
+    Update-PanelOperation
+    if ($script:QuitRequested -and -not $script:ActiveOperation) { break }
+    if ($script:ShutdownAt -and [DateTime]::UtcNow -ge $script:ShutdownAt -and -not $script:ActiveOperation) { break }
+    if ($listener.Pending()) {
+      $client = $listener.AcceptTcpClient()
+      try {
+        $request = Receive-HttpRequest $client
+        $script:ShutdownAt = [DateTime]::UtcNow.AddSeconds($script:IdleSeconds)
+        Invoke-HttpRequest $request
+      } catch {
+        try { Write-JsonResponse $client.GetStream() 400 'Bad Request' ([ordered]@{ error = 'bad_request' }) } catch {}
+      } finally {
+        $client.Dispose()
+      }
+    } else {
+      Start-Sleep -Milliseconds 40
+    }
+  }
+} catch {
+  Write-Error "The operations panel failed: $($_.Exception.Message)"
+  exit 1
+} finally {
+  if ($listener) { $listener.Stop() }
+  if ($script:ActiveOperation) {
+    try {
+      $script:ActiveOperation.Process.WaitForExit()
+      Update-PanelOperation
+    } catch {}
+  }
+}
