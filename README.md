@@ -53,7 +53,7 @@ non-interactive plans, the lower-level `install.ps1`, upgrading and uninstalling
 | You are | What you get | What you need | Preset |
 | --- | --- | --- | --- |
 | A Claude Code user on a subscription | The whole thing: automatic capture, nightly compile, memory injected into every session and every prompt | Windows, Python 3.12+, Claude Code CLI | `cloud` |
-| Someone who wants it local | Same pipeline, but session summaries are written by your own model — Ollama, LM Studio, llama.cpp, vLLM or Antigravity. `claude` is still required for the hooks and the nightly compile | The above, plus a local server or the `agy` CLI | `local` or `hybrid` |
+| Someone who wants it local | Same pipeline, but session summaries are written by your own model — Ollama, LM Studio, llama.cpp, vLLM or Antigravity. Capture no longer needs `claude` (the [watcher](docs/watcher.md) reads transcripts from disk); the nightly compile still runs on `claude` unless you opt into [tool-free mode](docs/tool-free-compile.md), which is built but unmeasured | The above, plus a local server or the `agy` CLI | `local` or `hybrid` |
 | Someone who just wants to search past conversations | Import claude.ai / Codex / Gemini exports and query them from any MCP client or the clipboard bridge. No hooks, no automatic capture, no compile | Windows, Python 3.12+, an MCP-capable client, and a local backend to summarise the imports | `lite` |
 
 ## Other agents
@@ -142,9 +142,14 @@ Lineage, and what this took from where: [docs/attribution.md](docs/attribution.m
 
 ## What you need
 
-- **Windows**, **Python 3.12+** (stdlib only), and the **Claude Code CLI** on
-  `PATH`. Model calls go through `claude -p` on your existing subscription by
-  default — flush uses Haiku, compile uses Sonnet.
+- **Windows** and **Python 3.12+** (stdlib only).
+- **The Claude Code CLI** on `PATH` for the default setup. Model calls go
+  through `claude -p` on your existing subscription — flush uses Haiku, compile
+  uses Sonnet. Since 0.3.0 it is no longer required for *capture*: the
+  [watcher](docs/watcher.md) reads settled transcripts from disk, so a hook is
+  a latency optimisation rather than a dependency. It is still what provides
+  per-message injection, and still what runs the compile unless you opt into
+  [tool-free mode](docs/tool-free-compile.md).
 - **SQLite with FTS5.** Most Windows CPython builds have it; check with
   `python -c "import sqlite3; sqlite3.connect(':memory:').execute('CREATE VIRTUAL TABLE t USING fts5(a)')"`.
 - No Claude subscription? Claude Code also runs on a pay-as-you-go

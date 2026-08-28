@@ -66,9 +66,12 @@ environment variable.
 
 Honest limits:
 
-- Claude Code itself is **still required** — the hooks, the session lifecycle and
-  the transcripts all come from it. This backend only replaces the model that
-  writes the summaries.
+- Claude Code is **no longer required for capture.** Since 0.3.0 the
+  [watcher](watcher.md) reads settled transcripts from disk, so the hooks are a
+  latency optimisation rather than a dependency, and Codex or a generic folder
+  can be the source instead. What Claude Code still uniquely provides is
+  **per-message injection** — that needs a prompt-submit hook, and no other host
+  offers one. This backend only replaces the model that writes the summaries.
 - **Nightly compile still runs on `claude`.** Compile needs the model to write
   files in an isolated staging tree, and `agy` has no per-invocation permission
   scoping — only a user-global allow-list or a blanket auto-approval flag, which

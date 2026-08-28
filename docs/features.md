@@ -101,6 +101,26 @@ Two properties are load-bearing:
 - **Health check skill.** `beyin doktor` reports hook wiring, script presence,
   daily-log freshness, quarantine state, index consistency and last compile
   status in a single table.
+- **Hookless capture.** `scripts/watcher.py` sweeps settled transcripts through
+  the existing ingest pipeline, so capture is a property of the archive on disk
+  rather than of the host and the lifecycle hooks become a latency optimisation.
+  Claude Code, Codex and a documented generic folder contract are supported.
+  Antigravity is **not**: its documentation describes a workspace-to-conversation
+  cache, not a local transcript archive, and a fabricated path that silently
+  captures nothing is worse than an absent adapter.
+- **Context bridge.** The root map is written into a delimited block inside
+  `AGENTS.md`, `GEMINI.md` and `CLAUDE.md` at the vault root, so an agent with no
+  prompt hook still sees what the knowledge base holds and how to search it. A
+  file that does not exist is never created — its existence is the consent — and
+  nothing outside the markers is ever rewritten. This is static memory, not
+  retrieval. See [context-bridge.md](context-bridge.md).
+- **Tool-free compile** (`BEYIN_COMPILE_MODE=text`). The model returns a
+  delimited file transcript and this project writes the staging tree itself, so
+  compile stops being the one call that needs `--tools` and the one call only
+  `claude` can serve. Every downstream gate is unchanged, and a parity test
+  proves both modes promote identical bytes. **Default is still `tools`** — the
+  refusals are proven by mutation testing, the output quality is not yet
+  measured. See [tool-free-compile.md](tool-free-compile.md).
 - **First-class Turkish.** See below.
 
 ## Turkish support
