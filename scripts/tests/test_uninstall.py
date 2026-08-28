@@ -22,7 +22,13 @@ class UninstallDryRunTests(unittest.TestCase):
     def setUp(self) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self._temporary.cleanup)
-        self.root = Path(self._temporary.name)
+        # resolve() matters: uninstall.ps1 normalises the vault path through
+        # [IO.Path]::GetFullPath, which expands 8.3 short names on paths that
+        # exist. A runner whose TEMP carries one (GitHub Actions hands out
+        # C:\Users\RUNNER~1\AppData\Local\Temp) would otherwise register the
+        # short spelling here and match against the long one there, and the
+        # exact-string hook lookup would find nothing.
+        self.root = Path(self._temporary.name).resolve()
         self.vault = self.root / "vault"
         self.profile = self.root / "profile"
         self.appdata = self.root / "appdata"
@@ -148,12 +154,12 @@ class UninstallDryRunTests(unittest.TestCase):
         )
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, output)
-        self.assertEqual(output.count("[DRYRUN][UNREGISTER]"), 6)
-        self.assertEqual(output.count("[DRYRUN][MCP-REMOVE]"), 2)
+        self.assertEqual(output.count("[DRYRUN][UNREGISTER]"), 6, output)
+        self.assertEqual(output.count("[DRYRUN][MCP-REMOVE]"), 2, output)
         self.assertIn("[DRYRUN][REMOVE]", output)
         self.assertIn("Vault memory content was not touched", output)
         self.assertIn("[DONE] mode=dry-run", output)
-        self.assertEqual(self._snapshot(), before)
+        self.assertEqual(self._snapshot(), before, output)
         self.assertEqual(
             (self.vault / "daily" / "keep.md").read_text(encoding="utf-8"),
             "memory",
