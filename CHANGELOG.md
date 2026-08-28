@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+<!-- yazan: claude · opus-5 -->
+- `kur.ps1` handed `model_oneri.py` the hardware probe as a native command
+  argument. Windows PowerShell re-splits the quotes inside a JSON blob, so
+  argparse saw garbage and exited 2 — reproduced here with a 504-character
+  probe before anything was changed. The probe now travels through a temporary
+  file that is removed afterwards, and `model_oneri.py` gained `--probe-file`
+  beside the existing `--probe-json`. This surfaced while chasing an install
+  failure on someone else's machine; it is a real defect and a plausible cause,
+  but that log has not been read, so it is not claimed as *the* cause.
+
 ## [0.4.1] - 2026-08-28
 
 ### Added
