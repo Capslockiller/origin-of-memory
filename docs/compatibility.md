@@ -29,7 +29,13 @@ not and no macOS or Linux path is tested here.
 
 ## Model backends
 
-### `claude` CLI — the default, and the only one that can compile
+### `claude` CLI — the default, and the only one that can compile in tool mode
+
+A [tool-free compile mode](tool-free-compile.md) exists behind
+`BEYIN_COMPILE_MODE=text`, in which the model returns text and this project
+writes the files, so any backend can serve the call. **It is not the default**
+and its output quality is not yet measured, so the statement below still
+describes what actually runs.
 
 The **flag surface used** is exactly:
 
