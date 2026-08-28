@@ -121,6 +121,15 @@ Two properties are load-bearing:
   proves both modes promote identical bytes. **Default is still `tools`** — the
   refusals are proven by mutation testing, the output quality is not yet
   measured. See [tool-free-compile.md](tool-free-compile.md).
+- **Graphical setup.** An Inno Setup `Setup.exe` with the familiar Back / Next /
+  Cancel window, per-user and never elevating, that collects answers and hands a
+  validated plan to `kur.ps1`. Unsigned, so SmartScreen will prompt; the wizard
+  never tries to bypass it. See [installer.md](installer.md).
+- **Local Brain panel.** A window — not a terminal — showing component health,
+  the call ledger and the day's sessions, with confirmed operations (doctor,
+  compile, index rebuild, watcher sweep) streaming their output live. It runs on
+  a loopback server bound to `127.0.0.1` with a single-use token, and **it
+  cannot delete anything**. See [panel.md](panel.md).
 - **First-class Turkish.** See below.
 
 ## Turkish support
