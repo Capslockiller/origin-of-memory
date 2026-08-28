@@ -1325,6 +1325,16 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             rootmap.regenerate(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
         except Exception:
             write_health(STATE_DIR, "rootmap-regen-failed", warning=True)
+        # A fresh map only helps agents that can reach it. Mirroring it into the
+        # context files other harnesses already load is what makes the memory
+        # visible to them without a per-message prompt hook.
+        try:
+            import context_bridge
+
+            if context_bridge.enabled():
+                context_bridge.refresh(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
+        except Exception:
+            write_health(STATE_DIR, "context-bridge-failed", warning=True)
         # Rebuilding FTS5 means re-reading and re-tokenizing every concept
         # note.  When this daily produced no concept change there is nothing
         # for it to discover, so the manifest decides instead of the clock.

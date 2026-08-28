@@ -78,6 +78,23 @@ what is tested is that shape, not any particular provider. Summarisation only.
 Local-model guidance, including timeouts:
 [docs/local-models.md](local-models.md).
 
+## Host surfaces
+
+Not every host offers the same hooks, and the memory reaches each one through
+whatever it does offer.
+
+| Surface | What it needs from the host | Hosts known to provide it |
+| --- | --- | --- |
+| Per-message injection (3 notes per turn) | a prompt-submit hook | Claude Code |
+| Session capture | a session-end / pre-compact hook | Claude Code |
+| Static root map in context | nothing — the agent reads its own context file | any agent with `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md` ([context bridge](context-bridge.md)) |
+| On-demand search | an MCP client | any MCP-speaking client ([`mcp.md`](mcp.md)) |
+| Manual paste | a clipboard | any |
+
+Per-message injection is the one capability that cannot be emulated: without a
+prompt hook there is no point in the turn where anything can be added. That is a
+property of the host, not a gap in this project.
+
 ## What "untested" means here
 
 - **No version pinning is possible.** These are external binaries and endpoints
