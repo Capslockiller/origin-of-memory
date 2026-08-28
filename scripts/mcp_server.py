@@ -80,11 +80,25 @@ ROOT_MAP_DESCRIPTION = (
     "their memory at all."
 )
 
+# Behaviour hints live in the tool's `annotations` object in every revision this
+# server speaks (2025-06-18 onward).  They are hints, not a security boundary —
+# the read-only guarantee is enforced by the server having no write surface at
+# all — but a client that trims or auto-approves on them should see the truth:
+# both tools only read vault files, repeat calls return the same thing, and
+# nothing reaches outside the local vault.
+READ_ONLY_ANNOTATIONS: dict[str, Any] = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+
 TOOLS: tuple[dict[str, Any], ...] = (
     {
         "name": "memory_search",
         "title": "Search persistent memory",
         "description": SEARCH_DESCRIPTION,
+        "annotations": dict(READ_ONLY_ANNOTATIONS),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -107,6 +121,7 @@ TOOLS: tuple[dict[str, Any], ...] = (
         "name": "memory_root_map",
         "title": "Read the memory root map",
         "description": ROOT_MAP_DESCRIPTION,
+        "annotations": dict(READ_ONLY_ANNOTATIONS),
         "inputSchema": {"type": "object", "additionalProperties": False},
     },
 )

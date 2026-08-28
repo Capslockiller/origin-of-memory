@@ -222,7 +222,9 @@ Sonra ne olur:
 - Önce geçmişi doldurmak istersen: `python scripts/ingest.py status`, ardından
   `claude`, `codex`, `web` veya `gemini` alt komutları.
 
-Ayrıntılı hat: [docs/architecture.md](docs/architecture.md).
+Ayrıntılı hat: [docs/architecture.md](docs/architecture.md). Sıralamanın nasıl
+çalıştığı ve tercihe bağlı füzyon yolundaki açık sorular:
+[docs/retrieval.md](docs/retrieval.md).
 
 **Ajanlar için:** bir kodlama ajanını [INSTALL-AGENT.md](INSTALL-AGENT.md)
 dosyasına yönlendirdiğinde kurulumun tamamını — ön koşul kontrolü ve doğrulama

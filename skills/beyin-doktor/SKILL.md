@@ -47,6 +47,30 @@ fix suggestion on red rows. Close with a one-sentence verdict.
     report missing as 🔴 and more than 60 lines as 🟡.
 13. **Stale hook input files** — count `.state\hookin-*.json`; files older
     than one hour are 🟡 because flush should sweep them.
+14. **Index consistency** — does the FTS index still match the notes on disk.
+    Run, with the resolved Python:
+
+    ```powershell
+    python <vault>\.claude\scripts\retrieve.py verify --vault-root <vault>
+    ```
+
+    It recomputes what the index SHOULD hold from `knowledge\concepts\*.md`
+    and diffs that against `.state\notes.db`, printing JSON and exiting 0 only
+    when the two agree. Read the fields rather than the exit code alone:
+
+    - `ok: true` and `expected_count == indexed_count == fts_count` → 🟢.
+    - `error: "index-missing"` → 🔴 (`retrieval never ran; build it with
+      `retrieve.py build``).
+    - non-empty `missing` → 🔴; those notes exist on disk but cannot be
+      retrieved, so the session hook will never inject them. Name up to five.
+    - non-empty `extra` → 🔴; the index still serves notes that were deleted
+      or renamed. Name up to five.
+    - counts agree but `schema_version` is below 2 → 🟡: an index built before
+      the recency signal existed. `rrf` mode falls back to BM25-only ranking
+      until the next rebuild.
+
+    The fix for every red variant is the same one line, so give it once:
+    `python <vault>\.claude\scripts\retrieve.py build`.
 
 ## Report format
 

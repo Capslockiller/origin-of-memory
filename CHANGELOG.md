@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in **hybrid retrieval** (`BEYIN_RETRIEVAL=rrf`): reciprocal rank fusion
+  over BM25, tag/alias overlap and recency, with a bounded recency multiplier.
+  Default stays `bm25` until the fused path is measured against the gold set —
+  the synthetic benchmark suggests it may exceed the 500 ms injection gate on a
+  real corpus, and two open ranking questions are documented rather than tuned
+  away. See [docs/retrieval.md](docs/retrieval.md).
+- **Session anchors**: each flushed daily block carries
+  `<!-- session:<id> ts:<ISO8601> -->`, the compiler carries it into the concept
+  note's sources, and retrieval strips anchors before injection — so a compiled
+  claim can be traced back to the session that produced it.
+- **Compile hygiene**: content-hash skip for unchanged daily logs, an index
+  rebuild gate keyed on a concepts manifest hash, and a minimum-interval gate on
+  the nightly trigger. Skips are recorded in health state as skips, never as
+  errors.
+- **Epistemic-status preservation** in the compiler prompt: hedged statements
+  keep their hedge and date, and a new claim that contradicts an existing note
+  is recorded as an explicit conflict line instead of silently overwriting it.
+- MCP tools now carry behaviour annotations (read-only, non-destructive,
+  idempotent, closed-world) so clients can judge them without guessing.
+- `beyin doktor` gained an index-consistency check: what the FTS index should
+  contain, recomputed from `knowledge/concepts/` and diffed against `notes.db`.
+
 <!-- yazan: codex · gpt-5.6-sol -->
 - Two-screen, one-Enter recommended setup with deterministic JSON planning,
   `-Recommended` agent automation, visible custom defaults, and seven-step

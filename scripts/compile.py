@@ -20,6 +20,7 @@ import time
 from typing import Any, Sequence
 
 import claude_runner
+import retrieve
 import secret_guard
 
 
@@ -124,10 +125,18 @@ TALİMATLAR
 5. Makaleleri kullanıcının dili olan Türkçe yaz. Slug değerlerini ASCII
    kebab-case biçiminde yaz.
 6. Yeni bilgi mevcut bir makaleyle çelişiyorsa çelişkili kopya ekleme. Makaleyi
-   düzeltilmiş duruma güncelle ve gövdesinde `Güncelleme: ...` notuyla düzeltmeyi
-   belirt.
+   düzeltilmiş duruma güncelle, gövdesinde `Güncelleme: ...` notuyla düzeltmeyi
+   belirt ve çelişkiyi `⚠ çelişki: <eski ifade> / <yeni ifade> ({iso_timestamp})`
+   biçiminde ayrı bir satırda açıkça kaydet. Eski ifadeyi sessizce silme.
 7. Kaynak listelerinde bu günlük dosyasını kullan: {daily_name}
 8. Log zaman damgası olarak şunu kullan: {iso_timestamp}
+9. Bilgi kesinliğini olduğu gibi taşı. Günlükte ihtiyatlı geçen bir ifade
+   makalede de ihtiyatını ve tarihini korumalı: "bir kez söylendi, doğrulanmadı,
+   2026-08-27" gibi. Transkriptte belirsiz olan bir iddiayı makalede düz bir
+   olgu cümlesine çevirme; "sanırım", "galiba", "denemedim ama", "bir kez"
+   gibi kayıtları koru.
+10. ## Kaynaklar bölümündeki `<!-- session:... -->` yorumları defter kaydıdır:
+    mevcut olanları aynen koru, silme, değiştirme ve kendin yenisini yazma.
 """
 
 
@@ -193,6 +202,48 @@ def write_health(state_dir: Path, error: str, warning: bool = False) -> None:
         pass
 
 
+def write_health_skip(state_dir: Path, reason: str, component: str = "compile") -> None:
+    """Record a skipped-on-purpose decision without raising the error flag.
+
+    Mirrors ``flush.write_health_skip``: a deliberate skip belongs in the health
+    state where it can be read back, but not in ``error``, which the doctor
+    treats as breakage.
+    """
+    try:
+        payload: dict[str, Any] = {}
+        health_path = state_dir / "health.json"
+        if health_path.exists():
+            try:
+                loaded = json.loads(health_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload.update(loaded)
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+        now = int(time.time())
+        skips = payload.get("skips", [])
+        if not isinstance(skips, list):
+            skips = []
+        entries = [item for item in skips if isinstance(item, dict)]
+        existing = next(
+            (item for item in entries if item.get("reason") == reason), None
+        )
+        if existing is None:
+            entries.append({"reason": reason, "ts": now, "count": 1})
+        else:
+            existing["ts"] = now
+            count = existing.get("count", 0)
+            existing["count"] = (count if isinstance(count, int) else 0) + 1
+        payload["skips"] = entries[-20:]
+        payload["last_skip"] = {
+            "ts": now,
+            "component": component,
+            "reason": reason,
+        }
+        _atomic_write_json(health_path, payload)
+    except OSError:
+        pass
+
+
 def _default_state() -> dict[str, Any]:
     return {
         "ingested": {},
@@ -200,6 +251,7 @@ def _default_state() -> dict[str, Any]:
         "last_run": "",
         "last_status": "ok",
         "runs": [],
+        "concepts_manifest": "",
     }
 
 
@@ -260,6 +312,24 @@ def _sha256(path: Path) -> str:
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def concepts_manifest_hash(vault_root: Path) -> str:
+    """One digest over exactly the files ``retrieve.build_index`` would read.
+
+    ``build_index`` indexes ``knowledge/concepts/*.md`` and nothing else, so the
+    manifest covers the same non-recursive glob: matching it exactly is what
+    makes "unchanged manifest ⇒ index already correct" true.
+    """
+    concepts_dir = vault_root / "knowledge" / "concepts"
+    digest = hashlib.sha256()
+    if concepts_dir.is_dir():
+        for path in sorted(concepts_dir.glob("*.md"), key=lambda item: item.name):
+            digest.update(path.name.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(_sha256(path).encode("ascii"))
+            digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -497,6 +567,75 @@ def _is_allowed_output_file(relative: str) -> bool:
     )
 
 
+SOURCES_HEADING = re.compile(r"(?im)^##[ \t]+Kaynaklar[ \t]*$")
+_NEXT_HEADING = re.compile(r"(?m)^#{1,2}[ \t]+\S")
+
+
+def _is_concept_note(relative: str) -> bool:
+    path = Path(relative)
+    parts = path.parts
+    return (
+        path.suffix == ".md"
+        and len(parts) >= 3
+        and parts[0] == "knowledge"
+        and parts[1] == "concepts"
+    )
+
+
+def _append_source_anchors(text: str, anchors: Sequence[str]) -> str:
+    """Append missing provenance anchors to the note's ``## Kaynaklar`` section."""
+    missing = [anchor for anchor in anchors if anchor not in text]
+    if not missing:
+        return text
+    block = "\n".join(missing)
+    match = SOURCES_HEADING.search(text)
+    if match is None:
+        prefix = text if text.endswith("\n") else text + "\n"
+        return f"{prefix}\n## Kaynaklar\n\n{block}\n"
+    tail = text[match.end() :]
+    following = _NEXT_HEADING.search(tail)
+    cut = match.end() + (following.start() if following else len(tail))
+    section = text[match.end() : cut].rstrip("\n") or "\n"
+    remainder = text[cut:]
+    rebuilt = f"{section}\n{block}\n"
+    if remainder:
+        rebuilt += "\n"
+    return text[: match.end()] + rebuilt + remainder
+
+
+def carry_source_anchors(
+    stage: Path,
+    changed_files: Sequence[str],
+    daily_body: str,
+) -> list[str]:
+    """Carry the daily block's session anchors into the notes it produced.
+
+    Anchors are re-rendered through ``retrieve.format_session_anchor`` rather
+    than copied verbatim: the daily log is untrusted data, and a hand-written
+    ``-->`` inside one would otherwise close the comment early inside a note.
+    """
+    anchors: list[str] = []
+    for anchor in retrieve.parse_session_anchors(daily_body):
+        rendered = retrieve.format_session_anchor(
+            anchor.session, anchor.timestamp, anchor.source
+        )
+        if rendered not in anchors:
+            anchors.append(rendered)
+    if not anchors:
+        return []
+    touched: list[str] = []
+    for relative in changed_files:
+        if not _is_concept_note(relative):
+            continue
+        path = stage / relative
+        text = path.read_text(encoding="utf-8")
+        updated = _append_source_anchors(text, anchors)
+        if updated != text:
+            path.write_text(updated, encoding="utf-8", newline="")
+            touched.append(relative)
+    return touched
+
+
 def _is_allowed_output_directory(relative: str) -> bool:
     parts = Path(relative).parts
     return (
@@ -690,6 +829,12 @@ def _compile_one(
             return "source-changed", "source-changed-after-call"
         after = _manifest(stage)
         changed_files = _validate_manifest_diff(before, after)
+        # Kaynak izi: bu günlük bloğunun oturum çıpaları, ondan üretilen
+        # kavram notlarının Kaynaklar bölümüne taşınır.
+        try:
+            carry_source_anchors(stage, changed_files, daily_body)
+        except (OSError, UnicodeError):
+            write_health(state_dir, "anchor-carry-failed", warning=True)
         # Sır bekçisi: kimlik bilgisi kalıbı taşıyan hiçbir dosya vault'a
         # terfi edemez — model bir sırrı makaleye taşıdıysa koşu reddedilir.
         for relative in changed_files:
@@ -884,12 +1029,28 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             rootmap.regenerate(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
         except Exception:
             write_health(STATE_DIR, "rootmap-regen-failed", warning=True)
+        # Rebuilding FTS5 means re-reading and re-tokenizing every concept
+        # note.  When this daily produced no concept change there is nothing
+        # for it to discover, so the manifest decides instead of the clock.
         try:
-            import retrieve
-
+            manifest = concepts_manifest_hash(VAULT_ROOT)
+        except OSError:
+            manifest = ""
+        if manifest and manifest == state.get("concepts_manifest", ""):
+            write_health_skip(STATE_DIR, "skip:index-rebuild:concepts-unchanged")
+            continue
+        try:
             retrieve.build_index(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
         except Exception:
             write_health(STATE_DIR, "retrieve-rebuild-failed", warning=True)
+            continue
+        state["concepts_manifest"] = manifest
+        try:
+            _save_state(state_path, state)
+        except OSError:
+            write_health(STATE_DIR, "state-write-failed")
+            _release_trigger_claim(trigger_claim)
+            return 0
     return 0
 
 

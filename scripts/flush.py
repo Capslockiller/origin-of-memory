@@ -17,6 +17,7 @@ import time
 from typing import Any, Callable, Sequence
 
 import claude_runner
+import retrieve
 import secret_guard
 
 
@@ -59,6 +60,8 @@ LOCAL_MAX_TRANSCRIPT_CHARS = 24_000
 FLUSH_CHUNK_ENV = "BEYIN_FLUSH_CHUNK_CHARS"
 STALE_HOOK_INPUT_SECONDS = 3_600
 STALE_FLUSH_STATE_SECONDS = 7 * 24 * 60 * 60
+COMPILE_MIN_INTERVAL_ENV = "BEYIN_COMPILE_MIN_INTERVAL_HOURS"
+DEFAULT_COMPILE_MIN_INTERVAL_HOURS = 20.0
 
 # yazan: codex · model: gpt-5.6-sol
 
@@ -126,6 +129,88 @@ def write_health(state_dir: Path, error: str, warning: bool = False) -> None:
         _atomic_write_json(health_path, payload)
     except OSError:
         pass
+
+
+def write_health_skip(state_dir: Path, reason: str, component: str = "flush") -> None:
+    """Record a skipped-on-purpose decision without raising the error flag.
+
+    A skip is not a failure, so it must not land in ``error`` where the doctor
+    reads breakage — but it must never be silent either, or "why did nothing
+    compile last night?" has no answer anywhere.
+    """
+    try:
+        payload: dict[str, Any] = {}
+        health_path = state_dir / "health.json"
+        if health_path.exists():
+            try:
+                loaded = json.loads(health_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload.update(loaded)
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+        now = int(time.time())
+        skips = payload.get("skips", [])
+        if not isinstance(skips, list):
+            skips = []
+        entries = [item for item in skips if isinstance(item, dict)]
+        existing = next(
+            (item for item in entries if item.get("reason") == reason), None
+        )
+        if existing is None:
+            entries.append({"reason": reason, "ts": now, "count": 1})
+        else:
+            existing["ts"] = now
+            count = existing.get("count", 0)
+            existing["count"] = (count if isinstance(count, int) else 0) + 1
+        payload["skips"] = entries[-20:]
+        payload["last_skip"] = {
+            "ts": now,
+            "component": component,
+            "reason": reason,
+        }
+        _atomic_write_json(health_path, payload)
+    except OSError:
+        pass
+
+
+def resolve_compile_min_interval_hours(
+    environment: dict[str, str] | None = None,
+) -> float:
+    """``BEYIN_COMPILE_MIN_INTERVAL_HOURS``; ``0`` disables, junk falls back."""
+    env = os.environ if environment is None else environment
+    raw = (env.get(COMPILE_MIN_INTERVAL_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_COMPILE_MIN_INTERVAL_HOURS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_COMPILE_MIN_INTERVAL_HOURS
+    if value < 0 or value != value:
+        return DEFAULT_COMPILE_MIN_INTERVAL_HOURS
+    return value
+
+
+def _hours_since_last_success(
+    compile_state: dict[str, Any],
+    now: dt.datetime,
+) -> float | None:
+    """Hours since the last run that finished ``ok``; ``None`` if never/unknown.
+
+    A failed last run must not lock the gate, or one bad night silences the
+    compiler for a day.
+    """
+    if str(compile_state.get("last_status", "")) != "ok":
+        return None
+    raw = compile_state.get("last_run")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return (now - parsed).total_seconds() / 3_600.0
 
 
 def _repair_invalid_json_escapes(raw: str) -> str:
@@ -383,12 +468,30 @@ def _run_claude(prompt: str, vault_root: Path) -> tuple[str | None, str | None]:
     )
 
 
+def session_anchor(
+    session_id: str,
+    when: dt.datetime,
+    source: str = retrieve.DEFAULT_SESSION_SOURCE,
+) -> str:
+    """Provenance anchor for one daily session block.
+
+    The compiler carries it into the concept notes distilled from this block;
+    ``retrieve`` strips it back out before anything reaches a session.
+    """
+    return retrieve.format_session_anchor(
+        session_id,
+        when.isoformat(timespec="seconds"),
+        source,
+    )
+
+
 def _append_daily(
     vault_root: Path,
     summary: str,
     reason: str,
     now: dt.datetime,
     suffix: str | None = None,
+    anchor: str | None = None,
 ) -> None:
     daily_dir = vault_root / "daily"
     daily_dir.mkdir(parents=True, exist_ok=True)
@@ -402,9 +505,11 @@ def _append_daily(
 
     if suffix is None:
         suffix = ", compaction öncesi" if reason == "precompact" else ""
+    # Callers that pass no anchor keep the pre-anchor block byte for byte.
+    anchor_block = f"{anchor}\n\n" if anchor else ""
     entry = (
         f"\n### Oturum ({now.strftime('%H:%M')}){suffix}\n\n"
-        f"{summary}\n"
+        f"{anchor_block}{summary}\n"
     )
     with daily_path.open("a", encoding="utf-8") as daily_file:
         daily_file.write(entry)
@@ -479,11 +584,23 @@ def maybe_trigger_compile(
     if not changed:
         return False
 
+    # Second half of the gate: a changed daily log is necessary but not
+    # sufficient — a successful run must also be far enough behind us.
+    minimum_hours = resolve_compile_min_interval_hours()
+    elapsed = _hours_since_last_success(compile_state, current)
+    if minimum_hours > 0 and elapsed is not None and elapsed < minimum_hours:
+        write_health_skip(
+            state_dir,
+            f"skip:compile-trigger:min-interval:{elapsed:.1f}h<{minimum_hours:g}h",
+        )
+        return False
+
     state_dir.mkdir(parents=True, exist_ok=True)
     trigger = state_dir / f"compile-trigger-{current.strftime('%Y-%m-%d')}"
     try:
         descriptor = os.open(trigger, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
+        write_health_skip(state_dir, "skip:compile-trigger:day-already-claimed")
         return False
     os.close(descriptor)
 
@@ -682,7 +799,13 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
             )
 
         try:
-            _append_daily(VAULT_ROOT, summary, args.reason, event_time)
+            _append_daily(
+                VAULT_ROOT,
+                summary,
+                args.reason,
+                event_time,
+                anchor=session_anchor(session_id, event_time),
+            )
             _write_flush_state(
                 STATE_DIR,
                 session_id,

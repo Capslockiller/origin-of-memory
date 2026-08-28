@@ -215,7 +215,9 @@ What happens next:
 - To backfill history first, run `python scripts/ingest.py status` and then the
   `claude`, `codex`, `web` or `gemini` subcommands.
 
-Detailed pipeline: [docs/architecture.md](docs/architecture.md).
+Detailed pipeline: [docs/architecture.md](docs/architecture.md). How ranking
+works, and the open questions in the opt-in fused path:
+[docs/retrieval.md](docs/retrieval.md).
 
 **For agents:** point a coding agent at [INSTALL-AGENT.md](INSTALL-AGENT.md) and
 it can run this whole install for you, prerequisites and verification included.
