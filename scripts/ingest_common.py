@@ -59,6 +59,8 @@ class Session(NamedTuple):
     model: str = ""
     # Günlük başlığında kaynak yerine görünecek etiket (boşsa source kullanılır).
     label: str = ""
+    # Adapter'ın gerçek bir kaynak oturum kimliğinden ürettiği canonical anchor.
+    anchor: str = ""
 
 
 class SummaryResult(NamedTuple):
@@ -486,6 +488,7 @@ def append_historical(
         "ingest",
         session.when,
         suffix=daily_suffix(session, summarizer),
+        anchor=session.anchor or None,
     )
     return daily_path.name
 

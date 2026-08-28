@@ -6,6 +6,8 @@ Tek meşru yol budur: ``.import\\`` klasörüne bırakılan ZIP içindeki
 boyut tavanı aşılırsa koşu istisna atmadan sağlık dosyasına yazılır.
 """
 
+# yazan: codex · gpt-5.6-sol
+
 from __future__ import annotations
 
 import io
@@ -160,6 +162,7 @@ def candidates(
                 watermark=updated_text,
                 model="",
                 label=label,
+                anchor=flush.session_anchor(uuid, when, SOURCE),
             )
         )
     return sessions, ""

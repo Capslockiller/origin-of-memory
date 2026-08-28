@@ -845,6 +845,59 @@ def carry_source_anchors(
     return touched
 
 
+def snapshot_source_anchors(stage: Path) -> dict[str, list[str]]:
+    """Capture canonical anchors in concept notes before the model call."""
+    captured: dict[str, list[str]] = {}
+    concepts = stage / "knowledge" / "concepts"
+    if not concepts.exists():
+        return captured
+    for path in sorted(concepts.rglob("*.md")):
+        relative = path.relative_to(stage).as_posix()
+        anchors: list[str] = []
+        for anchor in retrieve.parse_session_anchors(
+            path.read_text(encoding="utf-8")
+        ):
+            rendered = retrieve.format_session_anchor(
+                anchor.session, anchor.timestamp, anchor.source
+            )
+            if rendered not in anchors:
+                anchors.append(rendered)
+        if anchors:
+            captured[relative] = anchors
+    return captured
+
+
+def restore_source_anchors(
+    stage: Path,
+    changed_files: Sequence[str],
+    before: dict[str, list[str]],
+) -> list[str]:
+    """Restore only pre-call anchors that vanished from rewritten notes.
+
+    Existing post-call anchors keep their order, including anchors the model
+    added.  Missing earlier anchors are appended in their pre-call order.
+    """
+    touched: list[str] = []
+    for relative in changed_files:
+        anchors = before.get(relative)
+        if not anchors or not _is_concept_note(relative):
+            continue
+        path = stage / relative
+        text = path.read_text(encoding="utf-8")
+        current = {
+            retrieve.format_session_anchor(
+                anchor.session, anchor.timestamp, anchor.source
+            )
+            for anchor in retrieve.parse_session_anchors(text)
+        }
+        missing = [anchor for anchor in anchors if anchor not in current]
+        updated = _append_source_anchors(text, missing)
+        if updated != text:
+            path.write_text(updated, encoding="utf-8", newline="")
+            touched.append(relative)
+    return touched
+
+
 def _is_allowed_output_directory(relative: str) -> bool:
     parts = Path(relative).parts
     return (
@@ -1110,6 +1163,7 @@ def _compile_one(
         if _sha256(staged_daily) != expected_digest:
             return "source-changed", "source-changed-before-call"
         before = _manifest(stage)
+        earlier_anchors = snapshot_source_anchors(stage)
         root_map_text = (stage / "knowledge" / "index.md").read_text(
             encoding="utf-8"
         )
@@ -1173,6 +1227,9 @@ def _compile_one(
             return "source-changed", "source-changed-after-call"
         after = _manifest(stage)
         changed_files = _validate_manifest_diff(before, after)
+        # Model bütün notu yeniden yazsa bile daha önceki kaynak izlerini
+        # deterministik olarak geri koy; başarısızlıkta anchorsız terfi etme.
+        restore_source_anchors(stage, changed_files, earlier_anchors)
         # Kaynak izi: bu günlük bloğunun oturum çıpaları, ondan üretilen
         # kavram notlarının Kaynaklar bölümüne taşınır.
         try:

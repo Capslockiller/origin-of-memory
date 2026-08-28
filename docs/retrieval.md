@@ -284,20 +284,25 @@ main reason `rrf` ships opt-in. Lowering `BEYIN_RRF_K` widens the RRF band but
 does not close the gap on its own; either the weighting or the constant needs to
 be chosen against the gold set, not chosen in advance.
 
-**Only the Claude Code flush path writes anchors.** `flush._append_daily()` takes
-an optional `anchor=`, and the archive ingest paths (`ingest_common.py` and the
-per-source ingest scripts) do not yet pass one. Sessions imported from a Codex,
-web or Gemini archive therefore fall back to frontmatter dates, and the
-`source:` field's other three values are currently reserved rather than used.
-The plumbing is there; wiring the ingest side is a separate change.
+<!-- yazan: codex · gpt-5.6-sol -->
+**Archive anchor coverage follows the source's identity guarantees.** Claude
+Code archive, Codex rollout and claude.ai web imports now render the same
+canonical anchor as the live flush path and pass it through `_append_daily()`;
+their `source:` values are `claude`, `codex` and `web`. Gemini remains partial:
+the Takeout-derived canonical records expose activity IDs, not a conversation or
+session ID, and the adapter groups them into synthetic day-sized chunks. It
+therefore deliberately omits an anchor instead of presenting the synthetic
+ingest key as session provenance, so those notes still fall back to frontmatter
+dates.
 
-**A rewritten note can lose earlier anchors.** The compiler appends the current
-daily block's anchors deterministically, but the model rewrites the whole note
-body when it updates one, so anchors carried in by *earlier* compiles survive
-only because the prompt tells the model to preserve them. If that instruction is
-ignored, the note's date silently falls back to frontmatter. Deterministic
-preservation — diffing the pre-call note and restoring anchors that vanished —
-would close this properly.
+**Anchor preservation is deterministic, but provenance is still note-level.**
+Before the model call, the compiler snapshots every existing concept note's
+anchors. After the call and before promotion, it restores only pre-call anchors
+that vanished from rewritten notes, then carries the current daily block's
+anchors as before. Existing post-call anchors keep their order and model-added
+anchors are retained. This prevents a rewrite from silently losing earlier
+event dates; it does not identify which individual sentence within a note came
+from which anchored session.
 
 **The interval gate can delay a wanted compile.** A run that found nothing to do
 still counts as a successful run, so a no-op at 18:05 followed by a real session

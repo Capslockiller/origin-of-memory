@@ -1,5 +1,7 @@
 """Claude arşiv adaptörü: gürültü dizinleri, sidechain/tool_result, tarihleme."""
 
+# yazan: codex · gpt-5.6-sol
+
 from __future__ import annotations
 
 import datetime as dt
@@ -16,6 +18,7 @@ from _helpers import claude_record, claude_tool_result_record, pad_claude_transc
 import flush
 import ingest_claude
 import ingest_common
+import retrieve
 
 
 OLD = time.time() - 10 * 24 * 60 * 60
@@ -104,6 +107,30 @@ class ClaudeArchiveTests(unittest.TestCase):
         self.assertNotIn("komut çıktısı", texts)
         self.assertEqual(model, "claude-opus-5")
         self.assertEqual(timestamp, "2026-08-24T21:30:00.000Z")
+
+    def test_candidate_carries_its_real_claude_session_anchor(self) -> None:
+        self._transcript(
+            "E--Workspace",
+            "claude-session-1",
+            [claude_record("user", "soru", "2026-08-24T18:00:00.000Z")],
+        )
+
+        sessions, _ = ingest_claude.candidates(
+            ingest_common.default_state(),
+            projects_root=self.projects,
+            state_dir=self.state_dir,
+        )
+
+        self.assertEqual(len(sessions), 1)
+        parsed = retrieve.parse_session_anchors(sessions[0].anchor)
+        self.assertEqual(
+            [(item.session, item.source) for item in parsed],
+            [("claude-session-1", "claude")],
+        )
+        self.assertEqual(
+            parsed[0].timestamp,
+            sessions[0].when.isoformat(timespec="seconds"),
+        )
 
     def test_dating_uses_last_included_turn_and_crosses_midnight(self) -> None:
         value = ingest_common.to_local("2026-08-24T21:30:00.000Z")
