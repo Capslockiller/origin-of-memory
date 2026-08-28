@@ -99,6 +99,7 @@
     .tab::before { display: inline-block; width: 26px; color: #e28a61; }
     .tab[data-view="health"]::before { content: "●"; }
     .tab[data-view="today"]::before { content: "◷"; font-size: 1.2rem; }
+    .tab[data-view="models"]::before { content: "◇"; font-size: 1.15rem; }
     .tab[aria-selected="true"] { background: #263746; color: #ffffff; }
     .rail-note { margin-top: auto; padding: 0 10px; color: #94a1ad; font-size: .78rem; }
     .workspace { min-width: 0; padding: clamp(24px, 4vw, 48px); }
@@ -142,6 +143,28 @@
     .metric-value { margin-top: 8px; font-size: 1.35rem; font-weight: 750; overflow-wrap: anywhere; }
     .metric-detail { margin-top: 5px; color: var(--muted); font-size: .84rem; }
     .sessions { margin-top: 20px; }
+    .local-stack { display: grid; gap: 20px; }
+    .hardware-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .panel-body { padding: 20px 22px; }
+    .control-grid { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, .7fr) auto auto; gap: 12px; align-items: end; }
+    .control { display: grid; gap: 6px; }
+    .control label { color: var(--muted); font-size: .8rem; font-weight: 700; }
+    select {
+      min-height: 48px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 9px 12px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+    }
+    select:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .backend-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+    .backend-summary .metric { box-shadow: none; padding: 16px; }
+    .notice { margin-top: 14px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--muted); }
+    .notice.bad { color: var(--bad); }
+    .pull-cell { width: 1%; white-space: nowrap; }
+    .mini-action { min-height: 38px; padding: 7px 11px; }
     .session-list { list-style: none; padding: 0; margin: 0; }
     .session { display: grid; grid-template-columns: 86px 1fr; align-items: center; gap: 18px; padding: 17px 22px; border-bottom: 1px solid var(--line); }
     .session:last-child { border-bottom: 0; }
@@ -170,6 +193,8 @@
     @media (max-width: 1050px) {
       .operation-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
       .accounting { grid-template-columns: 1fr; }
+      .hardware-grid, .backend-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .control-grid { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 880px) {
       .app { grid-template-columns: 1fr; }
@@ -185,7 +210,7 @@
       .tab { min-width: 96px; padding: 9px; }
       .topbar { display: block; }
       .connection { margin-top: 12px; }
-      .summary-grid, .operation-grid { grid-template-columns: 1fr; }
+      .summary-grid, .operation-grid, .hardware-grid, .backend-summary, .control-grid { grid-template-columns: 1fr; }
       .workspace { padding: 18px 14px 28px; }
     }
   </style>
@@ -200,6 +225,7 @@
       <nav class="tabs" role="tablist" aria-label="Panel sections">
         <button class="tab" id="tab-health" role="tab" aria-selected="true" aria-controls="view-health" data-view="health">Health</button>
         <button class="tab" id="tab-today" role="tab" aria-selected="false" aria-controls="view-today" data-view="today">Today</button>
+        <button class="tab" id="tab-models" role="tab" aria-selected="false" aria-controls="view-models" data-view="models">Local models</button>
       </nav>
       <div class="rail-note">Loopback only · local session</div>
     </aside>
@@ -250,16 +276,68 @@
         </div>
       </section>
 
+      <section class="view local-stack" id="view-models" role="tabpanel" aria-labelledby="tab-models" hidden>
+        <section aria-labelledby="computer-title">
+          <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="computer-title">This computer</h2><span class="section-note">From donanim.py --json</span></div>
+          <div class="summary-grid hardware-grid">
+            <article class="metric"><div class="metric-label">RAM</div><div class="metric-value" id="model-ram">Unknown</div><div class="metric-detail">Reported system memory</div></article>
+            <article class="metric"><div class="metric-label">CPU</div><div class="metric-value" id="model-cpu">Unknown</div><div class="metric-detail" id="model-cores">Core count unknown</div></article>
+            <article class="metric"><div class="metric-label">GPU / VRAM</div><div class="metric-value" id="model-gpu">Unknown</div><div class="metric-detail" id="model-gpu-source">No supported measurement</div></article>
+            <article class="metric"><div class="metric-label">Model-store free disk</div><div class="metric-value" id="model-disk">Unknown</div><div class="metric-detail" id="model-store">Store path unknown</div></article>
+          </div>
+          <div class="notice bad" id="python-notice" hidden></div>
+        </section>
+
+        <section class="panel" aria-labelledby="fits-title">
+          <div class="section-head"><h2 id="fits-title">What fits</h2><span class="section-note">Ranked by model_oneri.py</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Model</th><th>Verdict</th><th>Size</th><th>Reason</th><th>Action</th></tr></thead>
+              <tbody id="fit-rows"><tr><td colspan="5" class="muted">Open this tab to run the hardware probe.</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="installed-title">
+          <div class="section-head"><h2 id="installed-title">Installed models</h2><span class="section-note" id="ollama-state">Checking Ollama…</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Model</th><th>Bytes on disk</th><th>Modified</th><th>Digest</th></tr></thead>
+              <tbody id="installed-rows"><tr><td colspan="4" class="muted">Checking Ollama's loopback API…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="backend-title">
+          <div class="section-head"><h2 id="backend-title">Active backend</h2><span class="section-note">Resolved by claude_runner</span></div>
+          <div class="panel-body">
+            <div class="backend-summary">
+              <article class="metric"><div class="metric-label">Next text run</div><div class="metric-value" id="active-backend">Unknown</div><div class="metric-detail" id="backend-warning"></div></article>
+              <article class="metric"><div class="metric-label">Fast slug</div><div class="metric-value" id="fast-slug">Unknown</div></article>
+              <article class="metric"><div class="metric-label">Smart slug</div><div class="metric-value" id="smart-slug">Unknown</div></article>
+              <article class="metric"><div class="metric-label">Compile run</div><div class="metric-value" id="compile-backend">Unknown</div><div class="metric-detail">Tool-mode fallback</div></article>
+            </div>
+            <div class="control-grid">
+              <div class="control"><label for="backend-choice">Backend to operate</label><select id="backend-choice"><option value="claude">claude</option><option value="antigravity">antigravity</option><option value="ollama">ollama</option><option value="openai-compat">openai-compat</option></select></div>
+              <div class="control"><label for="tier-choice">Smoke-test tier</label><select id="tier-choice"><option value="haiku">fast / haiku</option><option value="sonnet">smart / sonnet</option></select></div>
+              <button class="action local-action" id="switch-backend" type="button">Switch backend</button>
+              <button class="action local-action" id="try-backend" type="button">Try it</button>
+            </div>
+            <p class="section-note" id="backend-storage">A switch writes BEYIN_MODEL_BACKEND only after showing the exact value and storage location.</p>
+          </div>
+        </section>
+      </section>
+
       <section class="operations" aria-labelledby="operations-title">
         <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="operations-title">Operations</h2><span class="section-note">Every operation asks first</span></div>
         <div class="operation-grid">
-          <button class="action" data-operation="doctor">Run the doctor</button>
-          <button class="action" data-operation="compile">Compile now</button>
-          <button class="action" data-operation="index">Rebuild the index</button>
-          <button class="action" data-operation="watcher">Watcher sweep once</button>
+          <button class="action maintenance-action" data-operation="doctor">Run the doctor</button>
+          <button class="action maintenance-action" data-operation="compile">Compile now</button>
+          <button class="action maintenance-action" data-operation="index">Rebuild the index</button>
+          <button class="action maintenance-action" data-operation="watcher">Watcher sweep once</button>
         </div>
         <div class="output" aria-live="polite">
-          <div class="output-head"><span id="operation-state">No operation running</span><button class="close-button" id="close-panel" type="button">Close panel</button></div>
+          <div class="output-head"><span id="operation-state">No operation running</span><span><button class="close-button" id="cancel-pull" type="button" hidden>Cancel pull</button> <button class="close-button" id="close-panel" type="button">Close panel</button></span></div>
           <pre id="operation-output">Output will appear here.</pre>
         </div>
       </section>
@@ -269,7 +347,7 @@
   <script>
     (() => {
       'use strict';
-      const labels = { doctor: 'Run the doctor', compile: 'Compile now', index: 'Rebuild the index', watcher: 'Watcher sweep once' };
+      const labels = { doctor: 'Run the doctor', compile: 'Compile now', index: 'Rebuild the index', watcher: 'Watcher sweep once', pull: 'Pull model', backend: 'Switch backend', try: 'Try backend' };
       const confirmations = {
         doctor: 'Run the doctor now? This reads and reports the current system state.',
         compile: 'Compile the pending daily memory now?',
@@ -281,10 +359,13 @@
       const connection = document.getElementById('connection');
       const output = document.getElementById('operation-output');
       const operationState = document.getElementById('operation-state');
-      const actionButtons = Array.from(document.querySelectorAll('.action'));
+      const maintenanceButtons = Array.from(document.querySelectorAll('.maintenance-action'));
+      const cancelPull = document.getElementById('cancel-pull');
       let lastEventId = 0;
       let stopped = false;
       let activeOperation = '';
+      let localLoaded = false;
+      let localData = null;
 
       function api(path, options = {}) {
         const request = Object.assign({ credentials: 'same-origin', cache: 'no-store', mode: 'same-origin' }, options);
@@ -382,6 +463,124 @@
         });
       }
 
+      function formatGb(value) {
+        return typeof value === 'number' ? value.toFixed(2) + ' GB' : 'Unknown';
+      }
+
+      function renderMessageRow(body, columns, message) {
+        body.replaceChildren();
+        const row = document.createElement('tr');
+        const cell = textCell(message, 'muted');
+        cell.colSpan = columns;
+        row.append(cell);
+        body.append(row);
+      }
+
+      function renderLocalModels(data) {
+        localData = data;
+        const notice = document.getElementById('python-notice');
+        notice.hidden = !data.python_message;
+        notice.textContent = data.python_message || '';
+
+        const computer = data.computer;
+        if (computer) {
+          document.getElementById('model-ram').textContent = formatGb(computer.ram_gb);
+          document.getElementById('model-cpu').textContent = (computer.cpu && computer.cpu.name) || 'Unknown';
+          const physical = computer.cpu && computer.cpu.physical_cores;
+          const logical = computer.cpu && computer.cpu.logical_cores;
+          document.getElementById('model-cores').textContent = (physical == null ? 'unknown' : physical) + ' physical / ' + (logical == null ? 'unknown' : logical) + ' logical cores';
+          const gpus = computer.gpus || [];
+          document.getElementById('model-gpu').textContent = gpus.length ? gpus.map((gpu) => (gpu.name || 'Unknown GPU') + ' / ' + formatGb(gpu.vram_gb)).join('; ') : 'Unknown';
+          document.getElementById('model-gpu-source').textContent = gpus.length ? gpus.map((gpu) => gpu.source || 'unknown source').join('; ') : 'No supported measurement';
+          document.getElementById('model-disk').textContent = formatGb(computer.free_disk_gb);
+          document.getElementById('model-store').textContent = computer.model_store || 'Store path unknown';
+        } else {
+          document.getElementById('model-ram').textContent = 'Unknown';
+          document.getElementById('model-cpu').textContent = 'Unknown';
+          document.getElementById('model-cores').textContent = 'Not measured';
+          document.getElementById('model-gpu').textContent = 'Unknown';
+          document.getElementById('model-gpu-source').textContent = 'Not measured';
+          document.getElementById('model-disk').textContent = 'Unknown';
+          document.getElementById('model-store').textContent = 'Not measured';
+        }
+
+        const ollama = data.ollama || {};
+        const fitBody = document.getElementById('fit-rows');
+        const recommendations = data.recommendations;
+        if (!Array.isArray(recommendations)) {
+          renderMessageRow(fitBody, 5, 'Fit recommendations are unavailable; no model or size has been assumed.');
+        } else if (!recommendations.length) {
+          renderMessageRow(fitBody, 5, 'model_oneri.py returned no recommendations.');
+        } else {
+          fitBody.replaceChildren();
+          recommendations.forEach((item) => {
+            const row = document.createElement('tr');
+            const verdictClass = item.label === 'fits-gpu' ? 'good' : item.label === 'no-fit' ? 'bad' : 'warn';
+            row.append(textCell(item.tag, 'component'));
+            row.append(textCell(item.label, 'badge ' + verdictClass));
+            row.append(textCell(String(item.size_gb) + ' GB'));
+            row.append(textCell(item.why, 'muted'));
+            const actionCell = document.createElement('td');
+            actionCell.className = 'pull-cell';
+            if (data.python_available && ollama.status === 'running') {
+              const button = document.createElement('button');
+              button.className = 'action mini-action local-action';
+              button.type = 'button';
+              button.dataset.pullModel = item.tag;
+              button.disabled = Boolean(activeOperation);
+              button.textContent = 'Pull';
+              actionCell.append(button);
+            } else {
+              actionCell.textContent = 'Unavailable';
+              actionCell.className += ' muted';
+            }
+            row.append(actionCell);
+            fitBody.append(row);
+          });
+        }
+
+        document.getElementById('ollama-state').textContent = ollama.message || 'Ollama status is unavailable.';
+        const installedBody = document.getElementById('installed-rows');
+        if (!Array.isArray(ollama.models)) {
+          renderMessageRow(installedBody, 4, ollama.message || 'Installed models cannot be determined.');
+        } else if (!ollama.models.length) {
+          renderMessageRow(installedBody, 4, 'Ollama is running and reports no installed models.');
+        } else {
+          installedBody.replaceChildren();
+          ollama.models.forEach((model) => {
+            const row = document.createElement('tr');
+            row.append(textCell(model.name || model.model || 'Unknown', 'component'));
+            row.append(textCell(model.size_bytes == null ? 'Unknown' : Number(model.size_bytes).toLocaleString() + ' bytes'));
+            row.append(textCell(formatTime(model.modified_at)));
+            row.append(textCell(model.digest || 'Unknown', 'muted'));
+            installedBody.append(row);
+          });
+        }
+
+        const active = data.active_backend;
+        document.getElementById('active-backend').textContent = active ? active.backend : 'Unknown';
+        document.getElementById('backend-warning').textContent = active ? (active.warning || '') : 'Not resolved';
+        document.getElementById('fast-slug').textContent = active && active.models && active.models.fast ? active.models.fast : 'Unset';
+        document.getElementById('smart-slug').textContent = active && active.models && active.models.smart ? active.models.smart : 'Unset';
+        document.getElementById('compile-backend').textContent = active ? active.compile_backend : 'Unknown';
+        document.getElementById('backend-storage').textContent = 'Switches write BEYIN_MODEL_BACKEND to ' + (data.backend_storage || 'the documented user environment') + ', only after showing the exact change.';
+        if (active && ['claude', 'antigravity', 'ollama', 'openai-compat'].includes(active.backend)) {
+          document.getElementById('backend-choice').value = active.backend;
+        }
+        ['switch-backend', 'try-backend'].forEach((id) => {
+          const button = document.getElementById(id);
+          button.dataset.available = String(Boolean(data.python_available));
+          button.disabled = Boolean(activeOperation) || !data.python_available;
+        });
+      }
+
+      async function loadLocalModels() {
+        const response = await api('/api/local-models');
+        if (!response.ok) throw new Error('Local model data is unavailable.');
+        renderLocalModels(await response.json());
+        localLoaded = true;
+      }
+
       async function loadData() {
         const [health, today] = await Promise.all([api('/api/health'), api('/api/today')]);
         if (!health.ok) throw new Error('Health data is unavailable.');
@@ -392,13 +591,29 @@
 
       function appendOutput(line, isError) {
         if (output.textContent === 'Output will appear here.') output.textContent = '';
-        output.textContent += (isError ? '[error] ' : '') + line + '\n';
+        let shown = line;
+        if (!isError && (activeOperation === 'pull' || activeOperation === 'try')) {
+          try {
+            const payload = JSON.parse(line);
+            if (activeOperation === 'pull') {
+              const bytes = payload.completed != null && payload.total != null ? ' · ' + Number(payload.completed).toLocaleString() + ' / ' + Number(payload.total).toLocaleString() + ' bytes' : '';
+              shown = (payload.status || 'Ollama pull update') + bytes;
+            } else {
+              shown = 'Answer: ' + (payload.answer || '(no answer)') + '\nLatency: ' + payload.latency_ms + ' ms\nModel: ' + (payload.model || 'unresolved') + '\nBackend: ' + payload.backend;
+              if (payload.error) shown += '\nError: ' + payload.error;
+            }
+          } catch (_) {}
+        }
+        output.textContent += (isError ? '[error] ' : '') + shown + '\n';
         output.scrollTop = output.scrollHeight;
       }
 
       function setActive(kind) {
         activeOperation = kind || '';
-        actionButtons.forEach((button) => { button.disabled = Boolean(activeOperation); });
+        document.querySelectorAll('.action').forEach((button) => {
+          button.disabled = Boolean(activeOperation) || button.dataset.available === 'false';
+        });
+        cancelPull.hidden = activeOperation !== 'pull';
         connection.className = 'connection' + (activeOperation ? ' busy' : '');
         connection.textContent = activeOperation ? 'Operation running' : 'Connected';
       }
@@ -418,15 +633,20 @@
           if (event.type === 'operation-started') {
             setActive(event.operation);
             output.textContent = '';
-            operationState.textContent = labels[event.operation] + ' · running';
+            operationState.textContent = (labels[event.operation] || event.operation) + ' · running';
+            if (event.model) appendOutput('Model: ' + event.model, false);
+            if (event.storage) appendOutput('Pending: BEYIN_MODEL_BACKEND=' + event.value + '\nStorage: ' + event.storage, false);
           } else if (event.type === 'operation-output') {
             appendOutput(event.line, event.stream === 'stderr');
-          } else if (event.type === 'operation-completed' || event.type === 'operation-failed') {
+          } else if (event.type === 'operation-completed' || event.type === 'operation-failed' || event.type === 'operation-cancelled') {
             const failed = event.type === 'operation-failed';
-            operationState.textContent = labels[event.operation] + (failed ? ' · failed' : ' · complete') + ' · exit ' + event.exit_code;
-            if (failed && event.message) appendOutput(event.message, true);
+            const cancelled = event.type === 'operation-cancelled';
+            operationState.textContent = (labels[event.operation] || event.operation) + (cancelled ? ' · cancelled' : failed ? ' · failed' : ' · complete') + ' · exit ' + event.exit_code;
+            if ((failed || cancelled) && event.message) appendOutput(event.message, failed);
+            if (event.operation === 'backend' && event.value) appendOutput('New value: BEYIN_MODEL_BACKEND=' + event.value + '\nStorage: ' + event.storage, false);
             setActive('');
             loadData().catch(showConnectionError);
+            if (localLoaded) loadLocalModels().catch(showConnectionError);
           }
         });
       }
@@ -471,13 +691,19 @@
           document.querySelectorAll('.tab').forEach((item) => item.setAttribute('aria-selected', String(item === tab)));
           document.getElementById('view-health').hidden = tab.dataset.view !== 'health';
           document.getElementById('view-today').hidden = tab.dataset.view !== 'today';
-          const today = tab.dataset.view === 'today';
-          title.textContent = today ? 'Today' : 'System health';
-          lede.textContent = today ? 'Sessions captured today and the work produced from them.' : 'The latest evidence from every part of the memory pipeline.';
+          document.getElementById('view-models').hidden = tab.dataset.view !== 'models';
+          const headings = {
+            health: ['System health', 'The latest evidence from every part of the memory pipeline.'],
+            today: ['Today', 'Sessions captured today and the work produced from them.'],
+            models: ['Local models', 'Hardware evidence, Ollama inventory, and the backend the next model call will use.']
+          };
+          title.textContent = headings[tab.dataset.view][0];
+          lede.textContent = headings[tab.dataset.view][1];
+          if (tab.dataset.view === 'models' && !localLoaded) loadLocalModels().catch(showConnectionError);
         });
       });
 
-      actionButtons.forEach((button) => {
+      maintenanceButtons.forEach((button) => {
         button.addEventListener('click', async () => {
           const kind = button.dataset.operation;
           if (!window.confirm(confirmations[kind])) return;
@@ -491,6 +717,71 @@
             appendOutput(error.message, true);
           }
         });
+      });
+
+      document.getElementById('fit-rows').addEventListener('click', async (event) => {
+        const button = event.target.closest('button[data-pull-model]');
+        if (!button || !localData) return;
+        const model = button.dataset.pullModel;
+        const candidate = (localData.recommendations || []).find((item) => item.tag === model);
+        if (!candidate) return;
+        const required = Math.round(Number(candidate.size_gb) * 150) / 100;
+        const message = 'Pull ' + model + ' through Ollama\'s loopback streaming API?\n\nCatalogue size: ' + candidate.size_gb + ' GB. Disk preflight: ' + required.toFixed(2) + ' GB required.\n\nIf cancelled, partial data is kept so Ollama can resume it.';
+        if (!window.confirm(message)) return;
+        try {
+          const response = await api('/api/action/pull', { method: 'POST', body: JSON.stringify({ model }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'The pull could not start.');
+          setActive('pull');
+        } catch (error) {
+          operationState.textContent = 'Pull model · refused';
+          appendOutput(error.message, true);
+        }
+      });
+
+      document.getElementById('switch-backend').addEventListener('click', async () => {
+        const backend = document.getElementById('backend-choice').value;
+        const confirmation = 'Set BEYIN_MODEL_BACKEND=' + backend + ' in Windows user environment (HKCU\\Environment)';
+        const message = 'Switch the backend for the next pipeline text run?\n\nExact change: BEYIN_MODEL_BACKEND=' + backend + '\nStored in: Windows user environment (HKCU\\Environment)\n\nThe new value will be shown after the write.';
+        if (!window.confirm(message)) return;
+        try {
+          const response = await api('/api/action/backend', { method: 'POST', body: JSON.stringify({ backend, confirmation }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'The backend could not be switched.');
+          operationState.textContent = 'Switch backend · complete · exit 0';
+          output.textContent = 'New value: ' + result.setting + '=' + result.value + '\nStorage: ' + result.storage + '\n';
+          await loadLocalModels();
+        } catch (error) {
+          operationState.textContent = 'Switch backend · failed';
+          appendOutput(error.message, true);
+        }
+      });
+
+      document.getElementById('try-backend').addEventListener('click', async () => {
+        const backend = document.getElementById('backend-choice').value;
+        const tier = document.getElementById('tier-choice').value;
+        if (!window.confirm('Send one fixed smoke-test prompt through ' + backend + ' (' + tier + ')? One prompt, one answer, no history.')) return;
+        try {
+          const response = await api('/api/action/try', { method: 'POST', body: JSON.stringify({ backend, tier }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'The smoke test could not start.');
+          setActive('try');
+        } catch (error) {
+          operationState.textContent = 'Try backend · could not start';
+          appendOutput(error.message, true);
+        }
+      });
+
+      cancelPull.addEventListener('click', async () => {
+        if (!window.confirm('Cancel this pull? Ollama will keep its partial, resumable state; nothing will be deleted.')) return;
+        try {
+          const response = await api('/api/action/pull-cancel', { method: 'POST', body: '{}' });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'The pull could not be cancelled.');
+          operationState.textContent = 'Pull model · cancelling';
+        } catch (error) {
+          appendOutput(error.message, true);
+        }
       });
 
       document.getElementById('close-panel').addEventListener('click', async () => {
