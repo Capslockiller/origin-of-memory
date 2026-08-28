@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+<!-- yazan: odena · claude-opus-5 -->
+- **Context bridge** (`scripts/context_bridge.py`). Per-message injection needs
+  a prompt hook and only some hosts offer one; the bridge closes most of that
+  gap from the other side. After a successful compile the root map is written
+  into a delimited block inside `AGENTS.md`, `GEMINI.md`, and `CLAUDE.md` at the
+  vault root, so an agent that never calls a hook still sees what the knowledge
+  base holds and how to search it. A file that does not exist is **never
+  created** — its existence is the user's consent — and nothing outside the
+  markers is ever rewritten. A file whose markers are damaged is left completely
+  untouched and reported, because half a marker means a human edited the block
+  and guessing where it ended would destroy their text. Identical content is not
+  rewritten, headings are demoted one level so the map never outranks its host,
+  and the block is secret-scanned before any write. Toggle with
+  `BEYIN_CONTEXT_BRIDGE=off`. See [`docs/context-bridge.md`](docs/context-bridge.md).
+- **Tool-free compile mode**, behind `BEYIN_COMPILE_MODE=text`
+  (`scripts/compile_text.py`). The model returns a delimited file transcript and
+  this project writes the staging tree itself, so compile stops being the one
+  call that needs `--tools` and `--permission-mode` — and stops being the one
+  call only `claude` can serve. Everything downstream is unchanged: the same
+  manifest diff, path allowlist, directive quarantine, secret guard, schema gate
+  and atomic promotion audit the result, and a parity test proves both modes
+  promote identical bytes from identical model output. Refusals are proven by
+  mutation testing: forbidden paths, traversal, absolute paths, truncated
+  blocks, duplicates, oversized output and leaked credentials each fail the run
+  or drop the block. **The default is still `tools`** and stays there until the
+  measured gate in the v0.6 plan has run against a real model. See
+  [`docs/tool-free-compile.md`](docs/tool-free-compile.md).
+
+### Changed
+
+- `docs/compatibility.md` now states which memory surface each host actually
+  provides, and separates "the only backend that can compile" into "the only one
+  that can compile *in tool mode*".
+
 ## [0.2.0] - 2026-08-28
 
 ### Added
