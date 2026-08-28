@@ -303,9 +303,28 @@ function Write-JsonResponse([IO.Stream]$Stream, [int]$Status, [string]$Reason, [
 
 function Test-ApiEnvelope([object]$Request, [bool]$RequireCookie) {
   if ($Request.Headers['host'] -cne $script:ExpectedHost) { return 403 }
-  if ($Request.Headers['origin'] -cne $script:ExpectedOrigin) { return 403 }
-  $mediaType = @($Request.Headers['content-type'] -split ';', 2)[0].Trim().ToLowerInvariant()
-  if ($mediaType -ne 'application/json') { return 415 }
+
+  # A browser omits Origin on a same-origin GET and sends no Content-Type on a
+  # bodyless request. Demanding both on every route rejected the page's own
+  # fetch() and EventSource calls with 403 and 415. The Python tests could not
+  # see this: they send whatever the test hands them, while a real browser
+  # decides these headers itself.
+  $origin = [string]$Request.Headers['origin']
+  if ($origin) {
+    if ($origin -cne $script:ExpectedOrigin) { return 403 }
+  } else {
+    # No Origin means same-origin by construction. Chromium still states it in
+    # Sec-Fetch-Site; when that header exists and disagrees, refuse.
+    $site = [string]$Request.Headers['sec-fetch-site']
+    if ($site -and $site -cne 'same-origin') { return 403 }
+  }
+
+  # Only a request that carries a body has to declare its type.
+  $hasBody = [string]$Request.Body
+  if ($hasBody) {
+    $mediaType = @($Request.Headers['content-type'] -split ';', 2)[0].Trim().ToLowerInvariant()
+    if ($mediaType -ne 'application/json') { return 415 }
+  }
   if ($RequireCookie) {
     $cookie = [string]$Request.Headers['cookie']
     $escaped = [regex]::Escape($script:SessionToken)
@@ -332,7 +351,11 @@ function Invoke-HttpRequest([object]$Request) {
     }
     $html = [IO.File]::ReadAllText((Join-Path $script:RepoRoot 'gui\kur.html'), $script:Utf8)
     $securityHeaders = [ordered]@{
-      'Content-Security-Policy' = "default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+      # connect-src is load-bearing: with default-src 'none' and no connect-src,
+      # the browser blocks the page's fetch() to its OWN api routes. The Python
+      # tests drive the server directly and never see this - only a real browser
+      # enforces CSP - so the omission survived until the page was opened.
+      'Content-Security-Policy' = "default-src 'none'; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
       'Referrer-Policy' = 'no-referrer'
       'X-Frame-Options' = 'DENY'
     }
