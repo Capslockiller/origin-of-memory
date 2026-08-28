@@ -312,3 +312,41 @@ class GuiWizardServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(POWERSHELL, "Windows PowerShell is required")
+class GuiWizardIdleShutdownTests(unittest.TestCase):
+    """An untouched wizard must still stop.
+
+    `ShutdownAt` was armed only after an operation completed, so a page that was
+    opened and abandoned — or never opened at all — left the process holding a
+    loopback port forever. Measured before the fix: one run outlived its 600
+    second grace by hours.
+    """
+
+    def test_an_idle_server_exits_without_ever_being_used(self) -> None:
+        process = subprocess.Popen(
+            [
+                POWERSHELL,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(REPO_ROOT / "kur-gui.ps1"),
+                "-NoBrowser",
+                "-GraceSeconds",
+                "2",
+            ],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self.addCleanup(process.kill)
+        try:
+            # Generous relative to the 2 second grace, tight enough that "never"
+            # cannot pass: before the fix this waited forever.
+            process.wait(timeout=45)
+        except subprocess.TimeoutExpired:
+            self.fail("the idle wizard never exited")
+        self.assertEqual(process.returncode, 0)
