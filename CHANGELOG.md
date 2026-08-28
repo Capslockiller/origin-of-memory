@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+<!-- yazan: claude · opus-5 -->
+- **Graphical setup wizard, phase one** (`kur-gui.ps1`, `gui/kur.html`). The
+  terminal wizard is hard to follow, so the setup surface is moving to a
+  browser page driven by a loopback server. The server is PowerShell rather
+  than Python because the wizard's own job includes installing Python — a
+  wizard that needs Python cannot run on the machine it is meant to fix. A raw
+  `TcpListener` on `127.0.0.1` binds unprivileged; `HttpListener` was avoided
+  because HTTP.sys URL reservations can demand elevation elsewhere. A
+  single-use 256-bit token travels in the URL fragment, so it never reaches the
+  server or a log, and is exchanged once for a `SameSite=Strict; HttpOnly`
+  cookie; every API call must also carry an exact `Host` and `Origin`. The page
+  makes no external request of any kind. Detection is not reimplemented — the
+  System Check screen calls what `kur.ps1` already probes — and progress rides
+  a sequence-numbered SSE stream with replay, so closing the browser drops the
+  event stream without killing the work. **Installation is not yet driven by
+  the UI**; see [`docs/gui-wizard.md`](docs/gui-wizard.md) for what phase two
+  must add.
+
 ## [0.3.0] - 2026-08-28
 
 ### Fixed
