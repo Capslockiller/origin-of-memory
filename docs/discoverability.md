@@ -34,9 +34,18 @@ Status as of **2026-08-28**.
       gap — every link shared anywhere renders as a bare grey card until it is
       set. Specification: [outreach/social-preview.md](outreach/social-preview.md).
 
-<!-- ORCHESTRATOR: record the exact 16 topics and the final description line
-     here once convenient, so this file is the record rather than the GitHub
-     UI being the only copy. -->
+**Live values, recorded here so this file is the record and not the GitHub UI:**
+
+Description:
+
+> Persistent memory for Claude Code — a second brain: automatic session
+> capture, nightly knowledge compiler, FTS5 BM25 retrieval injected into every
+> prompt. Runs on Claude, Antigravity, Ollama or any local OpenAI-compatible
+> model. Windows-native, stdlib-only, MCP server, setup wizard, Turkish-aware.
+
+Topics (16): `agent-memory` `claude` `claude-code` `fts5` `hooks`
+`knowledge-base` `llm` `local-llm` `mcp` `memory` `obsidian` `ollama` `pkm`
+`powershell` `second-brain` `windows`
 
 ## 2. Repository settings
 
@@ -45,10 +54,11 @@ Status as of **2026-08-28**.
 
 - [x] **Issues enabled.** A project asking for bug reports must have somewhere
       to put them.
-- [ ] **Discussions.** Not enabled. `.github/ISSUE_TEMPLATE/config.yml` already
-      points questions at three Discussion categories, and those links 404 until
-      this is turned on. Enable it only with the intent to answer — an
-      unanswered discussion board reads worse than no board.
+- [x] **Discussions.** Enabled 2026-08-28. `.github/ISSUE_TEMPLATE/config.yml`
+      points questions at three Discussion categories; verify those categories
+      exist in the repository's Discussions settings, since the default set may
+      not match the names the config uses. Enabled with the intent to answer —
+      an unanswered discussion board reads worse than no board.
 - [ ] **Private vulnerability reporting** (Settings → Code security). This is
       what [../SECURITY.md](../SECURITY.md) tells reporters to use, so it must
       actually be on.
