@@ -1,5 +1,7 @@
 """Omurga: özet sözleşmesi, sır bataryası, tarihsel ekleme, durum defteri."""
 
+# yazan: codex · gpt-5.6-sol
+
 from __future__ import annotations
 
 import datetime as dt
@@ -17,6 +19,7 @@ import flush
 import ingest
 import ingest_codex
 import ingest_common
+import retrieve
 from ingest_common import Session
 
 
@@ -211,6 +214,20 @@ class HistoricalAppendTests(unittest.TestCase):
         text = (self.root / "daily" / name).read_text(encoding="utf-8")
         self.assertEqual(text.count(ingest_common.BACKFILL_NOTE), 1)
         self.assertEqual(text.count("### Oturum ("), 2)
+
+    def test_historical_append_passes_the_adapter_anchor(self) -> None:
+        session = _session([])
+        anchor = flush.session_anchor(session.key, session.when, "codex")
+        session = session._replace(anchor=anchor)
+
+        name = ingest_common.append_historical(self.root, GOOD_SUMMARY, session)
+
+        text = (self.root / "daily" / name).read_text(encoding="utf-8")
+        parsed = retrieve.parse_session_anchors(text)
+        self.assertEqual(
+            [(item.session, item.source) for item in parsed],
+            [("key-1", "codex")],
+        )
 
     def test_existing_daily_gets_no_backfill_note(self) -> None:
         session = _session([], source="arşiv-claude")

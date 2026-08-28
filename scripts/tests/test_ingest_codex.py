@@ -1,5 +1,7 @@
 """Codex rollout adaptörü: kabul/red filtreleri, zarf eleme, tavanlar."""
 
+# yazan: codex · gpt-5.6-sol
+
 from __future__ import annotations
 
 import datetime as dt
@@ -12,6 +14,7 @@ import _helpers
 from _helpers import codex_message, codex_meta, codex_turn_context, write_jsonl
 
 import ingest_codex
+import retrieve
 
 
 class CodexRolloutTests(unittest.TestCase):
@@ -116,6 +119,15 @@ class CodexRolloutTests(unittest.TestCase):
                 ("assistant", "plan şu"),
                 ("assistant", "bitti"),
             ],
+        )
+        parsed = retrieve.parse_session_anchors(session.anchor)
+        self.assertEqual(
+            [(item.session, item.source) for item in parsed],
+            [("user-1", "codex")],
+        )
+        self.assertEqual(
+            parsed[0].timestamp,
+            session.when.isoformat(timespec="seconds"),
         )
         # Tarih SON dahil edilen turdan gelir (05:00:09Z), boş turdan değil.
         self.assertEqual(

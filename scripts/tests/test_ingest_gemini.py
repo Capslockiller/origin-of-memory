@@ -125,6 +125,7 @@ class DayGroupingTests(unittest.TestCase):
         self.assertEqual(sessions[0].turns[0], ("user", "soru-a"))
         self.assertEqual(sessions[1].turns[0], ("user", "soru-b"))
         self.assertEqual(sessions[0].when.hour, 10)
+        self.assertTrue(all(session.anchor == "" for session in sessions))
         self.assertTrue(all("notice" not in str(session.turns) for session in sessions))
 
     def test_missing_store_has_stable_error(self) -> None:

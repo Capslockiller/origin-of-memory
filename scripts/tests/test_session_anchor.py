@@ -5,6 +5,7 @@ anchor present in the vault and absent from everything a session can see.
 """
 
 # yazan: claude · opus-5
+# yazan: codex · gpt-5.6-sol
 
 from __future__ import annotations
 
@@ -268,6 +269,30 @@ class CompilerCarriesAnchorTests(unittest.TestCase):
         self.assertNotIn("a-->", appended)
         self.assertEqual(len(retrieve.parse_session_anchors(text)), 1)
 
+    def test_restore_keeps_post_call_order_and_only_adds_missing_earlier(self) -> None:
+        earlier_a = retrieve.format_session_anchor("earlier-a", "2026-08-25")
+        earlier_b = retrieve.format_session_anchor("earlier-b", "2026-08-26")
+        model_added = retrieve.format_session_anchor("model-added", "2026-08-27")
+        path = self._write(
+            "deneme.md", CONCEPT_TEXT + earlier_a + "\n" + earlier_b + "\n"
+        )
+        before = compile_module.snapshot_source_anchors(self.stage)
+        path.write_text(
+            CONCEPT_TEXT + earlier_b + "\n" + model_added + "\n",
+            encoding="utf-8",
+        )
+
+        touched = compile_module.restore_source_anchors(
+            self.stage, ["knowledge/concepts/deneme.md"], before
+        )
+
+        parsed = retrieve.parse_session_anchors(path.read_text(encoding="utf-8"))
+        self.assertEqual(touched, ["knowledge/concepts/deneme.md"])
+        self.assertEqual(
+            [item.session for item in parsed],
+            ["earlier-b", "model-added", "earlier-a"],
+        )
+
 
 class RetrieveStripsAnchorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -421,6 +446,31 @@ class EndToEndAnchorTests(unittest.TestCase):
                 self.assertTrue(result["notes"])
                 for injected in result["notes"]:
                     self.assertNotIn("session:", injected["body"])
+
+    def test_model_deleted_earlier_anchor_is_restored_before_promotion(self) -> None:
+        earlier = retrieve.format_session_anchor(
+            "earlier-session", "2026-08-26T09:00:00+00:00", "web"
+        )
+        note = self.root / "knowledge" / "concepts" / "kalici-bellek.md"
+        note.write_text(CONCEPT_TEXT + earlier + "\n", encoding="utf-8")
+        flush._append_daily(self.root, GOOD_SUMMARY, "sessionend", MOMENT)
+
+        def deleting_stub(_prompt: str, stage: Path) -> str | None:
+            target = stage / "knowledge" / "concepts" / "kalici-bellek.md"
+            target.write_text(
+                CONCEPT_TEXT.replace("Gövde.", "Modelin yeniden yazdığı gövde."),
+                encoding="utf-8",
+            )
+            return None
+
+        with mock.patch.object(compile_module, "_run_claude", deleting_stub):
+            self.assertEqual(compile_module.main([]), 0)
+
+        parsed = retrieve.parse_session_anchors(note.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [(item.session, item.source) for item in parsed],
+            [("earlier-session", "web")],
+        )
 
 
 if __name__ == "__main__":

@@ -129,6 +129,10 @@ def candidates(
                     watermark=str(part[-1].get("ts", "")),
                     model="",
                     label="gemini",
+                    # Takeout etkinlik kimlikleri bir konuşma/oturum kimliği
+                    # değildir; sentetik gün-parça key'ini provenance diye
+                    # uydurmak yerine frontmatter tarihine bilinçli düşeriz.
+                    anchor="",
                 )
             )
     return sessions, ""

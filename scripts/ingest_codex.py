@@ -6,6 +6,8 @@
 sağlamalı. Anahtar yoksa da elenir — bozuk dev dosya böyle düşer.
 """
 
+# yazan: codex · gpt-5.6-sol
+
 from __future__ import annotations
 
 import datetime as dt
@@ -13,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import flush
 import ingest_common
 from ingest_common import Session
 
@@ -145,6 +148,7 @@ def read_rollout(path: Path) -> tuple[Session | None, str]:
             origin=str(path),
             watermark="",
             model=model,
+            anchor=flush.session_anchor(session_id, when, SOURCE),
         ),
         "",
     )

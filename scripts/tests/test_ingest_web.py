@@ -1,5 +1,7 @@
 """Web ZIP adaptörü: zip-slip reddi, boyut tavanı, filigran davranışı."""
 
+# yazan: codex · gpt-5.6-sol
+
 from __future__ import annotations
 
 import json
@@ -14,6 +16,7 @@ from _helpers import conversation
 
 import ingest_common
 import ingest_web
+import retrieve
 
 
 class WebImportTests(unittest.TestCase):
@@ -67,6 +70,15 @@ class WebImportTests(unittest.TestCase):
         self.assertEqual(
             session.when,
             ingest_common.to_local("2026-08-20T11:59:00.000000Z"),
+        )
+        parsed = retrieve.parse_session_anchors(session.anchor)
+        self.assertEqual(
+            [(item.session, item.source) for item in parsed],
+            [("uuid-1", "web")],
+        )
+        self.assertEqual(
+            parsed[0].timestamp,
+            session.when.isoformat(timespec="seconds"),
         )
 
     def test_zip_slip_refused(self) -> None:

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Eski Claude Code transkriptlerini (``~/.claude/projects``) arşivden çeker."""
 
+# yazan: codex · gpt-5.6-sol
+
 from __future__ import annotations
 
 import datetime as dt
@@ -171,6 +173,7 @@ def candidates(
                     origin=str(path),
                     watermark="",
                     model=model,
+                    anchor=flush.session_anchor(key, when, "claude"),
                 )
             )
     return sessions, skips

@@ -39,6 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+<!-- yazan: codex · gpt-5.6-sol -->
+- Archive ingest now carries canonical session anchors for Claude Code archive,
+  Codex rollout and claude.ai web sessions, so imported provenance and recency
+  no longer collapse to note frontmatter when the source supplies a genuine
+  session ID. Gemini stays deliberately anchors-free because its Takeout-derived
+  day chunks have no genuine session identity to claim.
+- The compiler snapshots pre-call concept-note anchors and restores only those
+  a model rewrite removed before promotion, so event provenance no longer
+  depends on the model obeying a preservation instruction; post-call order and
+  model-added anchors remain untouched.
+
 - `docs/compatibility.md` now states which memory surface each host actually
   provides, and separates "the only backend that can compile" into "the only one
   that can compile *in tool mode*".
