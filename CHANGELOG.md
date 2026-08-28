@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: claude · opus-5 -->
+- **A real Windows installer** (`installer/origin-of-memory.iss`, built with Inno
+  Setup). The familiar setup window with Back / Next / Cancel, an Add/Remove
+  Programs entry and a desktop shortcut. Per-user: it never asks for
+  administrator rights and installs nothing system-wide. `kur.ps1` stays the
+  installation authority — the wizard collects answers, writes a plan and hands
+  it over. Detection is the existing code, not a reimplementation. The vault
+  default deliberately avoids a OneDrive-redirected Documents folder, and the
+  Ready page itemises exactly what will happen before anything does. The output
+  is **unsigned**, so Windows will show a SmartScreen prompt; the wizard never
+  tries to bypass it. See [`docs/installer.md`](docs/installer.md).
+- **Local Brain, the operations panel** (`beyin.ps1`, `gui/panel.html`,
+  `LocalBrain.exe`). A window that shows whether the system is alive and runs
+  its operations, opened from a shortcut rather than a terminal. Health is the
+  live form of what `beyin doktor` reports, read from `durum.py --json` because
+  that contract was already documented as stable for exactly this; Today shows
+  the day's sessions, the last flush and the last compile. Four operations —
+  doctor, compile, index rebuild, watcher sweep — each confirming first and
+  streaming over SSE, so closing the browser drops the view and not the work.
+  **Nothing in the panel deletes anything**, and a test greps the server for
+  file-removal primitives so that guarantee cannot rot quietly. The launcher is
+  a console-free C# binary built with the inbox `csc.exe`; its icon is an
+  original placeholder, deliberately not anyone else's mark. See
+  [`docs/panel.md`](docs/panel.md).
+
+### Added
+
+<!-- yazan: claude · opus-5 -->
 - **Graphical setup wizard, phase one** (`kur-gui.ps1`, `gui/kur.html`). The
   terminal wizard is hard to follow, so the setup surface is moving to a
   browser page driven by a loopback server. The server is PowerShell rather

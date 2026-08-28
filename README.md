@@ -48,6 +48,21 @@ again to install. Nothing is written before that second Enter. Presets,
 non-interactive plans, the lower-level `install.ps1`, upgrading and uninstalling:
 [docs/install.md](docs/install.md).
 
+## Two ways in
+
+A **graphical installer** (`Setup.exe`, built from `installer/`) walks the usual
+Back / Next / Cancel wizard, installs per-user without ever asking for
+administrator rights, and hands a validated plan to `kur.ps1`. It is unsigned,
+so Windows shows a SmartScreen prompt; the wizard never tries to bypass it.
+
+**Local Brain** is the panel that comes with it — a window rather than a
+terminal, showing component health, the call ledger and today's sessions, with
+confirmed operations that stream their output live. It runs on a loopback
+server, makes no external request, and cannot delete anything. See
+[docs/panel.md](docs/panel.md).
+
+The terminal path (`kur.ps1`) is unchanged and still works.
+
 ## Is this for me?
 
 | You are | What you get | What you need | Preset |
