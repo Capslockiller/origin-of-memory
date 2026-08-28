@@ -100,3 +100,20 @@ therefore remain explicitly unverified:
 
 The Python tests only validate static installer invariants and source-file
 completeness. They cannot replace the first compile and clean-VM install test.
+
+## What Windows will do the first time
+
+The output is unsigned, and a freshly compiled binary has no reputation, so
+expect two prompts and know the difference:
+
+- **SmartScreen** — "Windows protected your PC". Click *More info* to see the
+  publisher and run it anyway. This is reputation, not a detection.
+- **Defender's "send a sample?"** — cloud protection asking permission to upload
+  the file to Microsoft for analysis. It is not a quarantine and nothing was
+  found. Sending it is harmless for this project (the code is MIT and carries no
+  secrets) and it helps the hash build reputation, but it does upload a file to
+  a third party, so it is the operator's call.
+
+Neither is bypassed by this project and neither should be. Do not add a Defender
+exclusion to silence them; the honest fixes are code signing, which costs money,
+or accepting the prompt.

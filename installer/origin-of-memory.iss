@@ -3,7 +3,7 @@
 ; Native, per-user installer for origin-of-memory.
 
 #define AppName "Origin of Memory"
-#define AppVersion "0.3.0"
+#define AppVersion "0.4.0"
 #define AppPublisher "origin-of-memory project"
 #define AppURL "https://github.com/Capslockiller/origin-of-memory"
 
