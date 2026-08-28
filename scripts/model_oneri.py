@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import os
 from typing import Any
 
@@ -132,8 +133,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Recommend verified Ollama models")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--probe-json", help="use a captured probe JSON object")
+    # A file, because Windows PowerShell mangles a JSON blob passed as a native
+    # argument: the quotes are re-split and argparse sees garbage. Measured -
+    # a 504-character probe failed with argparse's usage message and exit 2.
+    parser.add_argument("--probe-file", help="read the probe JSON from a file")
     args = parser.parse_args(argv)
-    probe = json.loads(args.probe_json) if args.probe_json else collect_probe()
+    if args.probe_file:
+        probe = json.loads(Path(args.probe_file).read_text(encoding="utf-8"))
+    elif args.probe_json:
+        probe = json.loads(args.probe_json)
+    else:
+        probe = collect_probe()
     candidates = recommend(probe)
     if args.json:
         print(json.dumps(candidates, ensure_ascii=False, indent=2))
