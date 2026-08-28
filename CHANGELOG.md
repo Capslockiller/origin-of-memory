@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-28
+
 ### Added
 
 <!-- yazan: claude · opus-5 -->
@@ -337,6 +339,9 @@ see [docs/attribution.md](docs/attribution.md) for the lineage.
   roughly 16 questions for p < 0.05 at n = 125.
 - First measured run on the author's corpus: recall@3 83% (104/125), recall@5 84%
   (105/125), against a 0% baseline; retrieval hook p95 latency 347 ms.
+  *(The recall@5 figure here was later found to be wrong — the run retrieved
+  three results and labelled the column `top5`. Corrected in 0.2.0 to
+  114/125 = 91.2%; recall@3 was unaffected. See docs/evaluation.md.)*
 - Method and how to build your own gold set: [docs/evaluation.md](docs/evaluation.md).
   The author's gold questions are not published — they are personal data.
 
@@ -383,5 +388,6 @@ see [docs/attribution.md](docs/attribution.md) for the lineage.
   Untrusted-data delimiters are in place, but there is no exclusion list.
 - Windows only; no tested macOS or Linux path.
 
-[Unreleased]: https://github.com/Capslockiller/origin-of-memory/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Capslockiller/origin-of-memory/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Capslockiller/origin-of-memory/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Capslockiller/origin-of-memory/releases/tag/v0.1.0

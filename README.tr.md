@@ -109,7 +109,7 @@ dağılımı: ölçüt değil, "çalışıyor" kanıtı sayın. Yöntem:
 | Ölçüm | Önce | Sonra |
 | --- | --- | --- |
 | recall@3 (yargıçsız, gold not ilk 3'te) | %0 | **%83** (104/125) |
-| recall@5 | %0 | **%84** (105/125) |
+| recall@5 | %0 | **%91,2** (114/125) |
 | Getirme kancası gecikmesi, p95 | — | **347 ms** |
 | Derleyici çağrı başı giriş tabanı | 152,8K krkt | **56,1K krkt** (−%63) |
 

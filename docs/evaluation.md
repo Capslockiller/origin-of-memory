@@ -85,7 +85,7 @@ A separate generation-quality evaluation would need a different design.
 | Metric | Value |
 | --- | --- |
 | recall@3 | 104/125 = 83% |
-| recall@5 | 105/125 = 84% |
+| recall@5 | 114/125 = 91.2% |
 | Baseline (before this system) | 0% |
 | Retrieval hook latency, p95 | 347 ms |
 
@@ -96,10 +96,19 @@ so the gold note was in the top k zero times out of 125. The write side was
 already user-level, which is how the corpus existed at all: the brain wrote from
 everywhere and read in one folder.
 
-**Read recall@3 → recall@5 carefully.** One question, 83% → 84%. Almost nothing is
-sitting just outside the window; the 21 failures at k=3 are mostly not near-misses
-that a larger k would rescue. That is a more useful finding than the headline
-number, and it argues against spending injection budget on more notes.
+**Correction (2026-08-28).** This document previously reported recall@5 as
+105/125 = 84%, and drew a conclusion from the apparently flat curve between k=3
+and k=5. Both were wrong. The original results file shows the `top5` column
+never held more than three candidates — the run had retrieved with `limit=3`
+and the column was mislabelled. A correct re-run at `limit=5` gives
+**114/125 = 91.2%**, with recall@3 unchanged at 104/125, which is what
+validates the re-run rather than the corpus having drifted.
+
+**Read recall@3 → recall@5 carefully.** 83.2% → 91.2%: ten questions have their
+gold note sitting in positions four and five. Whether to spend injection budget
+on them is a real trade-off — each extra note costs characters in every prompt —
+but the notes are there, which is the opposite of what the earlier flat curve
+suggested.
 
 **Latency.** p95 347 ms for the whole hook path, including Python interpreter
 startup, against a hard 5-second `UserPromptSubmit` timeout — and, more

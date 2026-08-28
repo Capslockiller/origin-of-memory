@@ -105,7 +105,7 @@ benchmark. Methodology: [docs/evaluation.md](docs/evaluation.md).
 | Metric | Before | After |
 | --- | --- | --- |
 | recall@3 (judge-free, gold note in top 3) | 0% | **83%** (104/125) |
-| recall@5 | 0% | **84%** (105/125) |
+| recall@5 | 0% | **91.2%** (114/125) |
 | Retrieval hook latency, p95 | — | **347 ms** |
 | Compiler input base per call | 152.8K chars | **56.1K chars** (−63%) |
 
