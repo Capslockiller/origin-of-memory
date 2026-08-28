@@ -1,0 +1,256 @@
+<!-- yazan: codex · model: gpt-5.6-sol -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Origin of Memory setup</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f5f8;
+      --panel: #ffffff;
+      --text: #18202a;
+      --muted: #596574;
+      --line: #d9dee6;
+      --accent: #4c55d7;
+      --accent-text: #ffffff;
+      --good: #16784b;
+      --warn: #a35b00;
+      --bad: #b52636;
+      --focus: #087cc4;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #11151b;
+        --panel: #1a2029;
+        --text: #f0f3f7;
+        --muted: #aeb8c5;
+        --line: #3a4452;
+        --accent: #8e96ff;
+        --accent-text: #10131b;
+        --good: #64d69f;
+        --warn: #ffc06b;
+        --bad: #ff8290;
+        --focus: #66c8ff;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.45 "Segoe UI", system-ui, sans-serif;
+    }
+    .shell {
+      width: min(1040px, calc(100% - 48px));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 32px 0 24px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 24px;
+    }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .brand { font-weight: 700; letter-spacing: .02em; }
+    .step { color: var(--muted); font-size: .92rem; }
+    main {
+      align-self: start;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: clamp(24px, 4vw, 42px);
+      box-shadow: 0 18px 45px rgba(0, 0, 0, .08);
+    }
+    h1 { margin: 0 0 8px; font-size: clamp(1.8rem, 3vw, 2.5rem); line-height: 1.15; }
+    .lede { margin: 0 0 28px; color: var(--muted); max-width: 70ch; }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 28px;
+      margin-bottom: 16px;
+      color: var(--muted);
+    }
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--line);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .checks { border-top: 1px solid var(--line); }
+    .check {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) 130px minmax(280px, 2.2fr);
+      gap: 22px;
+      align-items: center;
+      padding: 18px 4px;
+      border-bottom: 1px solid var(--line);
+    }
+    .name { font-weight: 650; }
+    .badge { font-weight: 700; }
+    .badge.present { color: var(--good); }
+    .badge.required, .badge.optional { color: var(--warn); }
+    .badge.unavailable { color: var(--bad); }
+    .consequence { color: var(--muted); }
+    .empty { padding: 24px 4px; color: var(--muted); }
+    footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .actions { display: flex; gap: 12px; }
+    button {
+      min-width: 108px;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 18px;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    button:hover:not(:disabled) { filter: brightness(.96); }
+    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    .fatal { color: var(--bad); }
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 24px, 1040px); padding-top: 18px; }
+      main { padding: 22px; }
+      .check { grid-template-columns: 1fr auto; gap: 6px 16px; }
+      .consequence { grid-column: 1 / -1; }
+      footer { align-items: flex-end; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand">Origin of Memory</div>
+      <div class="step">Setup · Phase 1</div>
+    </header>
+    <main>
+      <h1>System check</h1>
+      <p class="lede">Checking the tools and locations used by setup. This screen is read-only and will not install or change anything.</p>
+      <div id="status" class="status" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Starting secure session…</span>
+      </div>
+      <div id="checks" class="checks" aria-live="polite">
+        <div class="empty">Results will appear here.</div>
+      </div>
+    </main>
+    <footer>
+      <button id="quit" type="button">Quit</button>
+      <div class="actions">
+        <button type="button" disabled>Back</button>
+        <button class="primary" type="button" disabled title="Available in phase two">Next</button>
+      </div>
+    </footer>
+  </div>
+  <script>
+    (() => {
+      'use strict';
+      const statusNode = document.getElementById('status');
+      const checksNode = document.getElementById('checks');
+      const quitButton = document.getElementById('quit');
+      let lastEventId = 0;
+      let stopped = false;
+
+      function api(path, options = {}) {
+        const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+        return fetch(path, Object.assign({ credentials: 'same-origin', cache: 'no-store', mode: 'cors', headers }, options));
+      }
+
+      function setStatus(text, kind = '') {
+        statusNode.className = 'status' + (kind ? ' ' + kind : '');
+        statusNode.replaceChildren(document.createTextNode(text));
+      }
+
+      function renderRows(rows) {
+        checksNode.replaceChildren();
+        rows.forEach((row) => {
+          const item = document.createElement('div');
+          item.className = 'check';
+          const name = document.createElement('div');
+          name.className = 'name';
+          name.textContent = row.name;
+          const state = document.createElement('div');
+          state.className = 'badge ' + String(row.state).toLowerCase();
+          state.textContent = row.state;
+          const consequence = document.createElement('div');
+          consequence.className = 'consequence';
+          consequence.textContent = row.consequence;
+          item.append(name, state, consequence);
+          checksNode.append(item);
+        });
+      }
+
+      function consumeFrames(text) {
+        text.split(/\r?\n\r?\n/).forEach((frame) => {
+          if (!frame || frame.startsWith(':')) return;
+          let id = null;
+          let data = '';
+          frame.split(/\r?\n/).forEach((line) => {
+            if (line.startsWith('id:')) id = Number(line.slice(3).trim());
+            if (line.startsWith('data:')) data += line.slice(5).trim();
+          });
+          if (!id || !data) return;
+          lastEventId = Math.max(lastEventId, id);
+          const event = JSON.parse(data);
+          if (event.type === 'detection-result') {
+            renderRows(event.rows || []);
+            setStatus('System check complete. No changes were made.');
+          } else if (event.type === 'operation-failed') {
+            setStatus(event.message || 'System check failed.', 'fatal');
+          }
+        });
+      }
+
+      async function eventLoop() {
+        while (!stopped) {
+          try {
+            const response = await api('/api/events', {
+              method: 'GET',
+              headers: { 'Last-Event-ID': String(lastEventId) }
+            });
+            if (!response.ok) throw new Error('Event stream rejected');
+            consumeFrames(await response.text());
+          } catch (error) {
+            if (!stopped) setStatus('Connection interrupted; reconnecting…');
+          }
+          if (!stopped) await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+
+      async function begin() {
+        const token = location.hash.slice(1);
+        if (!token) throw new Error('The one-time setup token is missing. Re-run the launcher.');
+        const session = await api('/api/session', {
+          method: 'POST',
+          body: JSON.stringify({ token })
+        });
+        history.replaceState(null, '', location.pathname + location.search);
+        if (!session.ok) throw new Error('The secure session could not be established. Re-run the launcher.');
+        setStatus('Checking this computer…');
+        eventLoop();
+        const detection = await api('/api/detect', { method: 'GET' });
+        if (!detection.ok && detection.status !== 409) throw new Error('The system check could not start.');
+      }
+
+      quitButton.addEventListener('click', async () => {
+        quitButton.disabled = true;
+        stopped = true;
+        try { await api('/api/quit', { method: 'POST', body: '{}' }); } catch (_) {}
+        setStatus('Setup closed. You may close this window.');
+      });
+
+      begin().catch((error) => setStatus(error.message, 'fatal'));
+    })();
+  </script>
+</body>
+</html>
