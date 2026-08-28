@@ -50,7 +50,12 @@ non-interactive plans, the lower-level `install.ps1`, upgrading and uninstalling
 
 ## Two ways in
 
-A **graphical installer** (`Setup.exe`, built from `installer/`) walks the usual
+Downloaded the source zip instead of cloning? Double-click **`Setup.cmd`** — it
+starts the graphical wizard and falls back to the terminal one if that fails.
+**`Local Brain.cmd`** opens the panel the same way. Neither needs a terminal.
+
+A **graphical installer** (`Setup.exe`, attached to each release and built from
+`installer/`) walks the usual
 Back / Next / Cancel wizard, installs per-user without ever asking for
 administrator rights, and hands a validated plan to `kur.ps1`. It is unsigned,
 so Windows shows a SmartScreen prompt; the wizard never tries to bypass it.
