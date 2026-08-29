@@ -17,7 +17,28 @@ import urllib.request
 URL_ENV = "BEYIN_OLLAMA_URL"
 FAST_MODEL_ENV = "BEYIN_OLLAMA_MODEL_FAST"
 SMART_MODEL_ENV = "BEYIN_OLLAMA_MODEL_SMART"
+THINK_ENV = "BEYIN_OLLAMA_THINK"
+NUM_PREDICT_ENV = "BEYIN_OLLAMA_NUM_PREDICT"
 DEFAULT_URL = "http://localhost:11434"
+
+
+def _request_extras(environment: dict[str, str] | None = None) -> dict[str, Any]:
+    """Fields beyond model/prompt/stream.
+
+    Thinking is OFF unless ``BEYIN_OLLAMA_THINK=1``: on thinking models
+    (measured with qwen3:8b) the think stream otherwise eats the budget and
+    the answer arrives truncated mid-block. ``num_predict`` defaults to -1
+    (unlimited) for the same reason; override via ``BEYIN_OLLAMA_NUM_PREDICT``.
+    """
+    env = os.environ if environment is None else environment
+    extras: dict[str, Any] = {"think": (env.get(THINK_ENV) or "").strip() == "1"}
+    raw = (env.get(NUM_PREDICT_ENV) or "").strip()
+    try:
+        num_predict = int(raw) if raw else -1
+    except ValueError:
+        num_predict = -1
+    extras["options"] = {"num_predict": num_predict}
+    return extras
 
 
 def resolve_model(
@@ -79,7 +100,7 @@ def run_ollama(
         sink.append(model_result)
 
     body = json.dumps(
-        {"model": slug, "prompt": prompt, "stream": False},
+        {"model": slug, "prompt": prompt, "stream": False, **_request_extras()},
         ensure_ascii=False,
     ).encode("utf-8")
     request = urllib.request.Request(
