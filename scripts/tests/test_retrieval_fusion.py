@@ -5,6 +5,7 @@ synthetic vault built in a temporary directory.
 """
 
 # yazan: claude · opus-5
+# yazan: codex · gpt-5
 
 from __future__ import annotations
 
@@ -42,6 +43,8 @@ class FusionHarness(unittest.TestCase):
                 for key in (
                     retrieve.RETRIEVAL_MODE_ENV,
                     retrieve.RRF_K_ENV,
+                    retrieve.RRF_RECENCY_CHANNEL_WEIGHT_ENV,
+                    retrieve.RRF_LEGACY_MULTIPLIER_ENV,
                     retrieve.RECENCY_HALF_LIFE_ENV,
                 )
             },
@@ -194,6 +197,25 @@ class SettingsResolutionTests(unittest.TestCase):
             180.0,
         )
 
+    def test_recency_channel_weight_falls_back_on_invalid_values(self) -> None:
+        resolver = retrieve.resolve_rrf_recency_channel_weight
+        env_name = retrieve.RRF_RECENCY_CHANNEL_WEIGHT_ENV
+
+        self.assertEqual(resolver({}), 1.0)
+        self.assertEqual(resolver({env_name: "0"}), 0.0)
+        self.assertEqual(resolver({env_name: "2.5"}), 2.5)
+        for value in ("-1", "nan", "inf", "abc"):
+            with self.subTest(value=value):
+                self.assertEqual(resolver({env_name: value}), 1.0)
+
+    def test_legacy_multiplier_requires_exact_one(self) -> None:
+        resolver = retrieve.resolve_rrf_legacy_multiplier
+        env_name = retrieve.RRF_LEGACY_MULTIPLIER_ENV
+
+        self.assertFalse(resolver({}))
+        self.assertTrue(resolver({env_name: "1"}))
+        self.assertFalse(resolver({env_name: "true"}))
+
 
 class TagOverlapTests(unittest.TestCase):
     def test_dotted_capital_i_folds_onto_the_dotted_lowercase_form(self) -> None:
@@ -344,6 +366,10 @@ class FusedRankingTests(FusionHarness):
                 connection=connection,
                 min_score=min_score,
                 k=k,
+                recency_channel_weight=(
+                    retrieve.resolve_rrf_recency_channel_weight()
+                ),
+                legacy_multiplier=retrieve.resolve_rrf_legacy_multiplier(),
                 half_life_days=half_life_days,
                 now=now,
             )
@@ -368,7 +394,7 @@ class FusedRankingTests(FusionHarness):
         self.write_note("kardes-yeni", title="Bellek katmanı", updated="2026-08-20")
         self.build()
 
-        fused = self._fused("bellek katmanı", half_life_days=0.0)
+        fused = self._fused("bellek katmanı")
         weights = {hit.name: hit.score for hit in fused}
 
         # BM25 and tag overlap tie exactly, so both notes share rank 1 in those
@@ -377,7 +403,7 @@ class FusedRankingTests(FusionHarness):
         self.assertGreater(weights["kardes-yeni"], weights["kardes-eski"])
 
     def test_weight_floor_caps_the_penalty_at_a_quarter(self) -> None:
-        """The bound is on the multiplier, and it is exact."""
+        """The legacy comparison path preserves the multiplier's exact bound."""
         self.write_note(
             "tam-eski",
             title="Zümrüt madenciliği",
@@ -387,8 +413,11 @@ class FusedRankingTests(FusionHarness):
         )
         self.build()
 
-        undecayed = self._fused("zümrüt madenciliği", half_life_days=0.0)
-        decayed = self._fused("zümrüt madenciliği", half_life_days=180.0)
+        with mock.patch.dict(
+            os.environ, {retrieve.RRF_LEGACY_MULTIPLIER_ENV: "1"}
+        ):
+            undecayed = self._fused("zümrüt madenciliği", half_life_days=0.0)
+            decayed = self._fused("zümrüt madenciliği", half_life_days=180.0)
 
         self.assertAlmostEqual(
             decayed[0].score,
@@ -396,11 +425,11 @@ class FusedRankingTests(FusionHarness):
         )
 
     def test_a_fresh_weak_match_can_still_outrank_an_old_exact_one(self) -> None:
-        """Pinned, not endorsed — see docs/retrieval.md, "Known limits".
+        """The deprecated legacy env reproduces the documented old failure.
 
         RRF compresses every candidate into a band of a few tenths of a percent
         while the recency multiplier spans 4x, so with the default k the decay
-        term, not relevance, decides the order.  This is why ``rrf`` is opt-in.
+        term, not relevance, decides the order.
         """
         self.write_note(
             "tam-eski",
@@ -417,11 +446,51 @@ class FusedRankingTests(FusionHarness):
         )
         self.build()
 
-        decayed = self._fused("zümrüt madenciliği", limit=2)
-        undecayed = self._fused("zümrüt madenciliği", limit=2, half_life_days=0.0)
+        with mock.patch.dict(
+            os.environ, {retrieve.RRF_LEGACY_MULTIPLIER_ENV: "1"}
+        ):
+            legacy = self._fused("zümrüt madenciliği", limit=2)
 
-        self.assertEqual(undecayed[0].name, "tam-eski")
-        self.assertEqual(decayed[0].name, "yeni-alakasiz")
+        self.assertEqual(legacy[0].name, "yeni-alakasiz")
+
+    def test_old_exact_match_outranks_fresh_weak_match_by_default(self) -> None:
+        self.write_note(
+            "tam-eski",
+            title="Zümrüt madenciliği",
+            tags=("zümrüt",),
+            body="Zümrüt madenciliği üzerine.",
+            updated="2005-01-01",
+        )
+        self.write_note(
+            "yeni-alakasiz",
+            title="Zümrüt bir kez geçti",
+            body="Konu tamamen başka; zümrüt sadece anıldı." + " dolgu" * 400,
+            updated="2026-08-26",
+        )
+        self.build()
+
+        repaired = self._fused("zümrüt madenciliği", limit=2)
+
+        self.assertEqual(repaired[0].name, "tam-eski")
+
+    def test_zero_recency_channel_weight_matches_bm25_plus_tags(self) -> None:
+        self.write_note("kardes-eski", title="Bellek katmanı", updated="2023-01-01")
+        self.write_note("kardes-yeni", title="Bellek katmanı", updated="2026-08-20")
+        self.build()
+
+        with mock.patch.dict(
+            os.environ, {retrieve.RRF_RECENCY_CHANNEL_WEIGHT_ENV: "0.0"}
+        ):
+            fused = self._fused("bellek katmanı")
+
+        expected = retrieve.rrf_fuse(
+            [
+                {"kardes-eski": 1, "kardes-yeni": 1},
+                {"kardes-eski": 1, "kardes-yeni": 1},
+            ],
+            k=60,
+        )
+        self.assertEqual({hit.name: hit.score for hit in fused}, expected)
 
     def test_min_score_gates_the_bm25_component_only(self) -> None:
         self.write_note("etiketli", title="Zümrüt", tags=("zümrüt",))
@@ -499,8 +568,8 @@ class SourceDateTests(FusionHarness):
 
         self.assertTrue(retrieve._parse_timestamp(stored) is not None)
 
-    def test_undated_note_keeps_its_fused_score_unweighted(self) -> None:
-        """No date is not the same as an ancient date."""
+    def test_legacy_multiplier_leaves_an_undated_note_unweighted(self) -> None:
+        """Legacy comparison preserves the distinction from an ancient date."""
         self.write_note("tarihli", title="Ortak", updated="2005-01-01")
         (self.concepts / "tarihsiz.md").write_text(
             "---\ntitle: Ortak\naliases: []\ntags: []\n---\n\nGövde.\n",
@@ -525,6 +594,8 @@ class SourceDateTests(FusionHarness):
                 connection=connection,
                 min_score=0.0,
                 k=60,
+                recency_channel_weight=1.0,
+                legacy_multiplier=True,
                 half_life_days=180.0,
                 now=NOW,
             )
