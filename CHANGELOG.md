@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+<!-- yazan: claude · fable-5 -->
+- Recency no longer multiplies the fused score. The old post-fusion multiplier
+  was scale-blind (a 1.6% band multiplied by up to 4x), so freshness could bury
+  a strong match. Recency now contributes only as an RRF channel with a single
+  pre-declared weight (`BEYIN_RRF_RECENCY_CHANNEL_WEIGHT`); the former
+  behaviour stays reachable for comparison runs via
+  `BEYIN_RRF_LEGACY_MULTIPLIER=1`.
+- Sealed the retrieval default after a 125-question gold-set run: `bm25`
+  recall@3 83.2% vs `rrf` 69.6% (McNemar p=0.003). `bm25` stays the default
+  and the fused path's default candidacy is closed until a redesign measures
+  better on the same set. The verdict and the reproduction command live in
+  `docs/retrieval.md` §7.
+- The Ollama runner now sends `think: false` and a `num_predict` cap
+  (`BEYIN_OLLAMA_THINK` / `BEYIN_OLLAMA_NUM_PREDICT`): qwen3's thinking mode is
+  on by default and was consuming the whole token budget before any answer.
+
+### Added
+
+<!-- yazan: claude · fable-5 -->
+- Three measurement tools, all stdlib-only: `tools/olc_baslangic.py`
+  (cold-start breakdown of the retrieval hook), `tools/tr_beir_kos.py`
+  (SciFact BEIR anchor, EN and TR legs), `tools/a4_kapi.py` (the two-mode
+  compile-gate harness and its report table).
+
 ### Fixed
 
 <!-- yazan: claude · opus-5 -->
