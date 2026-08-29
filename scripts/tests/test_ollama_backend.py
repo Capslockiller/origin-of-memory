@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import socket
 import tempfile
@@ -112,10 +113,28 @@ class OllamaRequestTests(unittest.TestCase):
                 "model": "local-fast",
                 "prompt": "Türkçe istem",
                 "stream": False,
+                # Thinking OFF by default: on thinking models the think
+                # stream eats the budget and the answer truncates mid-block
+                # (measured with qwen3:8b, 2026-08-29).
+                "think": False,
+                "options": {"num_predict": -1},
             },
         )
         self.assertEqual(opened.call_args.kwargs["timeout"], 42)
         self.assertIsNone(marker_after)
+
+    def test_think_and_num_predict_env_overrides(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"BEYIN_OLLAMA_THINK": "1", "BEYIN_OLLAMA_NUM_PREDICT": "2048"},
+        ):
+            extras = ollama_runner._request_extras()
+        self.assertEqual(extras, {"think": True, "options": {"num_predict": 2048}})
+
+    def test_num_predict_garbage_falls_back_to_unlimited(self) -> None:
+        with mock.patch.dict(os.environ, {"BEYIN_OLLAMA_NUM_PREDICT": "bozuk"}):
+            extras = ollama_runner._request_extras()
+        self.assertEqual(extras["options"], {"num_predict": -1})
 
     def test_sonnet_fallback_warning_reaches_shared_sink(self) -> None:
         environment = {
