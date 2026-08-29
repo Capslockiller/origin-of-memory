@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 <!-- yazan: claude · fable-5 -->
+- The retrieval hook sheds its PowerShell wrapper: `retrieve.py hook` reads the
+  Claude Code hook JSON from stdin itself (same skip rules, byte-identical
+  injection) and the query path stops importing `sema`/`rootmap`/`shutil`/
+  `tempfile` eagerly. Measured on the live machine: full-chain p95 443 ms with
+  the wrapper, 112-127 ms direct. The wrapper stays as a fallback.
+
+<!-- yazan: claude · fable-5 -->
 - Recency no longer multiplies the fused score. The old post-fusion multiplier
   was scale-blind (a 1.6% band multiplied by up to 4x), so freshness could bury
   a strong match. Recency now contributes only as an RRF channel with a single

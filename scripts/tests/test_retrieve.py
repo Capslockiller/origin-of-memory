@@ -7,12 +7,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 
 import _helpers  # noqa: F401 — scripts dizinini sys.path'e ekler
 
 import retrieve
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 
 
 class RetrieveHarness(unittest.TestCase):
@@ -162,6 +166,175 @@ class QueryBoundaryTests(RetrieveHarness):
         )
 
         self.assertEqual(result, {"notes": [], "total_chars": 0})
+
+
+class HookStdinTests(RetrieveHarness):
+    """D1: retrieve.py's own stdin-hook mode mirrors memory-retrieve.ps1."""
+
+    def test_valid_payload_returns_hook_specific_output(self) -> None:
+        self.write_note("ortak", title="Ortak konu", body="Ortak konu gövdesi.")
+        self.build()
+
+        raw = json.dumps({"prompt": "ortak konu hakkında bilgi ver", "session_id": "s1"})
+        output = retrieve.run_hook_stdin(raw, db_path=self.db, state_dir=self.state)
+
+        self.assertIsNotNone(output)
+        payload = json.loads(output)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(
+            payload["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit"
+        )
+        self.assertIn("[Hafiza - Ilgili Notlar]", context)
+        self.assertIn("--- knowledge/concepts/ortak.md ---", context)
+        self.assertIn("Ortak konu gövdesi.", context)
+
+    def test_user_input_field_wins_over_prompt(self) -> None:
+        self.write_note("ortak", title="Ortak konu", body="Ortak konu gövdesi.")
+        self.build()
+
+        raw = json.dumps(
+            {
+                "user_input": "ortak konu hakkında bilgi ver",
+                "prompt": "kısa",
+                "session_id": "s1",
+            }
+        )
+        output = retrieve.run_hook_stdin(raw, db_path=self.db, state_dir=self.state)
+
+        self.assertIsNotNone(output)
+
+    def test_short_prompt_is_skipped_silently(self) -> None:
+        self.write_note("ortak", title="Ortak konu")
+        self.build()
+
+        raw = json.dumps({"prompt": "kısa mesaj", "session_id": "s1"})
+        self.assertEqual(len("kısa mesaj"), 10)
+
+        output = retrieve.run_hook_stdin(raw, db_path=self.db, state_dir=self.state)
+
+        self.assertIsNone(output)
+
+    def test_slash_command_is_skipped_silently(self) -> None:
+        self.write_note("ortak", title="Ortak konu")
+        self.build()
+
+        raw = json.dumps({"prompt": "/compact ortak konu devam", "session_id": "s1"})
+
+        output = retrieve.run_hook_stdin(raw, db_path=self.db, state_dir=self.state)
+
+        self.assertIsNone(output)
+
+    def test_malformed_json_exits_silently_not_crash(self) -> None:
+        output = retrieve.run_hook_stdin(
+            "{not valid json", db_path=self.db, state_dir=self.state
+        )
+        self.assertIsNone(output)
+
+    def test_empty_stdin_exits_silently(self) -> None:
+        self.assertIsNone(
+            retrieve.run_hook_stdin("", db_path=self.db, state_dir=self.state)
+        )
+
+    def test_missing_prompt_field_exits_silently(self) -> None:
+        raw = json.dumps({"session_id": "s1"})
+        self.assertIsNone(
+            retrieve.run_hook_stdin(raw, db_path=self.db, state_dir=self.state)
+        )
+
+    def test_no_matches_exits_silently(self) -> None:
+        self.write_note("ilgisiz", title="Tamamen ilgisiz kavram")
+        self.build()
+
+        raw = json.dumps(
+            {"prompt": "zqxvbnwplk fjhgtresd uyocmiaqz", "session_id": "s1"}
+        )
+        output = retrieve.run_hook_stdin(raw, db_path=self.db, state_dir=self.state)
+
+        self.assertIsNone(output)
+
+    def test_cli_hook_subcommand_end_to_end(self) -> None:
+        self.write_note("ortak", title="Ortak konu", body="Ortak konu gövdesi.")
+        self.build()
+        raw = json.dumps({"prompt": "ortak konu hakkında bilgi ver", "session_id": "s1"})
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-X",
+                "utf8",
+                str(SCRIPTS_DIR / "retrieve.py"),
+                "hook",
+                "--db",
+                str(self.db),
+                "--state-dir",
+                str(self.state),
+            ],
+            input=raw,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        payload = json.loads(completed.stdout)
+        self.assertIn(
+            "Ortak konu gövdesi.",
+            payload["hookSpecificOutput"]["additionalContext"],
+        )
+
+    def test_cli_hook_subcommand_malformed_json_exits_zero(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-X",
+                "utf8",
+                str(SCRIPTS_DIR / "retrieve.py"),
+                "hook",
+                "--db",
+                str(self.db),
+                "--state-dir",
+                str(self.state),
+            ],
+            input="{not valid json",
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout.strip(), "")
+
+
+class ImportHygieneTests(unittest.TestCase):
+    """D2: the query path must not eagerly pay for build/verify-only imports."""
+
+    def test_module_import_defers_sema_and_build_only_modules(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys, json; import retrieve; "
+                    "print(json.dumps(sorted(sys.modules)))"
+                ),
+            ],
+            cwd=SCRIPTS_DIR,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        loaded = set(json.loads(completed.stdout))
+        for deferred in ("sema", "rootmap", "shutil", "tempfile"):
+            self.assertNotIn(
+                deferred,
+                loaded,
+                f"{deferred!r} should not load on `import retrieve` alone",
+            )
 
 
 if __name__ == "__main__":
