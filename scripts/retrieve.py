@@ -46,10 +46,13 @@ RETRIEVAL_MODE_ENV = "BEYIN_RETRIEVAL"
 
 RRF_K_ENV = "BEYIN_RRF_K"
 DEFAULT_RRF_K = 60
+RRF_RECENCY_CHANNEL_WEIGHT_ENV = "BEYIN_RRF_RECENCY_CHANNEL_WEIGHT"
+DEFAULT_RRF_RECENCY_CHANNEL_WEIGHT = 1.0
+RRF_LEGACY_MULTIPLIER_ENV = "BEYIN_RRF_LEGACY_MULTIPLIER"
 
 RECENCY_HALF_LIFE_ENV = "BEYIN_RECENCY_HALFLIFE_DAYS"
 DEFAULT_RECENCY_HALF_LIFE_DAYS = 180.0
-# An old-but-perfect match must stay reachable, so decay is bounded below.
+# Legacy comparison mode bounds decay so an old-but-perfect match stays reachable.
 RECENCY_WEIGHT_FLOOR = 0.25
 SECONDS_PER_DAY = 86_400.0
 
@@ -502,8 +505,32 @@ def resolve_rrf_k(environment: dict[str, str] | None = None) -> int:
     return value if value >= 1 else DEFAULT_RRF_K
 
 
+def resolve_rrf_recency_channel_weight(
+    environment: dict[str, str] | None = None,
+) -> float:
+    """Recency-channel weight; invalid or negative values fall back to 1.0."""
+    env = os.environ if environment is None else environment
+    try:
+        value = float((env.get(RRF_RECENCY_CHANNEL_WEIGHT_ENV) or "").strip())
+    except ValueError:
+        return DEFAULT_RRF_RECENCY_CHANNEL_WEIGHT
+    return (
+        value
+        if math.isfinite(value) and value >= 0.0
+        else DEFAULT_RRF_RECENCY_CHANNEL_WEIGHT
+    )
+
+
+def resolve_rrf_legacy_multiplier(
+    environment: dict[str, str] | None = None,
+) -> bool:
+    """Enable the deprecated comparison-only multiplier only for exact ``1``."""
+    env = os.environ if environment is None else environment
+    return (env.get(RRF_LEGACY_MULTIPLIER_ENV) or "").strip() == "1"
+
+
 def resolve_half_life_days(environment: dict[str, str] | None = None) -> float:
-    """``BEYIN_RECENCY_HALFLIFE_DAYS``; ``0`` disables decay, junk falls back."""
+    """Legacy multiplier half-life; ``0`` disables decay, junk falls back."""
     env = os.environ if environment is None else environment
     raw = (env.get(RECENCY_HALF_LIFE_ENV) or "").strip()
     if not raw:
@@ -542,16 +569,25 @@ def competition_ranks(
 def rrf_fuse(
     ranked_lists: Sequence[Sequence[str] | dict[str, int]],
     k: int = DEFAULT_RRF_K,
+    channel_weights: Sequence[float] | None = None,
 ) -> dict[str, float]:
-    """Reciprocal Rank Fusion: ``score = Σ 1/(k + rank_i)`` over the lists.
+    """Reciprocal Rank Fusion: ``score = Σ w_i/(k + rank_i)`` over the lists.
 
     Each list is either a sequence of names, where rank is position, or a
     ``{name: rank}`` mapping, which is how tied notes share one rank.  A note
     absent from a list simply contributes nothing from it, which is what makes
-    sparse signals (tag overlap) safe to fuse with dense ones (BM25).
+    sparse signals (tag overlap) safe to fuse with dense ones (BM25).  Channel
+    weights default to 1.0; a zero-weight channel contributes nothing.
     """
+    if channel_weights is None:
+        channel_weights = (1.0,) * len(ranked_lists)
+    elif len(channel_weights) != len(ranked_lists):
+        raise ValueError("channel_weights must match ranked_lists")
+
     scores: dict[str, float] = {}
-    for ranked in ranked_lists:
+    for ranked, channel_weight in zip(ranked_lists, channel_weights):
+        if channel_weight == 0.0:
+            continue
         pairs = (
             ranked.items()
             if isinstance(ranked, dict)
@@ -561,7 +597,7 @@ def rrf_fuse(
             denominator = k + rank
             if denominator <= 0:
                 continue
-            scores[name] = scores.get(name, 0.0) + 1.0 / denominator
+            scores[name] = scores.get(name, 0.0) + channel_weight / denominator
     return scores
 
 
@@ -674,10 +710,12 @@ def _fused_search(
     connection: sqlite3.Connection,
     min_score: float,
     k: int,
+    recency_channel_weight: float,
+    legacy_multiplier: bool,
     half_life_days: float,
     now: dt.datetime,
 ) -> list[SearchHit]:
-    """Fuse BM25, recency and tag overlap, then apply bounded recency decay."""
+    """Fuse BM25, recency and tag overlap; optionally reproduce legacy decay."""
     expression = _fts_query(text)
     rows = _bm25_rows(connection, expression)
     if not rows:
@@ -734,25 +772,33 @@ def _fused_search(
         recency_list, lambda name: parsed_dates[name]
     )
 
-    fused = rrf_fuse([bm25_ranks, recency_ranks, tag_ranks], k=k)
-    weighted: dict[str, float] = {}
-    for name in candidates:
-        score = fused.get(name, 0.0)
-        stamp = parsed_dates.get(name)
-        if stamp is None:
-            weighted[name] = score
-            continue
-        age_days = (now - stamp).total_seconds() / SECONDS_PER_DAY
-        weighted[name] = score * recency_weight(age_days, half_life_days)
+    fused = rrf_fuse(
+        [bm25_ranks, recency_ranks, tag_ranks],
+        k=k,
+        channel_weights=(1.0, recency_channel_weight, 1.0),
+    )
+    final_scores = fused
+    if legacy_multiplier:
+        final_scores = {}
+        for name in candidates:
+            score = fused.get(name, 0.0)
+            stamp = parsed_dates.get(name)
+            if stamp is None:
+                final_scores[name] = score
+                continue
+            age_days = (now - stamp).total_seconds() / SECONDS_PER_DAY
+            final_scores[name] = score * recency_weight(age_days, half_life_days)
 
-    ordered = sorted(weighted, key=lambda name: (-weighted[name], name))[:limit]
+    ordered = sorted(
+        final_scores, key=lambda name: (-final_scores[name], name)
+    )[:limit]
     bodies = _column_by_name(connection, "body", ordered)
     return [
         SearchHit(
             name=name,
             title=titles.get(name, name),
             body=strip_session_anchors(bodies.get(name, "")),
-            score=weighted[name],
+            score=final_scores[name],
         )
         for name in ordered
     ]
@@ -771,8 +817,8 @@ def search(
 
     In ``bm25`` mode (the default) ``score`` is raw ``bm25()`` — lower is
     better — and ``min_score`` is a floor on positive ``-bm25`` relevance.  In
-    ``rrf`` mode ``score`` is the recency-weighted fused score, where *higher*
-    is better; ``min_score`` still gates the BM25 component only.
+    ``rrf`` mode ``score`` is the fused RRF sum, where *higher* is better;
+    ``min_score`` still gates the BM25 component only.
     """
     if limit < 1:
         return []
@@ -791,6 +837,8 @@ def search(
                 connection=connection,
                 min_score=min_score,
                 k=resolve_rrf_k(),
+                recency_channel_weight=resolve_rrf_recency_channel_weight(),
+                legacy_multiplier=resolve_rrf_legacy_multiplier(),
                 half_life_days=resolve_half_life_days(),
                 now=dt.datetime.now(dt.timezone.utc),
             )

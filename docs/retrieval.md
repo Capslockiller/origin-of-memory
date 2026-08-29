@@ -16,7 +16,7 @@ gives the same order, every time, with no model in the loop.
 | Mode | What it is | Default |
 |---|---|---|
 | `bm25` | A single signal: FTS5 `bm25(notes, 8, 6, 3, 1)` over title, aliases, tags and body | **yes** |
-| `rrf` | Reciprocal Rank Fusion over three free signals, then a bounded recency multiplier | opt-in |
+| `rrf` | Reciprocal Rank Fusion over BM25, recency and tag-overlap channels | opt-in |
 
 `bm25` is the default and is byte-for-byte the behaviour that shipped before
 fusion existed — same SQL, same ordering, same `score` field. **`rrf` is
@@ -60,22 +60,30 @@ candidates the other signals already found. Ranking the whole corpus by date
 would make every query inherit every note, sorted by nothing that has anything
 to do with the question.
 
-## 3. Fusion and recency weighting
+## 3. Fusion and recency channel weighting
 
 ```
-fused(note)  = Σ 1/(k + rank_i)          over the lists containing the note
-final(note)  = fused(note) × w(note)
-w(note)      = clamp(0.5 ** (age_days / half_life), 0.25, 1.0)
+final(note) = Σ channel_weight_i / (k + rank_i)
+channel weights = (BM25: 1.0, recency: 1.0, tag overlap: 1.0)
 ```
 
-`k` defaults to 60 (`BEYIN_RRF_K`), the conventional value. Half-life defaults
-to 180 days (`BEYIN_RECENCY_HALFLIFE_DAYS`); `0` disables decay entirely, and
-weighting applies **only in `rrf` mode**. A note with no resolvable date keeps
-its fused score unweighted — no date is not the same as an ancient date.
+`k` defaults to 60 (`BEYIN_RRF_K`), the conventional value. The recency channel
+weight defaults to 1.0 (`BEYIN_RRF_RECENCY_CHANNEL_WEIGHT`); `0.0` cleanly
+removes recency's contribution while leaving BM25 and tag overlap unchanged.
+There is no post-fusion recency multiplier in the default path.
 
-The lower bound of 0.25 exists so an old note keeps a quarter of its score
-rather than decaying to nothing. Read [§8 Known limits](#8-known-limits) for
-what that bound does and does not buy you.
+For side-by-side measurement only, `BEYIN_RRF_LEGACY_MULTIPLIER=1` restores the
+deprecated former multiplier after fusion:
+
+```
+legacy_final(note) = fused(note) × clamp(
+    0.5 ** (age_days / half_life), 0.25, 1.0
+)
+```
+
+Its half-life defaults to 180 days (`BEYIN_RECENCY_HALFLIFE_DAYS`), and `0`
+disables the legacy decay. A note with no resolvable date remains unmultiplied
+in that comparison path.
 
 ### Ties share a rank
 
@@ -101,7 +109,7 @@ mode, where the floor is absolute.
 | Mode | `SearchHit.score` | Better is |
 |---|---|---|
 | `bm25` | raw `bm25()` | lower (negative) |
-| `rrf` | recency-weighted fused score | higher (positive) |
+| `rrf` | fused RRF sum | higher (positive) |
 
 Anything that reads the score numerically has to know which mode produced it.
 Both hook output and the MCP tool return whole notes rather than scores, so this
@@ -198,7 +206,9 @@ a nightly no-op cannot grow the file without bound. Current reasons:
 |---|---|---|
 | `BEYIN_RETRIEVAL` | `bm25` | `bm25` or `rrf`; anything else falls back to `bm25` |
 | `BEYIN_RRF_K` | `60` | RRF constant; below 1 or unparsable falls back to 60 |
-| `BEYIN_RECENCY_HALFLIFE_DAYS` | `180` | Decay half-life in days; `0` disables decay |
+| `BEYIN_RRF_RECENCY_CHANNEL_WEIGHT` | `1.0` | Multiplier for the recency channel's RRF contribution; `0.0` removes recency influence |
+| `BEYIN_RRF_LEGACY_MULTIPLIER` | unset | Deprecated, comparison-only: exact value `1` restores the former post-fusion multiplier |
+| `BEYIN_RECENCY_HALFLIFE_DAYS` | `180` | Legacy multiplier half-life in days; `0` disables legacy decay |
 | `BEYIN_COMPILE_MIN_INTERVAL_HOURS` | `20` | Minimum gap after a successful compile; `0` disables the gate |
 
 Every one of these degrades to its default on junk input rather than raising.
@@ -230,6 +240,15 @@ an index built before `source_date` existed, which makes `rrf` fall back to
 BM25-only ranking until the next rebuild.
 
 ## 7. Measurements
+
+**Quality verdict (2026-08-29, sealed):** on the 125-question gold set,
+`bm25` scored recall@3 83.2% / recall@5 91.2% while `rrf` (repaired and
+legacy alike) scored 69.6% at both cutoffs — a significant loss (McNemar
+p=0.003; rrf buries gold notes outside the top 5 instead of demoting them).
+**`bm25` stays the default; the fused path's default candidacy is closed**
+until a redesigned fusion (channel weights / low-variance channel drop)
+measures better on the same set. Run: `Degerlendirme/kos.py --yarisma`,
+CSV `yarisma-2026-08-29.csv`.
 
 Hard gate: **p95 under 500 ms**.
 
@@ -269,20 +288,22 @@ fetched only for the notes actually returned.
 
 ## 8. Known limits
 
-**Recency dominates the fused order at the default `k`.** RRF compresses every
-candidate into a very narrow band — with `k=60`, rank 1 scores `1/61` and rank 2
-scores `1/62`, a difference of 1.6% — while the recency multiplier spans 4×
-(1.0 down to the 0.25 floor). The multiplier therefore decides the ranking
-almost by itself, and a fresh weak match can outrank an old exact one. The 0.25
-floor bounds the *penalty*, not the *outcome*: it guarantees an old note keeps a
-quarter of its fused score, which is not enough to survive a fresher rival that
-is also in the candidate set.
+<!-- yazan: codex · gpt-5 -->
+**The former post-fusion recency dominance is fixed by default.** RRF compresses
+nearby ranks into a narrow band — with `k=60`, rank 1 contributes `1/61` and
+rank 2 contributes `1/62`, a difference of about 1.6% — while the removed
+multiplier spanned 4× from 1.0 to its 0.25 floor. That mismatch let a fresh weak
+match outrank an old exact match.
 
-This is pinned by a test rather than hidden
-(`test_a_fresh_weak_match_can_still_outrank_an_old_exact_one`), and it is the
-main reason `rrf` ships opt-in. Lowering `BEYIN_RRF_K` widens the RRF band but
-does not close the gap on its own; either the weighting or the constant needs to
-be chosen against the gold set, not chosen in advance.
+The repaired path uses recency only as one fusion channel, so the final score is
+the RRF sum. `BEYIN_RRF_RECENCY_CHANNEL_WEIGHT` can scale that one channel and
+`0.0` removes its influence; its default remains deliberately untuned at 1.0.
+`BEYIN_RRF_LEGACY_MULTIPLIER=1` restores the deprecated multiplier solely for
+comparison measurements and must not be treated as the recommended mode.
+
+Historically, the dominance failure was kept visible by
+`test_a_fresh_weak_match_can_still_outrank_an_old_exact_one`; that test now pins
+the legacy reproduction while a companion test pins the repaired ordering.
 
 <!-- yazan: codex · gpt-5.6-sol -->
 **Archive anchor coverage follows the source's identity guarantees.** Claude
