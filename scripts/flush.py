@@ -511,6 +511,9 @@ def maybe_trigger_compile(
 
     environment = os.environ.copy()
     environment.pop("BEYIN_INVOKED_BY", None)
+    # The compile default (backend+mode) is sealed by the A4 gate decision;
+    # a flush running on a local backend must not leak it into the compiler.
+    environment["BEYIN_MODEL_BACKEND"] = "claude"
     launcher = popen_factory or subprocess.Popen
     try:
         launcher(

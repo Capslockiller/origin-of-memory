@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 <!-- yazan: claude · fable-5 -->
+- Text-mode compilation gains a link-richness instruction (BAGLANTI ZENGINLIGI):
+  aim for three-plus wikilinks per concept, drawn from the provided root-map and
+  duplicate-check registry lists, without padding the body. Measured on the
+  A4 gate with a local 30B backend: 2.30 -> 3.30 links/concept, zero gate
+  violations. Asking for four-plus destabilised the local model into
+  truncations, so three is the deliberate ceiling until the runner's output
+  budget is raised. Tool-mode prompt is byte-identical.
+- A flush running on a local backend no longer leaks its backend choice into
+  the compiler it triggers: the compile spawn pins BEYIN_MODEL_BACKEND to the
+  sealed default.
+
+<!-- yazan: claude · fable-5 -->
 - The retrieval hook sheds its PowerShell wrapper: `retrieve.py hook` reads the
   Claude Code hook JSON from stdin itself (same skip rules, byte-identical
   injection) and the query path stops importing `sema`/`rootmap`/`shutil`/

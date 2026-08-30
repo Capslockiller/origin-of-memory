@@ -311,6 +311,20 @@ Bütün dosyalardan sonra tek kapanış satırı:
 - Yalnız şu yollara yazabilirsin: knowledge/concepts/**.md,
   knowledge/index-full.md, knowledge/log.md. Başka yol sessizce düşürülür.
 - Aynı dosyayı iki kez döndürme.
+
+BAĞLANTI ZENGİNLİĞİ — ARAÇSIZ MODDA ZORUNLU
+- Şemadaki "en az iki wikilink" bir TABAN, hedef değil: EN AZ ÜÇ hedefle,
+  her birinin yanında tek KISA cümlelik gerekçe (uzatma).
+- Önce KÖK HARİTA ve YİNELEME-KONTROL KAYDI listelerindeki mevcut kavram
+  adlarını tara, ilgili olanlara [[tam kavram adı]] bağlan — bu listeler
+  tam olarak bunun için verildi, atlama.
+- Aynı çağrıda ürettiğin kavramlar gerçekten ilişkiliyse birbirine de
+  karşılıklı bağla.
+- Materyalde adı geçmeyen ama konuyla tutarlı bir kavrama da bağlanabilirsin
+  (sarkan wikilink vault kuralınca geçerlidir); hedef adı ASCII kebab-case
+  ve anlamlı olsun, rastgele ad uydurma.
+- Bağlantı için gövdeyi şişirme: ## Detaylar ve diğer bölümleri özlü tut,
+  yeni uzunluk çoğunlukla kısa gerekçe cümlelerinden gelsin.
 """
 
 EXISTING_BODIES_TEMPLATE = """
