@@ -224,6 +224,29 @@ class TextModePromptTests(TextModeHarness):
         self.assertIn("=== DONE ===", prompt)
         self.assertIn("TAM içeriğini döndür", prompt)
 
+    def test_the_link_richness_instruction_points_at_the_provided_lists(self) -> None:
+        """A4.4/§20: link-poverty in text mode is a prompt gap, not a model gap.
+
+        The fix leans on material the prompt already carries (root map +
+        registry), so the instruction must name both and ask for more than the
+        schema's bare minimum of two links.
+        """
+        self._daily("2026-08-12.md")
+        stub = self._stub(_answer(CONCEPT))
+
+        self._run(stub)
+
+        prompt = stub.calls[0]
+        self.assertIn("BAĞLANTI ZENGİNLİĞİ", prompt)
+        self.assertIn("EN AZ ÜÇ", prompt)
+        self.assertIn("KÖK HARİTA", prompt)
+        self.assertIn("YİNELEME-KONTROL KAYDI", prompt)
+        # Text mode only: tool mode's prompt must stay untouched by this.
+        tool_prompt = compile_module.build_compile_prompt(
+            "kök harita", "kayıt", "2026-08-12.md", "gövde", "2026-08-12T00:00:00"
+        )
+        self.assertNotIn("BAĞLANTI ZENGİNLİĞİ", tool_prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
