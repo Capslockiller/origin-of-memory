@@ -405,11 +405,6 @@ def _append_daily(
     daily_dir.mkdir(parents=True, exist_ok=True)
     date_text = now.strftime("%Y-%m-%d")
     daily_path = daily_dir / f"{date_text}.md"
-    if not daily_path.exists():
-        daily_path.write_text(
-            f"# Günlük Log: {date_text}\n\n## Oturumlar\n",
-            encoding="utf-8",
-        )
 
     if suffix is None:
         suffix = ", compaction öncesi" if reason == "precompact" else ""
@@ -419,8 +414,26 @@ def _append_daily(
         f"\n### Oturum ({now.strftime('%H:%M')}){suffix}\n\n"
         f"{anchor_block}{summary}\n"
     )
-    with daily_path.open("a", encoding="utf-8") as daily_file:
-        daily_file.write(entry)
+    # A per-session flush lock (see ``_session_lock_path``) only serialises one
+    # session against itself. Two different callers writing the same daily
+    # file at once — a hook flush and Kaydet, or two hook sessions racing each
+    # other — were never protected against each other, since both the
+    # exists-check-then-create and the append below were unguarded. This lock
+    # closes that: it wraps the header creation too, not just the append,
+    # because a stale exists()==False race followed by the truncating
+    # write_text below is exactly what could wipe out another writer's
+    # already-appended entry.
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_DIR / "daily-append.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        _lock_exclusive(lock_file, blocking=True)
+        if not daily_path.exists():
+            daily_path.write_text(
+                f"# Günlük Log: {date_text}\n\n## Oturumlar\n",
+                encoding="utf-8",
+            )
+        with daily_path.open("a", encoding="utf-8") as daily_file:
+            daily_file.write(entry)
 
 
 def _effective_hour(now: dt.datetime) -> int:

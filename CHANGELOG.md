@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: claude · sonnet -->
+- **F3 "Kaydet" (Save — the golden path)**: `scripts/kaydet.py` is the
+  panel's "Kaydet" action and its CLI equivalent — "flush + compile, local,
+  now, like saving a project" — for **zero model tokens** spent on the note
+  itself. Text (positional argument, `--stdin`, or `--dosya PATH`; exactly
+  one source) is redacted (`secret_guard`), checked for directive-shaped
+  content (the same `DIRECTIVE_SHAPED` pattern `flush.py`/`compile.py` use —
+  a hit quarantines the note through compile's own `_quarantine_content`
+  convention instead of writing it), then appended straight to today's
+  daily log with a `source:kaydet` session anchor
+  (`retrieve.SESSION_SOURCES` gains `"kaydet"`), no model call, no prompt.
+  `compile.py --nezaket-del` then runs to completion immediately —
+  bypassing the A7 nezaket gate on purpose: an explicit user action is its
+  own permission. Kaydet's exit code answers only "was the note written?";
+  a compile timeout (`BEYIN_KAYDET_DERLEME_ZAMAN_ASIMI`, default 900s) or
+  failure is reported through health and the JSON result's `derleme` field
+  without changing it. `flush._append_daily` gains a short shared
+  `daily-append.lock` around its exists-check-then-append sequence, closing
+  a pre-existing race between any two writers of the same daily file (a
+  hook flush and Kaydet, or two hook sessions) that the per-session lock
+  never covered — output bytes for a single writer are unchanged. The panel
+  gains a Kaydet card (textarea, optional title, "Kaydet" button) above the
+  tabs; `POST /api/action/kaydet` feeds the note over **stdin**, never
+  argv, and streams like every other operation. See `docs/kaydet.md`.
+
+<!-- yazan: claude · sonnet -->
 - **F2 "A7 nezaket" (politeness layer)**: `scripts/nezaket.py` defers
   `compile.py`, `watcher.py`, and `ingest.py` runs while Master Mind is
   actively using the machine, instead of letting a background model call

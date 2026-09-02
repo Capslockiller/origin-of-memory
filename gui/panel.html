@@ -159,6 +159,22 @@
       font: inherit;
     }
     select:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    input[type="text"], textarea {
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 9px 12px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      width: 100%;
+    }
+    input[type="text"]:focus-visible, textarea:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    textarea { min-height: 96px; resize: vertical; }
+    .kaydet { margin-bottom: 28px; }
+    .kaydet-form { display: grid; gap: 12px; }
+    .kaydet-title { max-width: 360px; }
+    .kaydet-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    .kaydet-result { margin: 0; }
     .backend-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
     .backend-summary .metric { box-shadow: none; padding: 16px; }
     .notice { margin-top: 14px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); color: var(--muted); }
@@ -243,6 +259,23 @@
         </div>
         <div id="connection" class="connection" role="status" aria-live="polite">Connecting</div>
       </header>
+
+      <section class="kaydet" aria-labelledby="kaydet-title">
+        <div class="panel">
+          <div class="section-head"><h2 id="kaydet-title">Kaydet</h2><span class="section-note">Flush + compile, local, now — zero model tokens for the note itself</span></div>
+          <div class="panel-body">
+            <div class="kaydet-form">
+              <textarea id="kaydet-metin" rows="4" placeholder="Aklındakini yaz — günlüğe düşer, hemen derlenir." aria-label="Not metni"></textarea>
+              <input type="text" id="kaydet-baslik" class="kaydet-title" placeholder="Başlık (opsiyonel)" aria-label="Başlık">
+              <div class="kaydet-actions">
+                <button class="action" id="kaydet-button" type="button">Kaydet</button>
+                <p class="section-note kaydet-result" id="kaydet-result"></p>
+              </div>
+            </div>
+          </div>
+          <div class="notice" id="kaydet-notice" hidden></div>
+        </div>
+      </section>
 
       <section class="view" id="view-health" role="tabpanel" aria-labelledby="tab-health">
         <div class="panel">
@@ -376,7 +409,7 @@
   <script>
     (() => {
       'use strict';
-      const labels = { doctor: 'Run the doctor', compile: 'Compile now', index: 'Rebuild the index', watcher: 'Watcher sweep once', pull: 'Pull model', backend: 'Switch backend', try: 'Try backend' };
+      const labels = { doctor: 'Run the doctor', compile: 'Compile now', index: 'Rebuild the index', watcher: 'Watcher sweep once', pull: 'Pull model', backend: 'Switch backend', try: 'Try backend', kaydet: 'Kaydet' };
       const confirmations = {
         doctor: 'Run the doctor now? This reads and reports the current system state.',
         compile: 'Compile the pending daily memory now?',
@@ -390,6 +423,11 @@
       const operationState = document.getElementById('operation-state');
       const maintenanceButtons = Array.from(document.querySelectorAll('.maintenance-action'));
       const cancelPull = document.getElementById('cancel-pull');
+      const kaydetMetin = document.getElementById('kaydet-metin');
+      const kaydetBaslik = document.getElementById('kaydet-baslik');
+      const kaydetButton = document.getElementById('kaydet-button');
+      const kaydetResult = document.getElementById('kaydet-result');
+      const kaydetNotice = document.getElementById('kaydet-notice');
       let lastEventId = 0;
       let stopped = false;
       let activeOperation = '';
@@ -667,6 +705,41 @@
         renderToday(await today.json());
       }
 
+      // The single fixed prefix kaydet.py's ``--json`` output uses on its
+      // one machine-readable result line — see scripts/kaydet.py's
+      // RESULT_MARKER. Any other line printed while a kaydet operation is
+      // running (e.g. the spawned compile subprocess's own stdout) is shown
+      // as plain text, never parsed as the result.
+      const KAYDET_MARKER = 'KAYDET-SONUC ';
+
+      function formatKaydetFailure(payload) {
+        let reason = 'Kaydedilmedi: ' + (payload.hata || 'bilinmeyen-hata');
+        if (payload.karantina_dosyasi) reason += ' · karantina: ' + payload.karantina_dosyasi;
+        return reason;
+      }
+
+      function formatKaydetResult(payload) {
+        if (!payload.yazildi) return formatKaydetFailure(payload);
+        const derleme = payload.derleme || {};
+        const compileText = derleme.kosuldu ? ('derleme çalıştı · çıkış ' + derleme.cikis) : 'derleme çalışmadı';
+        return 'Kaydedildi: ' + payload.dosya + ' · ' + compileText;
+      }
+
+      // Called only from the actual result line (operation-output carrying
+      // the KAYDET_MARKER JSON) — never from the POST handler's 202. A 202
+      // just means the process started; the gates and the write itself all
+      // happen inside it, so only yazildi:true here means the note is safe
+      // to discard from the draft. Any failure (quarantine, too-long, empty,
+      // a write error, a non-zero exit) leaves the draft untouched so the
+      // caller doesn't lose their note.
+      function handleKaydetResult(payload) {
+        kaydetResult.textContent = formatKaydetResult(payload);
+        if (payload.yazildi === true) {
+          kaydetMetin.value = '';
+          kaydetBaslik.value = '';
+        }
+      }
+
       function appendOutput(line, isError) {
         if (output.textContent === 'Output will appear here.') output.textContent = '';
         let shown = line;
@@ -680,6 +753,12 @@
               shown = 'Answer: ' + (payload.answer || '(no answer)') + '\nLatency: ' + payload.latency_ms + ' ms\nModel: ' + (payload.model || 'unresolved') + '\nBackend: ' + payload.backend;
               if (payload.error) shown += '\nError: ' + payload.error;
             }
+          } catch (_) {}
+        } else if (!isError && activeOperation === 'kaydet' && line.startsWith(KAYDET_MARKER)) {
+          try {
+            const payload = JSON.parse(line.slice(KAYDET_MARKER.length));
+            shown = formatKaydetResult(payload);
+            handleKaydetResult(payload);
           } catch (_) {}
         }
         output.textContent += (isError ? '[error] ' : '') + shown + '\n';
@@ -807,6 +886,29 @@
             appendOutput(error.message, true);
           }
         });
+      });
+
+      kaydetButton.addEventListener('click', async () => {
+        const metin = kaydetMetin.value;
+        if (!metin.trim()) return;
+        const baslik = kaydetBaslik.value.trim();
+        kaydetNotice.hidden = true;
+        kaydetResult.textContent = '';
+        try {
+          const response = await api('/api/action/kaydet', { method: 'POST', body: JSON.stringify({ metin, baslik }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'Kaydedilemedi.');
+          setActive('kaydet');
+          // The draft is deliberately NOT cleared here: this 202 only means
+          // the kaydet.py process was launched. Every gate (empty, size
+          // cap, redact, directive-shaped quarantine) and the write itself
+          // still happen inside that process — clearing now would lose the
+          // note on any of those failures. handleKaydetResult clears it
+          // once the real result line reports yazildi:true.
+        } catch (error) {
+          kaydetNotice.hidden = false;
+          kaydetNotice.textContent = error.message;
+        }
       });
 
       document.getElementById('fit-rows').addEventListener('click', async (event) => {
