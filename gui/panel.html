@@ -189,7 +189,7 @@
     .empty { padding: 34px 22px; color: var(--muted); text-align: center; }
     .operations { margin-top: 28px; }
     .operation-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; }
-    .action {
+    .action, .kokpit-btn {
       min-height: 48px;
       border: 1px solid var(--line);
       border-radius: 11px;
@@ -199,8 +199,8 @@
       font-weight: 700;
       cursor: pointer;
     }
-    .action:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-strong); }
-    .action:disabled { opacity: .48; cursor: not-allowed; }
+    .action:hover:not(:disabled), .kokpit-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-strong); }
+    .action:disabled, .kokpit-btn:disabled { opacity: .48; cursor: not-allowed; }
     .output { margin-top: 14px; background: #0b1117; color: #d8e1e9; border-radius: 13px; overflow: hidden; }
     .output-head { display: flex; justify-content: space-between; gap: 16px; padding: 11px 15px; border-bottom: 1px solid #2d3944; color: #aeb9c4; font-size: .82rem; }
     pre { margin: 0; min-height: 84px; max-height: 210px; overflow: auto; padding: 14px 16px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 "Cascadia Mono", Consolas, monospace; }
@@ -223,6 +223,49 @@
     .pasaport-istekler li { padding: 12px 22px; border-bottom: 1px solid var(--line); }
     .pasaport-istekler li:last-child { border-bottom: 0; }
     .pasaport-panel-gap { margin-top: 16px; }
+    .kokpit { margin-top: 28px; }
+    .kokpit-lane-row, .kokpit-count-row { display: flex; flex-wrap: wrap; gap: 10px; }
+    .kokpit-count-row { margin-top: 8px; }
+    .kokpit-lane-chip, .kokpit-count-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: .82rem;
+      color: var(--muted);
+      background: var(--surface-2);
+      white-space: nowrap;
+    }
+    .kokpit-pasaport-note { margin-top: 14px; }
+    .kokpit-pasaport-link { color: var(--accent-strong); font-weight: 700; }
+    .kokpit-form-body { border-top: 1px solid var(--line); }
+    .kokpit-form { display: grid; gap: 12px; }
+    .kokpit-form-row { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; }
+    .kokpit-tur { border: 0; padding: 0; margin: 0; display: flex; gap: 14px; align-items: center; }
+    .kokpit-tur legend { color: var(--muted); font-size: .8rem; font-weight: 700; padding: 0; }
+    .kokpit-tur label { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+    .kokpit-model-field { max-width: 240px; }
+    .kokpit-cwd-field { max-width: 480px; }
+    .kokpit-mini { min-height: 38px; padding: 7px 11px; font-weight: 600; }
+    .kokpit-jobs-panel { margin-top: 20px; }
+    .kokpit-actions-cell { display: flex; gap: 8px; flex-wrap: wrap; }
+    .kokpit-detail-row td { border-bottom: 1px solid var(--line); padding-top: 0; }
+    .kokpit-detail-pre {
+      margin: 8px 0 0;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      max-height: 240px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+      color: var(--text);
+    }
+    .kokpit-diff-entry { margin-bottom: 14px; }
+    .kokpit-diff-entry:last-child { margin-bottom: 0; }
     @media (max-width: 1050px) {
       .operation-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
       .accounting { grid-template-columns: 1fr; }
@@ -428,6 +471,54 @@
         </div>
       </section>
 
+      <section class="kokpit" aria-labelledby="kokpit-title">
+        <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="kokpit-title">Kokpit</h2><span class="section-note" id="kokpit-updated">Loading…</span></div>
+        <div class="panel">
+          <div class="panel-body">
+            <div id="kokpit-lanes"><p class="section-note">Loading lane state…</p></div>
+            <p class="section-note kokpit-pasaport-note">Onaylanmayı bekleyen web-dönüşü paketleri için <a href="#pasaport-title" class="kokpit-pasaport-link">Pasaport</a> bölümündeki ISTEK defterine bakın.</p>
+          </div>
+          <div class="panel-body kokpit-form-body">
+            <form class="kokpit-form" id="kokpit-form">
+              <div class="kokpit-form-row">
+                <fieldset class="kokpit-tur">
+                  <legend>Tür</legend>
+                  <label><input type="radio" name="kokpit-tur" value="claude" checked> claude</label>
+                  <label><input type="radio" name="kokpit-tur" value="codex"> codex</label>
+                </fieldset>
+                <div class="control kokpit-model-field">
+                  <label for="kokpit-model">Model</label>
+                  <input type="text" id="kokpit-model" list="kokpit-model-list" value="sonnet" aria-label="Model">
+                  <datalist id="kokpit-model-list">
+                    <option value="sonnet"></option>
+                    <option value="opus"></option>
+                    <option value="haiku"></option>
+                    <option value="gpt-5.6-sol"></option>
+                  </datalist>
+                </div>
+              </div>
+              <textarea id="kokpit-prompt" rows="4" placeholder="Göreve ne yapılacağını yaz." aria-label="Görev metni"></textarea>
+              <input type="text" id="kokpit-cwd" class="kokpit-cwd-field" placeholder="Çalışma dizini (mutlak yol, opsiyonel)" aria-label="Çalışma dizini">
+              <textarea id="kokpit-izlenen" rows="2" placeholder="İzlenecek dosyalar (satır başına bir yol, opsiyonel)" aria-label="İzlenen dosyalar"></textarea>
+              <div class="kaydet-actions">
+                <button class="kokpit-btn" id="kokpit-submit" type="submit">İş ver</button>
+                <p class="section-note kaydet-result" id="kokpit-submit-result"></p>
+              </div>
+            </form>
+          </div>
+          <div class="notice" id="kokpit-notice" hidden></div>
+        </div>
+        <div class="panel kokpit-jobs-panel">
+          <div class="section-head"><h2>Son işler</h2><span class="section-note">Son 20 · kule/durum.json</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>ID</th><th>Tür</th><th>Model</th><th>Durum</th><th>Süre</th><th>Son olay</th><th>İşlemler</th></tr></thead>
+              <tbody id="kokpit-jobs"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section class="operations" aria-labelledby="operations-title">
         <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="operations-title">Operations</h2><span class="section-note">Every operation asks first</span></div>
         <div class="operation-grid">
@@ -471,6 +562,13 @@
       const pasaportPanodanButton = document.getElementById('pasaport-panodan-button');
       const pasaportNotice = document.getElementById('pasaport-notice');
       let pasaportRawHash = null;
+      const kokpitForm = document.getElementById('kokpit-form');
+      const kokpitSubmit = document.getElementById('kokpit-submit');
+      const kokpitSubmitResult = document.getElementById('kokpit-submit-result');
+      const kokpitNotice = document.getElementById('kokpit-notice');
+      let kokpitPolling = false;
+      let kokpitSubmitting = false;
+      let kokpitVscode = { bulundu: false, yol: null };
       let lastEventId = 0;
       let stopped = false;
       let activeOperation = '';
@@ -972,6 +1070,348 @@
         }, 5000);
       }
 
+      // F5 "Kokpit" part 2 — the tower's job list. Every value rendered here
+      // comes straight from kule/durum.json (or, on demand, one job record /
+      // log / diff file) — nothing here is computed, only displayed.
+      function formatKokpitDuration(value) {
+        if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+        if (value < 60) return value.toFixed(1) + 's';
+        const minutes = Math.floor(value / 60);
+        const seconds = Math.round(value % 60);
+        return minutes + 'm ' + seconds + 's';
+      }
+
+      function renderKokpitLanes(data) {
+        const container = document.getElementById('kokpit-lanes');
+        container.replaceChildren();
+        const seritler = data.seritler || {};
+        const sayilar = data.sayilar || {};
+        const laneRow = document.createElement('div');
+        laneRow.className = 'kokpit-lane-row';
+        ['claude', 'codex'].forEach((tur) => {
+          const lane = seritler[tur] || {};
+          const chip = document.createElement('span');
+          chip.className = 'kokpit-lane-chip';
+          chip.textContent = tur + ': ' + (lane.dolu == null ? '?' : lane.dolu) + '/' + (lane.tavan == null ? '?' : lane.tavan);
+          laneRow.append(chip);
+        });
+        container.append(laneRow);
+        const countRow = document.createElement('div');
+        countRow.className = 'kokpit-count-row';
+        Object.keys(sayilar).forEach((durum) => {
+          const chip = document.createElement('span');
+          chip.className = 'kokpit-count-chip';
+          chip.textContent = durum + ': ' + sayilar[durum];
+          countRow.append(chip);
+        });
+        container.append(countRow);
+      }
+
+      function kokpitDetailRow(jobId) {
+        return document.getElementById('kokpit-detail-' + jobId);
+      }
+
+      function showKokpitDetailText(jobId, text) {
+        const row = kokpitDetailRow(jobId);
+        if (!row) return;
+        const cell = row.querySelector('td');
+        cell.replaceChildren();
+        const pre = document.createElement('pre');
+        pre.className = 'kokpit-detail-pre';
+        pre.textContent = text;
+        cell.append(pre);
+        row.hidden = false;
+      }
+
+      function renderKokpitJobs(data) {
+        const body = document.getElementById('kokpit-jobs');
+        body.replaceChildren();
+        const jobs = data.son_isler || [];
+        if (!jobs.length) {
+          const tr = document.createElement('tr');
+          const td = textCell('Henüz iş yok.', 'muted');
+          td.colSpan = 7;
+          tr.append(td);
+          body.append(tr);
+          return;
+        }
+        jobs.forEach((job) => {
+          const jobId = String(job.id || '');
+          const tr = document.createElement('tr');
+          tr.append(textCell(jobId.slice(0, 8), 'component'));
+          tr.append(textCell(job.tur || ''));
+          tr.append(textCell(job.model || ''));
+          tr.append(textCell(job.durum || 'unknown'));
+          tr.append(textCell(formatKokpitDuration(job.sure_sn)));
+          tr.append(textCell(job.son_olay || '', 'muted'));
+
+          const actionsCell = document.createElement('td');
+          actionsCell.className = 'kokpit-actions-cell';
+
+          const logButton = document.createElement('button');
+          logButton.className = 'kokpit-btn kokpit-mini';
+          logButton.type = 'button';
+          logButton.textContent = 'Log';
+          logButton.dataset.kokpitLog = jobId;
+          actionsCell.append(logButton);
+
+          if (job.durum === 'queued' || job.durum === 'running') {
+            const cancelButton = document.createElement('button');
+            cancelButton.className = 'kokpit-btn kokpit-mini';
+            cancelButton.type = 'button';
+            cancelButton.textContent = 'İptal';
+            cancelButton.dataset.kokpitIptal = jobId;
+            actionsCell.append(cancelButton);
+          }
+
+          if (job.diff_var) {
+            const diffButton = document.createElement('button');
+            diffButton.className = 'kokpit-btn kokpit-mini';
+            diffButton.type = 'button';
+            diffButton.textContent = 'Diff';
+            diffButton.dataset.kokpitDiff = jobId;
+            actionsCell.append(diffButton);
+          }
+
+          if (job.durum === 'waiting-approval') {
+            const approveButton = document.createElement('button');
+            approveButton.className = 'kokpit-btn kokpit-mini';
+            approveButton.type = 'button';
+            approveButton.textContent = 'Onayla';
+            approveButton.dataset.kokpitOnayla = jobId;
+            actionsCell.append(approveButton);
+
+            const rejectButton = document.createElement('button');
+            rejectButton.className = 'kokpit-btn kokpit-mini';
+            rejectButton.type = 'button';
+            rejectButton.textContent = 'Reddet';
+            rejectButton.dataset.kokpitReddet = jobId;
+            actionsCell.append(rejectButton);
+          }
+
+          tr.append(actionsCell);
+          body.append(tr);
+
+          const detailRow = document.createElement('tr');
+          detailRow.className = 'kokpit-detail-row';
+          detailRow.id = 'kokpit-detail-' + jobId;
+          detailRow.hidden = true;
+          const detailCell = document.createElement('td');
+          detailCell.colSpan = 7;
+          detailRow.append(detailCell);
+          body.append(detailRow);
+        });
+      }
+
+      function renderKokpit(data) {
+        renderKokpitLanes(data);
+        renderKokpitJobs(data);
+        kokpitVscode = data.vscode || { bulundu: false, yol: null };
+        const suffix = data.calisiyor ? '' : ' · kule çalışmıyor';
+        document.getElementById('kokpit-updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + suffix;
+      }
+
+      async function loadKule() {
+        const response = await api('/api/kule');
+        if (!response.ok) throw new Error('Kule data is unavailable.');
+        renderKokpit(await response.json());
+      }
+
+      function kokpitPollLoop() {
+        // Poll /api/kule every 5s, guarded so an in-flight request never
+        // stacks another one on top of it (unlike nezaketPollLoop/
+        // pasaportPollLoop above, which don't need the guard since their
+        // 10s/5s intervals never overlap their own typical response time).
+        setInterval(() => {
+          if (stopped || kokpitPolling) return;
+          kokpitPolling = true;
+          loadKule().catch(() => {}).finally(() => { kokpitPolling = false; });
+        }, 5000);
+      }
+
+      document.getElementById('kokpit-jobs').addEventListener('click', async (event) => {
+        const logButton = event.target.closest('button[data-kokpit-log]');
+        if (logButton) {
+          const jobId = logButton.dataset.kokpitLog;
+          logButton.disabled = true;
+          try {
+            const response = await api('/api/kule/is?id=' + encodeURIComponent(jobId));
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Log alınamadı.');
+            const lines = result.log_kuyruk || [];
+            showKokpitDetailText(jobId, lines.length ? lines.join('\n') : '(log boş)');
+          } catch (error) {
+            showKokpitDetailText(jobId, error.message);
+          } finally {
+            logButton.disabled = false;
+          }
+          return;
+        }
+
+        const iptalButton = event.target.closest('button[data-kokpit-iptal]');
+        if (iptalButton) {
+          const jobId = iptalButton.dataset.kokpitIptal;
+          if (!window.confirm('Bu işi iptal et?')) return;
+          iptalButton.disabled = true;
+          try {
+            const response = await api('/api/action/kule-iptal', { method: 'POST', body: JSON.stringify({ id: jobId }) });
+            const result = await response.json();
+            if (!response.ok || result.basarili === false) throw new Error(result.hata || result.error || 'İptal edilemedi.');
+            await loadKule();
+          } catch (error) {
+            showKokpitDetailText(jobId, error.message);
+          } finally {
+            iptalButton.disabled = false;
+          }
+          return;
+        }
+
+        const onaylaButton = event.target.closest('button[data-kokpit-onayla]');
+        const reddetButton = event.target.closest('button[data-kokpit-reddet]');
+        if (onaylaButton || reddetButton) {
+          const button = onaylaButton || reddetButton;
+          const jobId = onaylaButton ? onaylaButton.dataset.kokpitOnayla : reddetButton.dataset.kokpitReddet;
+          const route = onaylaButton ? '/api/action/kule-onayla' : '/api/action/kule-reddet';
+          const question = onaylaButton ? 'Bu diff onaylanıp iş tamamlansın mı?' : 'Bu diff reddedilsin mi?';
+          if (!window.confirm(question)) return;
+          button.disabled = true;
+          try {
+            const response = await api(route, { method: 'POST', body: JSON.stringify({ id: jobId }) });
+            const result = await response.json();
+            if (!response.ok || result.basarili === false) throw new Error(result.hata || result.error || 'İşlem başarısız.');
+            await loadKule();
+          } catch (error) {
+            showKokpitDetailText(jobId, error.message);
+          } finally {
+            button.disabled = false;
+          }
+          return;
+        }
+
+        const diffButton = event.target.closest('button[data-kokpit-diff]');
+        if (diffButton) {
+          const jobId = diffButton.dataset.kokpitDiff;
+          diffButton.disabled = true;
+          try {
+            const jobResponse = await api('/api/kule/is?id=' + encodeURIComponent(jobId));
+            const jobResult = await jobResponse.json();
+            if (!jobResponse.ok) throw new Error(jobResult.error || 'İş bulunamadı.');
+            const diffler = (jobResult.is && jobResult.is.diffler) || [];
+            if (!diffler.length) {
+              showKokpitDetailText(jobId, '(diff yok)');
+              return;
+            }
+            const row = kokpitDetailRow(jobId);
+            const cell = row.querySelector('td');
+            cell.replaceChildren();
+            diffler.forEach((entry, index) => {
+              const wrap = document.createElement('div');
+              wrap.className = 'kokpit-diff-entry';
+              const heading = document.createElement('p');
+              heading.className = 'section-note';
+              heading.textContent = entry.dosya + ' · +' + entry.ekleme + ' / -' + entry.silme;
+              wrap.append(heading);
+              const showButton = document.createElement('button');
+              showButton.className = 'kokpit-btn kokpit-mini';
+              showButton.type = 'button';
+              showButton.textContent = 'Göster';
+              showButton.dataset.kokpitDiffShow = jobId + ':' + index;
+              wrap.append(showButton);
+              if (kokpitVscode.bulundu) {
+                const vscodeButton = document.createElement('button');
+                vscodeButton.className = 'kokpit-btn kokpit-mini';
+                vscodeButton.type = 'button';
+                vscodeButton.textContent = 'VS Code\'da aç';
+                vscodeButton.dataset.kokpitVscode = jobId + ':' + index;
+                wrap.append(vscodeButton);
+              }
+              const pre = document.createElement('pre');
+              pre.className = 'kokpit-detail-pre';
+              pre.hidden = true;
+              wrap.append(pre);
+              cell.append(wrap);
+            });
+            row.hidden = false;
+          } catch (error) {
+            showKokpitDetailText(jobId, error.message);
+          } finally {
+            diffButton.disabled = false;
+          }
+          return;
+        }
+
+        const showDiffButton = event.target.closest('button[data-kokpit-diff-show]');
+        if (showDiffButton) {
+          const [jobId, index] = showDiffButton.dataset.kokpitDiffShow.split(':');
+          const pre = showDiffButton.parentElement.querySelector('pre');
+          showDiffButton.disabled = true;
+          try {
+            const response = await api('/api/kule/diff?id=' + encodeURIComponent(jobId) + '&n=' + encodeURIComponent(index));
+            const text = await response.text();
+            if (!response.ok) throw new Error('Diff alınamadı.');
+            pre.textContent = text;
+            pre.hidden = false;
+          } catch (error) {
+            pre.textContent = error.message;
+            pre.hidden = false;
+          } finally {
+            showDiffButton.disabled = false;
+          }
+          return;
+        }
+
+        const vscodeButton = event.target.closest('button[data-kokpit-vscode]');
+        if (vscodeButton) {
+          const [jobId, index] = vscodeButton.dataset.kokpitVscode.split(':');
+          vscodeButton.disabled = true;
+          try {
+            const response = await api('/api/action/kule-vscode', { method: 'POST', body: JSON.stringify({ id: jobId, n: Number(index) }) });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "VS Code açılamadı.");
+          } catch (error) {
+            window.alert(error.message);
+          } finally {
+            vscodeButton.disabled = false;
+          }
+        }
+      });
+
+      kokpitForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        // Deliberately NOT tied to setActive()/activeOperation — this is not
+        // an SSE operation, so the in-flight disable is purely local.
+        if (kokpitSubmitting) return;
+        const turInput = kokpitForm.querySelector('input[name="kokpit-tur"]:checked');
+        const tur = turInput ? turInput.value : 'claude';
+        const model = document.getElementById('kokpit-model').value.trim();
+        const prompt = document.getElementById('kokpit-prompt').value;
+        const cwd = document.getElementById('kokpit-cwd').value.trim();
+        const izlenen = document.getElementById('kokpit-izlenen').value.split('\n').map((line) => line.trim()).filter(Boolean);
+        if (!prompt.trim()) return;
+        kokpitNotice.hidden = true;
+        kokpitSubmitResult.textContent = '';
+        kokpitSubmitting = true;
+        kokpitSubmit.disabled = true;
+        try {
+          const body = { tur, model, prompt };
+          if (cwd) body.cwd = cwd;
+          if (izlenen.length) body.izlenen = izlenen;
+          const response = await api('/api/action/kule-is-ver', { method: 'POST', body: JSON.stringify(body) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'İş oluşturulamadı.');
+          const newId = result.is && result.is.id ? result.is.id : '?';
+          kokpitSubmitResult.textContent = 'İş oluşturuldu: ' + newId;
+          document.getElementById('kokpit-prompt').value = '';
+          await loadKule();
+        } catch (error) {
+          kokpitNotice.hidden = false;
+          kokpitNotice.textContent = error.message;
+        } finally {
+          kokpitSubmitting = false;
+          kokpitSubmit.disabled = false;
+        }
+      });
+
       async function begin() {
         const token = location.hash.slice(1);
         if (!token) throw new Error('The one-time panel token is missing. Re-run Local Brain.');
@@ -983,6 +1423,8 @@
         nezaketPollLoop();
         loadPasaport().catch(() => {});
         pasaportPollLoop();
+        loadKule().catch(() => {});
+        kokpitPollLoop();
         eventLoop();
       }
 

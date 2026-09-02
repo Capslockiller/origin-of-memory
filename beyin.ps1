@@ -31,6 +31,14 @@ $script:ShutdownAt = $null
 $script:IdleSeconds = $GraceSeconds
 $script:AllowedBackends = @('claude', 'antigravity', 'ollama', 'openai-compat')
 $script:PasaportIzleyiciProcess = $null
+# F5 "Kokpit" part 2 — kule (the tower) lifecycle mirrors the pasaport
+# listener above: born with the panel (Start-Kule), dies with it (Stop-Kule
+# in the single shutdown path). $script:VsCodeInfo caches Find-VsCode's
+# result for the whole panel session; the marker matches kule.py's own
+# RESULT_MARKER exactly (see scripts/kule.py).
+$script:KuleProcess = $null
+$script:VsCodeInfo = $null
+$script:KuleResultMarker = 'KULE-SONUC '
 
 function New-RandomToken {
   $bytes = New-Object byte[] 32
@@ -552,6 +560,349 @@ function Stop-PasaportIzleyici {
   }
 }
 
+# --------------------------------------------------------------------------
+# F5 "Kokpit" part 2 — kule (the tower): lifecycle, routes' backing calls.
+# The panel never computes here either: every count/status shown comes
+# straight out of kule/durum.json or a job record kule.py itself wrote.
+# --------------------------------------------------------------------------
+
+function Get-QueryParams([string]$QueryString) {
+  $result = @{}
+  if (-not $QueryString) { return $result }
+  foreach ($pair in ($QueryString -split '&')) {
+    if (-not $pair) { continue }
+    $eq = $pair.IndexOf('=')
+    if ($eq -lt 0) {
+      $result[[Uri]::UnescapeDataString($pair)] = ''
+    } else {
+      $key = [Uri]::UnescapeDataString($pair.Substring(0, $eq))
+      $value = [Uri]::UnescapeDataString($pair.Substring($eq + 1))
+      $result[$key] = $value
+    }
+  }
+  return $result
+}
+
+function ConvertTo-OrderedFromJsonObject([object]$Value) {
+  # ConvertFrom-Json hands back a Hashtable for an empty/missing file (see
+  # Read-JsonObject) and a PSCustomObject for real JSON content — merge
+  # either shape's keys into a plain [ordered] so callers can add fields to
+  # it before it goes back out through ConvertTo-Json.
+  $result = [ordered]@{}
+  if ($Value -is [Collections.IDictionary]) {
+    foreach ($key in $Value.Keys) { $result[$key] = $Value[$key] }
+  } elseif ($Value) {
+    foreach ($prop in @($Value.PSObject.Properties)) { $result[$prop.Name] = $prop.Value }
+  }
+  return $result
+}
+
+function Find-VsCode {
+  # Cached for the panel session — probed at most once, in this fixed order.
+  if ($script:VsCodeInfo) { return $script:VsCodeInfo }
+  $command = Get-Command code -ErrorAction SilentlyContinue
+  if ($command) {
+    $script:VsCodeInfo = [ordered]@{ bulundu = $true; yol = $command.Source }
+    return $script:VsCodeInfo
+  }
+  $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+  $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles')
+  $candidates = @(
+    $(if ($localAppData) { Join-Path $localAppData 'Programs\Microsoft VS Code\bin\code.cmd' } else { $null }),
+    $(if ($programFiles) { Join-Path $programFiles 'Microsoft VS Code\bin\code.cmd' } else { $null })
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
+  $found = $candidates | Select-Object -First 1
+  $script:VsCodeInfo = [ordered]@{ bulundu = [bool]$found; yol = $(if ($found) { $found } else { $null }) }
+  return $script:VsCodeInfo
+}
+
+function Invoke-KuleDurum {
+  $durumPath = Join-Path (Join-Path $script:PanelPaths.State 'kule') 'durum.json'
+  $result = ConvertTo-OrderedFromJsonObject (Read-JsonObject $durumPath)
+  # ConvertFrom-Json collapses a single-element (or empty) JSON array into a
+  # bare object/$null — the same round-trip pitfall Invoke-NezaketDurum and
+  # Invoke-PasaportDurum already guard against — so re-wrap both array
+  # fields explicitly before this goes back out through ConvertTo-Json.
+  if ($result.Contains('son_isler')) { $result['son_isler'] = @($result['son_isler']) }
+  if ($result.Contains('reaper_eylemleri')) { $result['reaper_eylemleri'] = @($result['reaper_eylemleri']) }
+  $result['vscode'] = Find-VsCode
+  $result['calisiyor'] = [bool]($script:KuleProcess -and -not $script:KuleProcess.HasExited)
+  return $result
+}
+
+function Repair-KuleJobArrays([object]$Job) {
+  # Same single-element-array collapse pitfall, this time on one job
+  # record's own array fields (`diffler` in particular — a job with exactly
+  # one watched file is the common case, and that is exactly the size
+  # ConvertFrom-Json collapses).
+  if ($Job -isnot [Collections.IDictionary]) {
+    foreach ($field in @('izlenen_dosyalar', 'artefaktlar', 'diffler', 'uyarilar')) {
+      if (@($Job.PSObject.Properties.Name) -contains $field) {
+        $Job.$field = @($Job.$field)
+      }
+    }
+  }
+  return $Job
+}
+
+function Get-KuleJobLocation([string]$JobId) {
+  $jobsDir = Join-Path (Join-Path $script:PanelPaths.State 'kule') 'jobs'
+  $activePath = Join-Path $jobsDir "$JobId.json"
+  if (Test-Path -LiteralPath $activePath -PathType Leaf) {
+    return [pscustomobject]@{ Dir = $jobsDir; Path = $activePath; Konum = 'active' }
+  }
+  $arsivDir = Join-Path (Join-Path $script:PanelPaths.State 'kule') 'arsiv'
+  $arsivPath = Join-Path $arsivDir "$JobId.json"
+  if (Test-Path -LiteralPath $arsivPath -PathType Leaf) {
+    return [pscustomobject]@{ Dir = $arsivDir; Path = $arsivPath; Konum = 'arsiv' }
+  }
+  return $null
+}
+
+function Resolve-KuleGoreliYol([string]$Konum, [string]$JobId, [string]$StoredRel) {
+  # Resolves a once/sonra/diff path recorded by kule.py's `_kule_relative`
+  # (relative to `<state>/kule/`, e.g. `jobs/<id>/diff/0.diff`) against the
+  # job's CURRENT location — `active` (`jobs/`) or `arsiv` once kule.py's
+  # own archive step has moved the whole `jobs/<id>` directory in one
+  # piece. Only the tail after the `jobs/<id>`-or-`arsiv/<id>` prefix is
+  # trusted for the shape; the base directory always comes from `$Konum`,
+  # which the caller just found the job record in — not from the stored
+  # string. Returns `$null` for anything that does not resolve inside
+  # `<state>/kule/`, including a tampered absolute path; callers refuse
+  # with `kule_yol_disi` in that case.
+  if (-not $StoredRel) { return $null }
+  $kuleDir = Join-Path $script:PanelPaths.State 'kule'
+  $kuleDirFull = [IO.Path]::GetFullPath($kuleDir)
+  $parts = @($StoredRel -split '[\\/]' | Where-Object { $_ -ne '' })
+  if ([IO.Path]::IsPathRooted($StoredRel)) {
+    $candidate = $StoredRel
+  } elseif ($parts.Count -ge 2 -and ($parts[0] -eq 'jobs' -or $parts[0] -eq 'arsiv') -and $parts[1] -eq $JobId) {
+    $baseDir = if ($Konum -eq 'active') { Join-Path $kuleDir 'jobs' } else { Join-Path $kuleDir 'arsiv' }
+    $candidate = Join-Path $baseDir $JobId
+    for ($i = 2; $i -lt $parts.Count; $i++) { $candidate = Join-Path $candidate $parts[$i] }
+  } else {
+    $candidate = Join-Path $kuleDir $StoredRel
+  }
+  $candidateFull = [IO.Path]::GetFullPath($candidate)
+  $kuleDirPrefix = $kuleDirFull.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+  if ($candidateFull -ne $kuleDirFull -and -not $candidateFull.StartsWith($kuleDirPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    return $null
+  }
+  return $candidateFull
+}
+
+function Read-KuleLogTail([string]$LogPath, [int]$MaxBayt = 65536) {
+  # Reads at most the log's last $MaxBayt bytes via a seek instead of
+  # loading the whole file — a long-running job's `.log` can otherwise
+  # grow well past what any tail view needs (kule.py itself caps it at
+  # BEYIN_KULE_LOG_MAX_BAYT with its own rotation, but this stays cheap
+  # regardless of that cap).
+  if (-not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return @() }
+  try {
+    $stream = [IO.File]::Open($LogPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+    try {
+      $start = [Math]::Max(0, $stream.Length - $MaxBayt)
+      $stream.Seek($start, [IO.SeekOrigin]::Begin) | Out-Null
+      $buffer = New-Object byte[] ($stream.Length - $start)
+      if ($buffer.Length -gt 0) { $stream.Read($buffer, 0, $buffer.Length) | Out-Null }
+    } finally {
+      $stream.Close()
+    }
+  } catch {
+    return @()
+  }
+  $text = $script:Utf8.GetString($buffer)
+  $lines = @($text -split "`r?`n")
+  # A seek that lands mid-line leaves a partial first line — drop it
+  # rather than showing a truncated fragment, unless the whole file fit.
+  if ($start -gt 0 -and $lines.Count -gt 1) { $lines = $lines[1..($lines.Count - 1)] }
+  return @($lines | Where-Object { $_ -ne '' } | Select-Object -Last 60)
+}
+
+function Get-KuleJobDetail([string]$JobId) {
+  # Reads jobs/<id>.json (or arsiv/<id>.json) and the matching .log file
+  # directly — no python spawn, same "just read files" posture as
+  # Get-TodaySummary above.
+  $location = Get-KuleJobLocation $JobId
+  if (-not $location) { return $null }
+  $job = Repair-KuleJobArrays (Read-JsonObject $location.Path)
+  $logPath = Join-Path $location.Dir "$JobId.log"
+  $logLines = Read-KuleLogTail $logPath
+  return [ordered]@{ is = $job; log_kuyruk = $logLines }
+}
+
+function Get-KuleDiffText([string]$JobId, [int]$N) {
+  # The diff path is NEVER assembled from the request's id/n directly — it
+  # is read out of the job record's own `diffler[n].diff_yol` field, which
+  # only kule.py itself ever writes. `id`/`n` are only used to select which
+  # already-trusted record and array index to read. `diff_yol` is relative
+  # to `<state>/kule/` (kule.py's own `_kule_relative`) and re-resolved
+  # here against the job's CURRENT location — Resolve-KuleGoreliYol
+  # refuses anything that would land outside `<state>/kule/`.
+  $location = Get-KuleJobLocation $JobId
+  if (-not $location) { return [pscustomobject]@{ Metin = $null; Hata = 'kule_diff_yok' } }
+  $detail = Get-KuleJobDetail $JobId
+  if (-not $detail -or -not $detail.is) { return [pscustomobject]@{ Metin = $null; Hata = 'kule_diff_yok' } }
+  $diffler = @($detail.is.diffler)
+  if ($N -lt 0 -or $N -ge $diffler.Count) { return [pscustomobject]@{ Metin = $null; Hata = 'kule_diff_yok' } }
+  $diffRel = [string]$diffler[$N].diff_yol
+  $diffPath = Resolve-KuleGoreliYol $location.Konum $JobId $diffRel
+  if (-not $diffPath) { return [pscustomobject]@{ Metin = $null; Hata = 'kule_yol_disi' } }
+  if (-not (Test-Path -LiteralPath $diffPath -PathType Leaf)) {
+    return [pscustomobject]@{ Metin = $null; Hata = 'kule_diff_yok' }
+  }
+  try {
+    return [pscustomobject]@{ Metin = [IO.File]::ReadAllText($diffPath, $script:Utf8); Hata = $null }
+  } catch {
+    return [pscustomobject]@{ Metin = $null; Hata = 'kule_diff_yok' }
+  }
+}
+
+function Invoke-KuleIsVer(
+  [string]$Tur,
+  [string]$Model,
+  [string]$Prompt,
+  [string]$Cwd,
+  [string[]]$Izlenen,
+  [Collections.IDictionary]$Izin
+) {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'kule.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'kule.py was not found.' }
+  $arguments = New-Object Collections.Generic.List[string]
+  $arguments.Add($scriptPath)
+  $arguments.Add('--state-dir'); $arguments.Add($script:PanelPaths.State)
+  $arguments.Add('--vault-root'); $arguments.Add($script:PanelPaths.Vault)
+  $arguments.Add('is-ver')
+  $arguments.Add('--tur'); $arguments.Add($Tur)
+  $arguments.Add('--model'); $arguments.Add($Model)
+  $arguments.Add('--cwd'); $arguments.Add($Cwd)
+  $arguments.Add('--kaynak'); $arguments.Add('panel')
+  $arguments.Add('--stdin')
+  $arguments.Add('--json')
+  foreach ($path in $Izlenen) { $arguments.Add('--izlenen'); $arguments.Add($path) }
+  foreach ($key in @($Izin.Keys)) { $arguments.Add('--izin'); $arguments.Add("$key=$($Izin[$key])") }
+  $allArguments = @($script:Python.Prefix) + @($arguments.ToArray())
+  $oldPreference = $ErrorActionPreference
+  $oldOutputEncoding = $OutputEncoding
+  $oldConsoleEncoding = [Console]::OutputEncoding
+  try {
+    $ErrorActionPreference = 'Continue'
+    # Same PS 5.1 native-pipe fix New-KaydetCommand applies: without forcing
+    # UTF-8-no-BOM here, $OutputEncoding's OEM/ANSI default would mangle a
+    # Turkish prompt before kule.py ever sees a byte of it.
+    $OutputEncoding = [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+    $lines = @($Prompt | & $script:Python.Exe @allArguments 2>&1 | ForEach-Object { $_.ToString() })
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $oldPreference
+    $OutputEncoding = $oldOutputEncoding
+    [Console]::OutputEncoding = $oldConsoleEncoding
+  }
+  $resultLine = @($lines | Where-Object { $_.StartsWith($script:KuleResultMarker) }) | Select-Object -Last 1
+  if (-not $resultLine) {
+    throw "Kule is-ver produced no usable result (exit $exitCode): $($lines -join ' | ')"
+  }
+  $parsed = $resultLine.Substring($script:KuleResultMarker.Length) | ConvertFrom-Json
+  # A job created with exactly one `izlenen` path is the same
+  # single-element-array collapse case Repair-KuleJobArrays guards against
+  # on the read side — guard it here too, on the freshly-created record.
+  if ($parsed -and $parsed.is) { $parsed.is = Repair-KuleJobArrays $parsed.is }
+  return $parsed
+}
+
+function Invoke-KuleGecis([string]$Command, [string]$JobId) {
+  # onayla/reddet/iptal print plain JSON on success, or a bare slug on
+  # stderr with a non-zero exit on refusal (kule-is-yok, kule-gecis-gecersiz)
+  # — unlike is-ver's marker line, so this is deliberately not routed
+  # through Invoke-PanelPythonJson (which would only surface a generic
+  # failure message and lose the actual slug).
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'kule.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'kule.py was not found.' }
+  $arguments = @($script:Python.Prefix) + @(
+    $scriptPath, '--state-dir', $script:PanelPaths.State, '--vault-root', $script:PanelPaths.Vault, $Command, $JobId
+  )
+  $oldPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $lines = @(& $script:Python.Exe @arguments 2>&1 | ForEach-Object { $_.ToString() })
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $oldPreference
+  }
+  $text = ($lines -join [Environment]::NewLine).Trim()
+  if ($exitCode -ne 0) {
+    return [ordered]@{ basarili = $false; hata = $(if ($text) { $text } else { 'kule-beklenmedik' }) }
+  }
+  try {
+    return [ordered]@{ basarili = $true; is = (Repair-KuleJobArrays ($text | ConvertFrom-Json)) }
+  } catch {
+    return [ordered]@{ basarili = $false; hata = 'kule-cikti-gecersiz' }
+  }
+}
+
+function Start-Kule {
+  # Off-switch checked before anything else, same posture as
+  # Start-PasaportIzleyici's BEYIN_PASAPORT_IZLEYICI=off.
+  $off = [Environment]::GetEnvironmentVariable('BEYIN_KULE')
+  if ($off -and $off.Trim().ToLowerInvariant() -eq 'off') { return }
+  if (-not $script:Python) { return }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'kule.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { return }
+  # Belt and braces: kule.calis() itself now clears a leftover `dur` at its
+  # own startup (a stale marker from an earlier Stop-Kule whose process has
+  # since exited would otherwise make it return immediately, forever), but
+  # moving it out of the way here too means a freshly-spawned process never
+  # even sees it. Moved, not deleted — same "never erase, only relocate"
+  # posture as kule.py's own archive step.
+  try {
+    $kuleDur = Join-Path (Join-Path $script:PanelPaths.State 'kule') 'dur'
+    if (Test-Path -LiteralPath $kuleDur -PathType Leaf) {
+      Move-Item -LiteralPath $kuleDur -Destination "$kuleDur.onceki" -Force
+    }
+  } catch {}
+  $arguments = New-Object Collections.Generic.List[string]
+  foreach ($item in @($script:Python.Prefix)) { $arguments.Add([string]$item) }
+  $arguments.Add($scriptPath)
+  $arguments.Add('--state-dir')
+  $arguments.Add($script:PanelPaths.State)
+  $arguments.Add('--vault-root')
+  $arguments.Add($script:PanelPaths.Vault)
+  $arguments.Add('calis')
+  try {
+    $script:KuleProcess = Start-Process -FilePath $script:Python.Exe -ArgumentList $arguments.ToArray() -WindowStyle Hidden -PassThru -ErrorAction Stop
+  } catch {
+    $script:KuleProcess = $null
+  }
+}
+
+function Stop-Kule {
+  if (-not $script:KuleProcess) { return }
+  try {
+    if (-not $script:KuleProcess.HasExited) {
+      # Graceful stop first: write the `dur` marker kule.calis()'s own loop
+      # checks at the top of every pass, then give it up to 5s to notice and
+      # return on its own before falling back to a hard kill. Any
+      # `claude`/`codex` child kule already spawned is intentionally left
+      # running either way — see docs/kokpit.md "Orphan / reaper semantics".
+      try {
+        $kuleDir = Join-Path $script:PanelPaths.State 'kule'
+        if (-not (Test-Path -LiteralPath $kuleDir -PathType Container)) {
+          New-Item -ItemType Directory -Path $kuleDir -Force | Out-Null
+        }
+        [IO.File]::WriteAllText((Join-Path $kuleDir 'dur'), '', $script:Utf8)
+      } catch {}
+      if (-not $script:KuleProcess.WaitForExit(5000)) {
+        $script:KuleProcess.Kill()
+      }
+    }
+  } catch {
+  } finally {
+    $script:KuleProcess = $null
+  }
+}
+
 function Get-LocalModelSummary {
   $result = [ordered]@{
     python_available = [bool]$script:Python
@@ -885,19 +1236,31 @@ function Test-ApiEnvelope([object]$Request, [bool]$RequireCookie) {
 function Invoke-HttpRequest([object]$Request) {
   $allowed = @(
     '/', '/panel.html', '/api/session', '/api/health', '/api/today', '/api/local-models', '/api/events',
-    '/api/nezaket', '/api/pasaport',
+    '/api/nezaket', '/api/pasaport', '/api/kule', '/api/kule/is', '/api/kule/diff',
     '/api/action/doctor', '/api/action/compile', '/api/action/index', '/api/action/watcher',
     '/api/action/pull', '/api/action/pull-cancel', '/api/action/backend', '/api/action/try',
     '/api/action/kaydet', '/api/action/nezaket-serbest',
     '/api/action/pasaport-onayla', '/api/action/pasaport-reddet', '/api/action/pasaport-panodan',
+    '/api/action/kule-is-ver', '/api/action/kule-onayla', '/api/action/kule-reddet',
+    '/api/action/kule-iptal', '/api/action/kule-vscode',
     '/api/quit'
   )
-  if ($allowed -cnotcontains $Request.Target) {
+  # /api/kule/is and /api/kule/diff carry a query string (?id=...[&n=...]),
+  # so routing (and the allowlist check above) matches on the path alone —
+  # $requestQuery is parsed separately, only by the two handlers that need it.
+  $requestPath = $Request.Target
+  $requestQuery = ''
+  $queryIndex = $Request.Target.IndexOf('?')
+  if ($queryIndex -ge 0) {
+    $requestPath = $Request.Target.Substring(0, $queryIndex)
+    $requestQuery = $Request.Target.Substring($queryIndex + 1)
+  }
+  if ($allowed -cnotcontains $requestPath) {
     Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'not_found' })
     return
   }
 
-  if ($Request.Target -in @('/', '/panel.html')) {
+  if ($requestPath -in @('/', '/panel.html')) {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -916,7 +1279,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/session') {
+  if ($requestPath -eq '/api/session') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -944,7 +1307,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/health') {
+  if ($requestPath -eq '/api/health') {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -957,7 +1320,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/today') {
+  if ($requestPath -eq '/api/today') {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -966,7 +1329,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/local-models') {
+  if ($requestPath -eq '/api/local-models') {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -975,7 +1338,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/nezaket') {
+  if ($requestPath -eq '/api/nezaket') {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -992,7 +1355,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/pasaport') {
+  if ($requestPath -eq '/api/pasaport') {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1009,7 +1372,84 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/events') {
+  if ($requestPath -eq '/api/kule') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Kule requires Python.' })
+      return
+    }
+    try {
+      Write-JsonResponse $Request.Stream 200 'OK' (Invoke-KuleDurum)
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'kule_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($requestPath -eq '/api/kule/is') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    $queryParams = Get-QueryParams $requestQuery
+    $jobId = [string]$queryParams['id']
+    if ($jobId -cnotmatch '^[0-9a-f]{8,32}$') {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_id_gecersiz' })
+      return
+    }
+    try {
+      $detail = Get-KuleJobDetail $jobId
+      if (-not $detail) {
+        Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'kule_is_yok' })
+        return
+      }
+      Write-JsonResponse $Request.Stream 200 'OK' $detail
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'kule_is_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($requestPath -eq '/api/kule/diff') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    $queryParams = Get-QueryParams $requestQuery
+    $jobId = [string]$queryParams['id']
+    if ($jobId -cnotmatch '^[0-9a-f]{8,32}$') {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_id_gecersiz' })
+      return
+    }
+    $n = -1
+    if (-not [int]::TryParse([string]$queryParams['n'], [ref]$n) -or $n -lt 0) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_n_gecersiz' })
+      return
+    }
+    try {
+      $diffResult = Get-KuleDiffText $jobId $n
+      if ($diffResult.Hata) {
+        # A resolved-outside-<state>/kule/ path (a tampered diff_yol) is a
+        # 400, distinct from the ordinary "no such diff" 404 — everything
+        # else Get-KuleDiffText can report folds into the latter.
+        if ($diffResult.Hata -eq 'kule_yol_disi') {
+          Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = $diffResult.Hata })
+        } else {
+          Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = $diffResult.Hata })
+        }
+        return
+      }
+      Write-HttpResponse $Request.Stream 200 'OK' 'text/plain; charset=utf-8' $diffResult.Metin @{}
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'kule_diff_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($requestPath -eq '/api/events') {
     if ($Request.Method -cne 'GET') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1027,7 +1467,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/backend') {
+  if ($requestPath -eq '/api/action/backend') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1090,7 +1530,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/pull') {
+  if ($requestPath -eq '/api/action/pull') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1151,7 +1591,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/pull-cancel') {
+  if ($requestPath -eq '/api/action/pull-cancel') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1170,7 +1610,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/try') {
+  if ($requestPath -eq '/api/action/try') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1203,7 +1643,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/kaydet') {
+  if ($requestPath -eq '/api/action/kaydet') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1232,7 +1672,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/nezaket-serbest') {
+  if ($requestPath -eq '/api/action/nezaket-serbest') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1288,7 +1728,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/pasaport-onayla') {
+  if ($requestPath -eq '/api/action/pasaport-onayla') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1323,7 +1763,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/pasaport-reddet') {
+  if ($requestPath -eq '/api/action/pasaport-reddet') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1354,7 +1794,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/action/pasaport-panodan') {
+  if ($requestPath -eq '/api/action/pasaport-panodan') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1376,7 +1816,185 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -like '/api/action/*') {
+  # F5 "Kokpit" part 2 — kule actions. Every one of these is a quick file
+  # write/read, run synchronously right here — NOT through Start-PanelCommand
+  # / SSE, and NOT gated by $script:ActiveOperation: kule has its own
+  # multi-lane worker process doing the actual streaming into job logs, so
+  # the panel's single-operation-at-a-time slot (used by doctor/compile/
+  # index/watcher/pull/try/kaydet/pasaport-onayla) is left completely
+  # untouched by these routes.
+  if ($requestPath -eq '/api/action/kule-is-ver') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Kule requires Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $tur = if ($body -and $body.tur) { [string]$body.tur } else { '' }
+    if ($tur -cnotin @('claude', 'codex')) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_tur_gecersiz'; allowed = @('claude', 'codex') })
+      return
+    }
+    $model = if ($body -and $body.model) { [string]$body.model } else { '' }
+    if (-not $model -or $model.Length -gt 64 -or $model -cnotmatch '^[A-Za-z0-9._:-]+$') {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_model_gecersiz' })
+      return
+    }
+    $prompt = if ($body -and $null -ne $body.prompt) { [string]$body.prompt } else { '' }
+    if (-not $prompt.Trim()) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_prompt_eksik' })
+      return
+    }
+    $cwd = if ($body -and $body.cwd) { [string]$body.cwd } else { [string]$script:PanelPaths.Vault }
+    if (-not [IO.Path]::IsPathRooted($cwd)) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_cwd_gecersiz' })
+      return
+    }
+    $izlenen = @()
+    if ($body -and $body.izlenen) { $izlenen = @($body.izlenen | ForEach-Object { [string]$_ } | Where-Object { $_ }) }
+    # Belt-and-braces: kule.py's own create_job is the authoritative check
+    # (symlink-safe, via Path.resolve()) — this is a fast, textual
+    # pre-check so a malformed request gets a proper 400 without a
+    # subprocess round-trip. Same two caps kule.py enforces.
+    if ($izlenen.Count -gt 50) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_izlenen_cok_buyuk' })
+      return
+    }
+    $cwdFull = [IO.Path]::GetFullPath($cwd)
+    $cwdPrefix = $cwdFull.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    foreach ($item in $izlenen) {
+      $itemFull = if ([IO.Path]::IsPathRooted($item)) { [IO.Path]::GetFullPath($item) } else { [IO.Path]::GetFullPath((Join-Path $cwdFull $item)) }
+      if ($itemFull -ne $cwdFull -and -not $itemFull.StartsWith($cwdPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_izlenen_cwd_disi' })
+        return
+      }
+      if ((Test-Path -LiteralPath $itemFull -PathType Leaf) -and (Get-Item -LiteralPath $itemFull).Length -gt 5MB) {
+        Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_izlenen_cok_buyuk' })
+        return
+      }
+    }
+    $izin = @{}
+    if ($body -and $body.izin) {
+      foreach ($prop in @($body.izin.PSObject.Properties)) { $izin[$prop.Name] = [string]$prop.Value }
+    }
+    # Same allowlist kule.py's own _validate_izin enforces — permission_mode
+    # / sandbox each a closed set, allowed_tools a bounded character class.
+    # `bypassPermissions` and `danger-full-access` fall through as unknown
+    # values, refused like anything else outside the allowed sets.
+    $izinPermissionModes = @('default', 'acceptEdits', 'plan')
+    $izinSandboxModes = @('read-only', 'workspace-write')
+    foreach ($izinKey in @($izin.Keys)) {
+      $izinValue = $izin[$izinKey]
+      $izinGecerli = $false
+      if ($izinKey -eq 'permission_mode') {
+        $izinGecerli = $izinPermissionModes -ccontains $izinValue
+      } elseif ($izinKey -eq 'sandbox') {
+        $izinGecerli = $izinSandboxModes -ccontains $izinValue
+      } elseif ($izinKey -eq 'allowed_tools') {
+        $izinGecerli = ($izinValue.Length -le 200) -and ($izinValue -cmatch '^[A-Za-z0-9_,() *-]*$')
+      }
+      if (-not $izinGecerli) {
+        Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_izin_gecersiz' })
+        return
+      }
+    }
+    try {
+      $result = Invoke-KuleIsVer -Tur $tur -Model $model -Prompt $prompt -Cwd $cwd -Izlenen $izlenen -Izin $izin
+      Write-JsonResponse $Request.Stream 200 'OK' $result
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'kule_is_ver_failed'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($requestPath -in @('/api/action/kule-onayla', '/api/action/kule-reddet', '/api/action/kule-iptal')) {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Kule requires Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $jobId = if ($body -and $body.id) { [string]$body.id } else { '' }
+    if ($jobId -cnotmatch '^[0-9a-f]{8,32}$') {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_id_gecersiz' })
+      return
+    }
+    $command = @{ '/api/action/kule-onayla' = 'onayla'; '/api/action/kule-reddet' = 'reddet'; '/api/action/kule-iptal' = 'iptal' }[$requestPath]
+    try {
+      $result = Invoke-KuleGecis $command $jobId
+      if ($result.basarili) {
+        Write-JsonResponse $Request.Stream 200 'OK' $result
+      } else {
+        Write-JsonResponse $Request.Stream 409 'Conflict' $result
+      }
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'kule_gecis_failed'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($requestPath -eq '/api/action/kule-vscode') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $jobId = if ($body -and $body.id) { [string]$body.id } else { '' }
+    if ($jobId -cnotmatch '^[0-9a-f]{8,32}$') {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_id_gecersiz' })
+      return
+    }
+    $n = -1
+    if (-not ($body -and [int]::TryParse([string]$body.n, [ref]$n)) -or $n -lt 0) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_n_gecersiz' })
+      return
+    }
+    $vscode = Find-VsCode
+    if (-not $vscode.bulundu) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'vscode_yok' })
+      return
+    }
+    try {
+      $location = Get-KuleJobLocation $jobId
+      $detail = Get-KuleJobDetail $jobId
+      if (-not $location -or -not $detail -or -not $detail.is) {
+        Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'kule_is_yok' })
+        return
+      }
+      $diffler = @($detail.is.diffler)
+      if ($n -ge $diffler.Count) {
+        Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'kule_diff_yok' })
+        return
+      }
+      # Both paths come from the job record kule.py itself wrote — never
+      # from the request body — so this can only ever open files kule
+      # actually snapshotted for this job. Each is relative to
+      # `<state>/kule/` and re-resolved (and re-validated as staying
+      # under it) against the job's CURRENT location before anything
+      # opens it.
+      $onceRel = [string]$diffler[$n].once_yol
+      $sonraRel = [string]$diffler[$n].sonra_yol
+      $oncePath = Resolve-KuleGoreliYol $location.Konum $jobId $onceRel
+      $sonraPath = Resolve-KuleGoreliYol $location.Konum $jobId $sonraRel
+      if (-not $oncePath -or -not $sonraPath) {
+        Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'kule_yol_disi' })
+        return
+      }
+      Start-Process -FilePath $vscode.yol -ArgumentList @('--diff', $oncePath, $sonraPath) -ErrorAction Stop | Out-Null
+      Write-JsonResponse $Request.Stream 200 'OK' ([ordered]@{ acildi = $true })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'kule_vscode_failed'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($requestPath -like '/api/action/*') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1385,7 +2003,7 @@ function Invoke-HttpRequest([object]$Request) {
       Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
       return
     }
-    $kind = $Request.Target.Substring('/api/action/'.Length)
+    $kind = $requestPath.Substring('/api/action/'.Length)
     try {
       [void](Start-PanelOperation $kind)
       Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ started = $true; operation = $kind })
@@ -1395,7 +2013,7 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
-  if ($Request.Target -eq '/api/quit') {
+  if ($requestPath -eq '/api/quit') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
       return
@@ -1449,10 +2067,11 @@ try {
   $url = "$($script:ExpectedOrigin)/#$($script:LaunchToken)"
   Write-Host "PANEL_LISTENING $($endpoint.Address):$port"
   $script:ShutdownAt = [DateTime]::UtcNow.AddSeconds($script:IdleSeconds)
-  # The listener is born with the panel and dies with it — spawned once
-  # here, stopped once in the `finally` below (quit and idle-shutdown both
-  # funnel through the same loop exit into that block).
+  # The listener and the tower are both born with the panel and die with
+  # it — spawned once here, stopped once in the `finally` below (quit and
+  # idle-shutdown both funnel through the same loop exit into that block).
   Start-PasaportIzleyici
+  Start-Kule
   Open-PanelBrowser $url
 
   while ($true) {
@@ -1478,6 +2097,7 @@ try {
   Write-Error "The operations panel failed: $($_.Exception.Message)"
   exit 1
 } finally {
+  Stop-Kule
   Stop-PasaportIzleyici
   if ($listener) { $listener.Stop() }
   if ($script:ActiveOperation) {

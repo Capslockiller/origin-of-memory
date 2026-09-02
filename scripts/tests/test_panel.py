@@ -437,7 +437,7 @@ class NezaketSerbestContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         source = (REPO_ROOT / "beyin.ps1").read_text(encoding="utf-8")
         match = re.search(
-            r"if \(\$Request\.Target -eq '/api/action/nezaket-serbest'\) \{\r?\n"
+            r"if \(\$requestPath -eq '/api/action/nezaket-serbest'\) \{\r?\n"
             r"(?:.*?\r?\n)*?  \}\r?\n",
             source,
         )
@@ -493,7 +493,7 @@ class KaydetPanelContractTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = (REPO_ROOT / "beyin.ps1").read_text(encoding="utf-8")
         match = re.search(
-            r"if \(\$Request\.Target -eq '/api/action/kaydet'\) \{\r?\n"
+            r"if \(\$requestPath -eq '/api/action/kaydet'\) \{\r?\n"
             r"(?:.*?\r?\n)*?  \}\r?\n",
             cls.source,
         )
@@ -630,7 +630,7 @@ class PasaportPanelContractTests(unittest.TestCase):
 
         def handler(route: str) -> str:
             match = re.search(
-                r"if \(\$Request\.Target -eq '" + re.escape(route) + r"'\) \{\r?\n"
+                r"if \(\$requestPath -eq '" + re.escape(route) + r"'\) \{\r?\n"
                 r"(?:.*?\r?\n)*?  \}\r?\n",
                 cls.source,
             )
@@ -778,6 +778,312 @@ class PasaportPanelContractTests(unittest.TestCase):
         self.assertIn('class="action" id="pasaport-onayla-button"', self.page)
         self.assertIn('class="action" id="pasaport-reddet-button"', self.page)
         self.assertIn('class="action mini-action" id="pasaport-panodan-button"', self.page)
+
+
+class KulePanelContractTests(unittest.TestCase):
+    """Static, source-level checks for F5 "Kokpit" part 2's panel wiring:
+    the ``/api/kule`` status routes, the is-ver/onayla/reddet/iptal/vscode
+    actions, and the tower's spawn/kill lifecycle. Same rationale as
+    ``PasaportPanelContractTests`` — no live PowerShell listener required,
+    so these run (and catch a regression) even off Windows.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = (REPO_ROOT / "beyin.ps1").read_text(encoding="utf-8")
+        cls.page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+
+        def handler(route: str) -> str:
+            match = re.search(
+                r"if \(\$requestPath -eq '" + re.escape(route) + r"'\) \{\r?\n"
+                r"(?:.*?\r?\n)*?  \}\r?\n",
+                cls.source,
+            )
+            assert match, f"{route} route handler not found in beyin.ps1"
+            return match.group(0)
+
+        cls.get_kule_handler = handler("/api/kule")
+        cls.get_is_handler = handler("/api/kule/is")
+        cls.get_diff_handler = handler("/api/kule/diff")
+        cls.is_ver_handler = handler("/api/action/kule-is-ver")
+        cls.vscode_handler = handler("/api/action/kule-vscode")
+
+        gecis_match = re.search(
+            r"if \(\$requestPath -in @\('/api/action/kule-onayla', "
+            r"'/api/action/kule-reddet', '/api/action/kule-iptal'\)\) \{\r?\n"
+            r"(?:.*?\r?\n)*?  \}\r?\n",
+            cls.source,
+        )
+        assert gecis_match, "kule onayla/reddet/iptal route handler not found in beyin.ps1"
+        cls.gecis_handler = gecis_match.group(0)
+
+        def function_body(name: str, *, has_params: bool = False) -> str:
+            if has_params:
+                pattern = r"function " + re.escape(name) + r"\(.*?\r?\n(?:.*?\r?\n)*?\}\r?\n"
+                match = re.search(pattern, cls.source, flags=re.DOTALL)
+            else:
+                pattern = r"function " + re.escape(name) + r" \{\r?\n(?:.*?\r?\n)*?\}\r?\n"
+                match = re.search(pattern, cls.source)
+            assert match, f"{name} not found in beyin.ps1"
+            return match.group(0)
+
+        cls.start_function = function_body("Start-Kule")
+        cls.stop_function = function_body("Stop-Kule")
+        cls.find_vscode_function = function_body("Find-VsCode")
+        cls.diff_text_function = function_body("Get-KuleDiffText", has_params=True)
+        cls.is_ver_function = function_body("Invoke-KuleIsVer", has_params=True)
+
+    def test_every_kule_route_is_allowlisted(self) -> None:
+        allow_match = re.search(r"\$allowed = @\(\r?\n(?:.*?\r?\n)*?\s*\)\r?\n", self.source)
+        assert allow_match, "route allowlist not found"
+        allowlist = allow_match.group(0)
+        for route in (
+            "/api/kule",
+            "/api/kule/is",
+            "/api/kule/diff",
+            "/api/action/kule-is-ver",
+            "/api/action/kule-onayla",
+            "/api/action/kule-reddet",
+            "/api/action/kule-iptal",
+            "/api/action/kule-vscode",
+        ):
+            with self.subTest(route=route):
+                self.assertIn(f"'{route}'", allowlist)
+
+    def test_get_kule_is_readonly(self) -> None:
+        self.assertIn("$Request.Method -cne 'GET'", self.get_kule_handler)
+        self.assertIn("Invoke-KuleDurum", self.get_kule_handler)
+
+    def test_kule_spawn_is_guarded_by_the_env_switch(self) -> None:
+        self.assertIn("BEYIN_KULE", self.start_function)
+        self.assertIn("'off'", self.start_function)
+        # The off-switch must be checked before the process is ever started.
+        off_at = self.start_function.index("BEYIN_KULE")
+        spawn_at = self.start_function.index("Start-Process")
+        self.assertLess(off_at, spawn_at)
+
+    def test_kule_is_spawned_hidden_and_kept_as_a_process_object(self) -> None:
+        self.assertIn("kule.py", self.start_function)
+        self.assertIn("'calis'", self.start_function)
+        self.assertIn("-WindowStyle Hidden", self.start_function)
+        self.assertIn("-PassThru", self.start_function)
+        self.assertIn("$script:KuleProcess =", self.start_function)
+
+    def test_dur_file_is_written_before_kill(self) -> None:
+        self.assertIn("'dur'", self.stop_function)
+        self.assertIn(".Kill()", self.stop_function)
+        self.assertIn("WaitForExit(5000)", self.stop_function)
+        dur_at = self.stop_function.index("'dur'")
+        wait_at = self.stop_function.index("WaitForExit(5000)")
+        kill_at = self.stop_function.index(".Kill()")
+        self.assertLess(dur_at, wait_at)
+        self.assertLess(wait_at, kill_at)
+
+    def test_kule_child_model_processes_are_left_running_on_stop(self) -> None:
+        # Documented, not an oversight — see docs/kokpit.md "Orphan / reaper
+        # semantics": Stop-Kule must never try to kill anything but the
+        # tower process itself.
+        self.assertIn("intentionally left", self.stop_function)
+
+    def test_id_is_validated_by_regex_before_any_path_construction(self) -> None:
+        for handler in (self.get_is_handler, self.get_diff_handler):
+            with self.subTest(handler=handler[:40]):
+                self.assertIn("kule_id_gecersiz", handler)
+                self.assertIn("-cnotmatch '^[0-9a-f]{8,32}$'", handler)
+                validate_at = handler.index("-cnotmatch '^[0-9a-f]{8,32}$'")
+                read_at = handler.index("Get-Kule")
+                self.assertLess(validate_at, read_at)
+
+    def test_n_is_validated_as_an_integer_before_any_path_construction(self) -> None:
+        self.assertIn("kule_n_gecersiz", self.get_diff_handler)
+        self.assertIn("[int]::TryParse", self.get_diff_handler)
+        validate_at = self.get_diff_handler.index("[int]::TryParse")
+        read_at = self.get_diff_handler.index("Get-KuleDiffText")
+        self.assertLess(validate_at, read_at)
+
+    def test_diff_path_is_read_from_the_job_record_never_assembled_from_the_request(
+        self,
+    ) -> None:
+        # id/n only select which already-trusted record and array index to
+        # read — diff_yol (written by kule.py itself) is the only source of
+        # the actual filesystem path.
+        self.assertIn("diff_yol", self.diff_text_function)
+        self.assertNotIn("Join-Path", self.diff_text_function)
+
+    def test_vscode_paths_come_from_the_job_record_not_the_request_body(self) -> None:
+        self.assertIn("$diffler[$n].once_yol", self.vscode_handler)
+        self.assertIn("$diffler[$n].sonra_yol", self.vscode_handler)
+        self.assertIn("Both paths come from the job record", self.vscode_handler)
+        self.assertNotIn("$body.once", self.vscode_handler)
+        self.assertNotIn("$body.sonra", self.vscode_handler)
+
+    def test_tur_and_model_are_validated(self) -> None:
+        self.assertIn("kule_tur_gecersiz", self.is_ver_handler)
+        self.assertIn("-cnotin @('claude', 'codex')", self.is_ver_handler)
+        self.assertIn("kule_model_gecersiz", self.is_ver_handler)
+        self.assertIn("'^[A-Za-z0-9._:-]+$'", self.is_ver_handler)
+
+    def test_is_ver_pipes_the_prompt_over_stdin_not_argv(self) -> None:
+        self.assertIn("'--stdin'", self.is_ver_function)
+        self.assertIn("$Prompt | & $script:Python.Exe", self.is_ver_function)
+        self.assertIn("'--kaynak'", self.is_ver_function)
+        self.assertIn("'panel'", self.is_ver_function)
+
+    def test_is_ver_and_gecis_actions_are_not_gated_by_active_operation(self) -> None:
+        # Kule has its own multi-lane worker doing the actual streaming —
+        # the panel's single-operation-at-a-time slot must stay untouched.
+        for handler in (self.is_ver_handler, self.gecis_handler, self.vscode_handler):
+            with self.subTest(handler=handler[:40]):
+                self.assertNotIn("ActiveOperation", handler)
+                self.assertNotIn("Start-PanelCommand", handler)
+
+    def test_vscode_probe_order_is_code_command_then_localappdata_then_programfiles(
+        self,
+    ) -> None:
+        command_at = self.find_vscode_function.index("Get-Command code")
+        local_at = self.find_vscode_function.index("LOCALAPPDATA")
+        program_at = self.find_vscode_function.index("'ProgramFiles'")
+        self.assertLess(command_at, local_at)
+        self.assertLess(local_at, program_at)
+
+    def test_vscode_probe_result_is_cached_for_the_session(self) -> None:
+        self.assertIn(
+            "if ($script:VsCodeInfo) { return $script:VsCodeInfo }",
+            self.find_vscode_function,
+        )
+
+    def test_panel_html_has_a_kokpit_section_wired_to_the_routes(self) -> None:
+        self.assertIn('id="kokpit-form"', self.page)
+        self.assertIn('id="kokpit-jobs"', self.page)
+        self.assertIn('id="kokpit-lanes"', self.page)
+        self.assertIn("/api/kule", self.page)
+        self.assertIn("/api/kule/is", self.page)
+        self.assertIn("/api/kule/diff", self.page)
+        self.assertIn("/api/action/kule-is-ver", self.page)
+        self.assertIn("/api/action/kule-onayla", self.page)
+        self.assertIn("/api/action/kule-reddet", self.page)
+        self.assertIn("/api/action/kule-iptal", self.page)
+        self.assertIn("/api/action/kule-vscode", self.page)
+
+    def test_kokpit_links_to_the_existing_pasaport_istek_card(self) -> None:
+        # B4's "ISTEK defteri kartı" requirement is satisfied by the
+        # existing Pasaport blind-spot-map card — Kokpit only needs a link
+        # to it, not a second copy.
+        self.assertIn('href="#pasaport-title"', self.page)
+        self.assertIn('class="kokpit-pasaport-link"', self.page)
+
+    def test_kokpit_section_never_uses_innerhtml(self) -> None:
+        start = self.page.index("function formatKokpitDuration")
+        end = self.page.index("async function begin()")
+        section = self.page[start:end]
+        self.assertGreater(len(section), 1000)
+        self.assertNotIn("innerHTML", section)
+        self.assertIn("textContent", section)
+
+    def test_kokpit_poll_has_a_stacking_guard_flag(self) -> None:
+        match = re.search(
+            r"function kokpitPollLoop\(\) \{\r?\n(?:.*?\r?\n)*?      \}\r?\n",
+            self.page,
+        )
+        assert match, "kokpitPollLoop not found in panel.html"
+        body = match.group(0)
+        self.assertIn("kokpitPolling", body)
+        self.assertIn("if (stopped || kokpitPolling) return", body)
+
+    def test_submit_button_disable_is_local_not_tied_to_setactive(self) -> None:
+        # The submit button must NOT carry the `.action` class swept by
+        # setActive() — its in-flight disable is purely local state
+        # (kokpitSubmitting), per the "not an SSE operation" requirement.
+        self.assertIn('class="kokpit-btn" id="kokpit-submit"', self.page)
+        match = re.search(
+            r"kokpitForm\.addEventListener\('submit', async \(event\) => \{\r?\n"
+            r"(?:.*?\r?\n)*?      \}\);\r?\n",
+            self.page,
+        )
+        assert match, "kokpit submit handler not found in panel.html"
+        body = match.group(0)
+        self.assertIn("kokpitSubmitting", body)
+        self.assertIn("kokpitSubmit.disabled = true", body)
+        self.assertIn("kokpitSubmit.disabled = false", body)
+
+    def test_kule_lifecycle_is_wired_alongside_pasaport_in_start_and_finally(
+        self,
+    ) -> None:
+        self.assertIn("Start-Kule", self.source)
+        self.assertIn("Stop-Kule", self.source)
+        finally_match = re.search(r"\} finally \{\r?\n(?:.*?\r?\n)*?\}\r?\n\Z", self.source)
+        assert finally_match, "top-level finally block not found"
+        self.assertIn("Stop-Kule", finally_match.group(0))
+
+
+class KuleIsVerSubprocessTests(unittest.TestCase):
+    """Real-subprocess coverage for ``kule.py is-ver --stdin --json --kaynak
+    panel`` — the exact invocation shape ``Invoke-KuleIsVer``/
+    ``/api/action/kule-is-ver`` performs. This spawns the actual
+    ``scripts/kule.py`` through a real ``python`` subprocess (no PowerShell
+    involved), so — unlike ``PanelServerTests`` above — it runs on every
+    platform, including this Linux sandbox.
+    """
+
+    def test_is_ver_stdin_json_kaynak_panel_prints_the_kule_sonuc_marker(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="kule-cli-state-") as state_dir, \
+                tempfile.TemporaryDirectory(prefix="kule-cli-cwd-") as job_cwd, \
+                tempfile.TemporaryDirectory(prefix="kule-cli-tmproot-") as fake_temp_root:
+            # kule.py's cwd rule refuses a job cwd under the OS temp root
+            # (scripts/kule.py's `_cwd_gecersiz` — Codex's sandbox cannot
+            # read paths under Windows Temp). Every TemporaryDirectory above
+            # necessarily sits under the real system temp root, so `job_cwd`
+            # alone would be refused. The fix, not a workaround: redirect
+            # the SUBPROCESS's own idea of "the temp root"
+            # (tempfile.gettempdir(), which reads TMPDIR/TEMP/TMP) to a
+            # separate sibling directory that does NOT contain job_cwd, so
+            # os.path.commonpath([temp_root, job_cwd]) != temp_root and the
+            # cwd rule sees job_cwd as outside the temp root — a fake cwd in
+            # tmp, under a non-temp-looking path from the subprocess's own
+            # point of view.
+            environment = os.environ.copy()
+            environment["TMPDIR"] = fake_temp_root
+            environment["TEMP"] = fake_temp_root
+            environment["TMP"] = fake_temp_root
+            environment.pop("BEYIN_INVOKED_BY", None)
+            script_path = REPO_ROOT / "scripts" / "kule.py"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script_path),
+                    "--state-dir",
+                    str(Path(state_dir) / ".state"),
+                    "is-ver",
+                    "--tur",
+                    "claude",
+                    "--model",
+                    "sonnet",
+                    "--cwd",
+                    job_cwd,
+                    "--kaynak",
+                    "panel",
+                    "--stdin",
+                    "--json",
+                ],
+                input="panelden gelen görev metni",
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=environment,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            marker_lines = [
+                line for line in result.stdout.splitlines() if line.startswith("KULE-SONUC ")
+            ]
+            self.assertEqual(len(marker_lines), 1, result.stdout)
+            payload = json.loads(marker_lines[0][len("KULE-SONUC "):])
+            self.assertTrue(payload["olusturuldu"], payload)
+            self.assertEqual(payload["is"]["tur"], "claude")
+            self.assertEqual(payload["is"]["model"], "sonnet")
+            self.assertEqual(payload["is"]["kaynak"], "panel")
+            self.assertTrue(payload["is"]["nezaket_del"])
+            self.assertEqual(payload["is"]["durum"], "queued")
 
 
 @unittest.skipUnless(POWERSHELL, "Windows PowerShell is required")
