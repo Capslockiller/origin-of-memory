@@ -24,6 +24,7 @@ from typing import Any, Iterator, NamedTuple, Sequence
 from beyin_ortak import _atomic_write_json, _lock_exclusive, write_health
 import claude_runner
 import flush
+import nezaket
 import secret_guard
 
 
@@ -338,6 +339,7 @@ def _run_codex(
                 env=environment,
                 timeout=timeout,
                 check=False,
+                creationflags=nezaket.dusuk_oncelik_bayraklari(),
             )
             if result.returncode != 0:
                 return None, f"codex-exit-{result.returncode}"

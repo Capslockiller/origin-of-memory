@@ -25,6 +25,7 @@ import ingest_codex
 import ingest_common
 import ingest_gemini
 import ingest_web
+import nezaket
 from ingest_common import Session
 
 
@@ -438,6 +439,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description=__doc__)
     _common_flags(parser, suppress=False)
+    parser.add_argument(
+        "--nezaket-del",
+        action="store_true",
+        help="Bypass the A7 politeness gate for this run.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     claude_parser = subparsers.add_parser("claude", parents=[common])
@@ -485,6 +491,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 health_name=ingest_common.HEALTH_NAME,
             )
         return 0
+
+    # --dry-run and status take no lock and make no model call, so they are
+    # exempt from the gate rather than getting queued for nothing.
+    if not (args.dry_run or args.command == "status"):
+        effective_argv = list(argv) if argv is not None else list(sys.argv[1:])
+        if nezaket.kapi("ingest", effective_argv, state_dir).mesgul:
+            return nezaket.EX_TEMPFAIL
 
     if args.max_sessions < 1 or args.sleep < 0:
         ingest_common.write_health(

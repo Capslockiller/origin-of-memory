@@ -15,6 +15,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, NamedTuple, Sequence
@@ -30,6 +31,7 @@ from beyin_ortak import (
 )
 import claude_runner
 import compile_text
+import nezaket
 import retrieve
 import rootmap
 import secret_guard
@@ -1506,6 +1508,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--trigger-claim", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--nezaket-del",
+        action="store_true",
+        help="Bypass the A7 politeness gate for this run.",
+    )
     return parser.parse_args(argv)
 
 
@@ -1681,6 +1688,7 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     if os.environ.get("BEYIN_INVOKED_BY"):
         return 0
+    nezaket.kendini_arka_plana_al()
 
     try:
         args = _parse_args(argv)
@@ -1688,6 +1696,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if exc.code:
             write_health(STATE_DIR, "invalid-arguments")
         return 0
+
+    # --dry-run takes neither the lock nor a model call, so it is exempt from
+    # the gate rather than getting queued for a run that was never going to
+    # do anything.
+    if not args.dry_run:
+        effective_argv = list(argv) if argv is not None else list(sys.argv[1:])
+        if nezaket.kapi("compile", effective_argv, STATE_DIR).mesgul:
+            return nezaket.EX_TEMPFAIL
+
     if args.max_calls < 1:
         write_health(STATE_DIR, "invalid-max-calls")
         return 0

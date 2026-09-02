@@ -104,6 +104,11 @@ compute cost.
 - `BEYIN_OLLAMA_MODEL_SMART` — optional; falls back to the fast model with a
   warning.
 - `BEYIN_OLLAMA_URL` — defaults to `http://localhost:11434`.
+- `BEYIN_OLLAMA_NUM_CTX` — optional context window (tokens) sent as
+  `options.num_ctx`. Ollama silently truncates input past its default window
+  (~4k on <24 GiB cards), which turns a long transcript into a
+  `summary-schema-invalid` flush; `16384` is a measured safe floor for
+  flush-sized inputs. Unset keeps the server default, byte-identical request.
 
 Compile is text-tool mode and is refused just as it is on Antigravity: `claude`
 is used when present, otherwise the run fails loud with

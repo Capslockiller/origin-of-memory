@@ -190,6 +190,11 @@
     pre { margin: 0; min-height: 84px; max-height: 210px; overflow: auto; padding: 14px 16px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 "Cascadia Mono", Consolas, monospace; }
     .danger-text { color: var(--bad); }
     .close-button { border: 0; background: transparent; color: inherit; cursor: pointer; text-decoration: underline; }
+    .nezaket { margin-top: 28px; }
+    .nezaket-status { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+    .nezaket-status .badge { font-size: 1rem; }
+    .nezaket-check { width: 1%; white-space: nowrap; }
+    .nezaket-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 22px; border-top: 1px solid var(--line); flex-wrap: wrap; }
     @media (max-width: 1050px) {
       .operation-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
       .accounting { grid-template-columns: 1fr; }
@@ -328,6 +333,30 @@
         </section>
       </section>
 
+      <section class="nezaket" aria-labelledby="nezaket-title">
+        <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="nezaket-title">Nezaket</h2><span class="section-note" id="nezaket-updated">Loading…</span></div>
+        <div class="panel">
+          <div class="panel-body">
+            <div class="nezaket-status">
+              <span id="nezaket-badge" class="badge unknown">Loading…</span>
+              <span class="section-note" id="nezaket-reason"></span>
+            </div>
+            <p class="section-note">A7 politeness gate: background compile, watcher, and ingest runs defer here instead of competing for the machine. Nothing here starts on its own — release is always explicit.</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th></th><th>Type</th><th>Reason</th><th>Queued</th></tr></thead>
+              <tbody id="nezaket-rows"><tr><td colspan="4" class="muted">Loading the deferred-operation queue…</td></tr></tbody>
+            </table>
+          </div>
+          <div class="nezaket-footer">
+            <span class="section-note" id="nezaket-oldest"></span>
+            <button class="action mini-action" id="nezaket-run-selected" type="button">Seçilenleri çalıştır</button>
+          </div>
+          <div class="notice" id="nezaket-notice" hidden></div>
+        </div>
+      </section>
+
       <section class="operations" aria-labelledby="operations-title">
         <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="operations-title">Operations</h2><span class="section-note">Every operation asks first</span></div>
         <div class="operation-grid">
@@ -461,6 +490,55 @@
           item.append(time, agent);
           list.append(item);
         });
+      }
+
+      function formatDurationSeconds(value) {
+        if (typeof value !== 'number' || Number.isNaN(value)) return 'unknown';
+        const total = Math.round(value);
+        if (total < 60) return total + 's';
+        const minutes = Math.floor(total / 60);
+        if (minutes < 60) return minutes + 'm';
+        const hours = Math.floor(minutes / 60);
+        return hours + 'h ' + (minutes % 60) + 'm';
+      }
+
+      function renderNezaket(data) {
+        const badge = document.getElementById('nezaket-badge');
+        badge.textContent = data.mesgul ? 'Meşgul' : 'Serbest';
+        badge.className = 'badge ' + (data.mesgul ? 'warn' : 'good');
+        document.getElementById('nezaket-reason').textContent = data.neden + (data.bilinmiyor ? ' — signals unknown' : '');
+        const kuyruk = data.kuyruk || {};
+        const rows = kuyruk.kayitlar || [];
+        const body = document.getElementById('nezaket-rows');
+        body.replaceChildren();
+        if (!rows.length) {
+          renderMessageRow(body, 4, 'Nothing is waiting.');
+        } else {
+          rows.forEach((record) => {
+            const tr = document.createElement('tr');
+            const checkCell = document.createElement('td');
+            checkCell.className = 'nezaket-check';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.dataset.nezaketId = record.id;
+            checkCell.append(checkbox);
+            tr.append(checkCell);
+            tr.append(textCell(record.tur, 'component'));
+            tr.append(textCell(record.neden || 'unknown', 'muted'));
+            tr.append(textCell(formatTime(record.eklendi)));
+            body.append(tr);
+          });
+        }
+        document.getElementById('nezaket-oldest').textContent = rows.length
+          ? 'Oldest waiting: ' + formatDurationSeconds(kuyruk.en_eski_yas_sn)
+          : '';
+        document.getElementById('nezaket-updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+
+      async function loadNezaket() {
+        const response = await api('/api/nezaket');
+        if (!response.ok) throw new Error('Politeness data is unavailable.');
+        renderNezaket(await response.json());
       }
 
       function formatGb(value) {
@@ -647,6 +725,7 @@
             setActive('');
             loadData().catch(showConnectionError);
             if (localLoaded) loadLocalModels().catch(showConnectionError);
+            loadNezaket().catch(() => {});
           }
         });
       }
@@ -676,6 +755,15 @@
         connection.textContent = error.message || 'Data unavailable';
       }
 
+      function nezaketPollLoop() {
+        // Polling from the page, on a fixed 10s cadence — no extra persistent
+        // process, and it survives the SSE reconnect loop independently.
+        setInterval(() => {
+          if (stopped) return;
+          loadNezaket().catch(() => {});
+        }, 10000);
+      }
+
       async function begin() {
         const token = location.hash.slice(1);
         if (!token) throw new Error('The one-time panel token is missing. Re-run Local Brain.');
@@ -683,6 +771,8 @@
         history.replaceState(null, '', location.pathname + location.search);
         if (!session.ok) throw new Error('The secure local session could not be established.');
         await loadData();
+        loadNezaket().catch(() => {});
+        nezaketPollLoop();
         eventLoop();
       }
 
@@ -768,6 +858,36 @@
           setActive('try');
         } catch (error) {
           operationState.textContent = 'Try backend · could not start';
+          appendOutput(error.message, true);
+        }
+      });
+
+      document.getElementById('nezaket-run-selected').addEventListener('click', async () => {
+        const ids = Array.from(document.querySelectorAll('#nezaket-rows input[data-nezaket-id]:checked')).map((box) => box.dataset.nezaketId);
+        if (!ids.length) return;
+        if (!window.confirm('Run ' + ids.length + ' deferred operation' + (ids.length === 1 ? '' : 's') + ' now? Only the first selected one is released; the rest stay queued.')) return;
+        const notice = document.getElementById('nezaket-notice');
+        try {
+          const response = await api('/api/action/nezaket-serbest', { method: 'POST', body: JSON.stringify({ ids }) });
+          const result = await response.json();
+          if (response.status === 409) {
+            // Nothing was popped from the queue — surfaced, not swallowed.
+            notice.hidden = false;
+            notice.textContent = 'Another operation is already running — nothing was released. Try again once it finishes.';
+            return;
+          }
+          if (!response.ok) throw new Error(result.message || result.error || 'The release could not be started.');
+          await loadNezaket();
+          if (result.remaining_selected > 0) {
+            notice.hidden = false;
+            notice.textContent = result.remaining_selected + ' seçili kayıt kuyrukta bekliyor — işlem bitince tekrar çalıştır';
+          } else {
+            notice.hidden = true;
+            notice.textContent = '';
+          }
+        } catch (error) {
+          notice.hidden = false;
+          notice.textContent = error.message;
           appendOutput(error.message, true);
         }
       });

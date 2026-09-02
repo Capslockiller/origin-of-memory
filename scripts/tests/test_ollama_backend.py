@@ -136,6 +136,24 @@ class OllamaRequestTests(unittest.TestCase):
             extras = ollama_runner._request_extras()
         self.assertEqual(extras["options"], {"num_predict": -1})
 
+    def test_num_ctx_absent_keeps_request_byte_identical(self) -> None:
+        # Ollama silently truncates input past the context window; the fix
+        # must stay opt-in so unconfigured installs keep the server default.
+        extras = ollama_runner._request_extras({})
+        self.assertNotIn("num_ctx", extras["options"])
+        self.assertEqual(extras, {"think": False, "options": {"num_predict": -1}})
+
+    def test_num_ctx_env_is_forwarded_as_option(self) -> None:
+        extras = ollama_runner._request_extras({"BEYIN_OLLAMA_NUM_CTX": "16384"})
+        self.assertEqual(extras["options"]["num_ctx"], 16384)
+        self.assertEqual(extras["options"]["num_predict"], -1)
+
+    def test_num_ctx_garbage_or_nonpositive_is_ignored(self) -> None:
+        for raw in ("bozuk", "0", "-5", "  "):
+            with self.subTest(raw=raw):
+                extras = ollama_runner._request_extras({"BEYIN_OLLAMA_NUM_CTX": raw})
+                self.assertNotIn("num_ctx", extras["options"])
+
     def test_sonnet_fallback_warning_reaches_shared_sink(self) -> None:
         environment = {
             "BEYIN_MODEL_BACKEND": "ollama",
