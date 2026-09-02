@@ -25,7 +25,9 @@ from beyin_ortak import (
 )
 import claude_runner
 import retrieve
+import pii_guard
 import secret_guard
+import unicode_guard
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -662,6 +664,17 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
             "inflight",
             _flush_state_detail("", chunk_chars),
         )
+        # Unicode kapısı (giriş): görünmez karakter hileleri DIRECTIVE_SHAPED
+        # denetiminden ÖNCE temizlenir ki satır-başı çapası atlatılamasın.
+        transcript, unicode_input_hits = unicode_guard.clean(transcript)
+        if unicode_input_hits:
+            write_health(
+                STATE_DIR,
+                "warn:unicode-cleaned-input:" + ",".join(unicode_input_hits),
+                warning=True,
+                component="flush",
+            )
+
         if DIRECTIVE_SHAPED.search(transcript):
             write_health(
                 STATE_DIR,
@@ -676,6 +689,17 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
             write_health(
                 STATE_DIR,
                 "warn:secret-redacted-input:" + ",".join(input_hits),
+                warning=True,
+                component="flush",
+            )
+
+        # PII kapısı (giriş): yapısal kimlik verisi (TCKN/VKN/IBAN/kart/
+        # telefon/plaka) özetçiye gitmeden maskelenir — sessiz redaksiyon.
+        transcript, pii_input_hits = pii_guard.redact(transcript)
+        if pii_input_hits:
+            write_health(
+                STATE_DIR,
+                "warn:pii-redacted-input:" + ",".join(pii_input_hits),
                 warning=True,
                 component="flush",
             )
@@ -730,6 +754,26 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
             write_health(
                 STATE_DIR,
                 "warn:secret-redacted-output:" + ",".join(output_hits),
+                warning=True,
+                component="flush",
+            )
+
+        # PII kapısı (çıkış): özetçi girişte kaçanı aynen aktarmış olabilir.
+        summary, pii_output_hits = pii_guard.redact(summary)
+        if pii_output_hits:
+            write_health(
+                STATE_DIR,
+                "warn:pii-redacted-output:" + ",".join(pii_output_hits),
+                warning=True,
+                component="flush",
+            )
+
+        # Unicode kapısı (çıkış): özetçi görünmez karakter üretebilir.
+        summary, unicode_output_hits = unicode_guard.clean(summary)
+        if unicode_output_hits:
+            write_health(
+                STATE_DIR,
+                "warn:unicode-cleaned-output:" + ",".join(unicode_output_hits),
                 warning=True,
                 component="flush",
             )
