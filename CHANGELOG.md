@@ -10,6 +10,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: claude · sonnet -->
+- **F4 "Bağlam Pasaportu" (Context passport), part 1 — C1 packager + C4
+  ISTEK ledger**: a hand-carried memory channel for consumer web chats
+  (ChatGPT/Gemini/claude.ai) that have no local tool access at all —
+  "gidiş paketi" (outbound package) via the clipboard, gone/come back
+  through a human copy-paste. `scripts/context_pack.py` gains `--pasaport`
+  (every existing flag and old-mode output are unchanged when it is
+  absent): a package is `[ODENA-PAKET id:<12-hex> n:<seq> ts:<iso>]`, then
+  the same root-map+notes material `compose_context` already builds, then a
+  cumulative `[ODENA-MANIFEST slug:hash …]` of every note sent so far under
+  this paket-id, then fixed Turkish footer instructions (no code fences —
+  copy-pasting through a web UI can swallow them) telling the model to
+  answer with only what's new, hand back an `[ODENA-DONUS]` block of new
+  facts, or an `[ODENA-ISTEK]` block per missing item instead of guessing.
+  Delta mode (`BEYIN_PASAPORT_DELTA_KARAKTER`, default 4000 chars) fits the
+  root map and notes greedily — whole note or omitted, **never** cut
+  mid-body, root map shrinks to headings before it's dropped, and a
+  from-nothing-fits fallback sends the first note's first 1500 characters
+  with a `[…kesildi]` marker; `--zip` sends the same material whole,
+  unbudgeted ("Delta = speed, ZIP = completeness"). `--ek --id <id>` builds
+  a follow-up package that excludes every already-sent note (read from the
+  cumulative manifest, not just the latest package) and increments `n`; an
+  unknown or missing `--id` fails with `pasaport-paket-bilinmiyor`. New
+  `scripts/pasaport_defteri.py` (`<state-dir>/pasaport-defteri.json`,
+  atomic-write-plus-lock, `BEYIN_PASAPORT_DEFTER_TAVAN` retention, default
+  200) is the ISTEK ledger — the blind-spot map of what a web model asked
+  for that the brain couldn't supply. It records package sizes, note slugs
+  and content-hashes, and later (part 2 — not built here) `[ODENA-DONUS]`
+  outcome status/size and `[ODENA-ISTEK]` line items, but **never** a note
+  body or a returned answer's text; `defter_md()` renders the recent
+  packages plus the aggregated ISTEK list, most-frequent-first. CLI:
+  `pasaport_defteri.py durum|goster <id>|istekler`. See `docs/pasaport.md`.
+
+<!-- yazan: claude · sonnet -->
+- **F4 "Bağlam Pasaportu", part 2 — clipboard listener, gate pipeline, panel
+  approval**: the return half of C1. New `scripts/pasaport_kapi.py` (C3,
+  pure/Linux-testable) parses a pasted `[ODENA-DONUS]`/`[ODENA-ISTEK]` reply
+  (same "exactly one BEGIN/END, END after BEGIN, else refuse" precedent as
+  `context_bridge._splice`; `pasaport-blok-cift|yarim|ters`,
+  `pasaport-id-uyusmaz`; code fences and marker-line whitespace tolerated)
+  and gates a DONUS body through: id-known-in-ledger check
+  (`pasaport-paket-bilinmiyor`), a size cap
+  (`BEYIN_PASAPORT_DONUS_MAX_KARAKTER`, default 12000 —
+  `pasaport-donus-cok-uzun`), `secret_guard.redact`, a `DIRECTIVE_SHAPED`
+  quarantine (`<state-dir>/karantina/pasaport-<ts>.md`,
+  `pasaport-karantina`), and a new **manifest-dedup** step — DONUS bullets
+  whose normalised fingerprint exactly matches or is >= 0.9 token-Jaccard
+  similar to a line/paragraph of a note already in this paket-id's manifest
+  are dropped (all-dropped is `pasaport-donus-bos`, nothing written); a
+  manifest note that is missing or whose content no longer matches its
+  recorded hash is skipped for dedup and reported as `manifest-bayat`
+  rather than risking a false drop. What survives is wrapped with a
+  `> dogrulanmamis: web dönüşü, kaynak: <id>` line and held as the single
+  `<state-dir>/pasaport-bekleyen.json` pending candidate — never written to
+  the vault until a `raw_hash`-checked `onayla` (approve) or `reddet`
+  (reject); a newer paste replacing an unresolved candidate is reported as
+  `pasaport-bekleyen-degisti`, never silently dropped, and a stale
+  `raw_hash` refuses (`pasaport-bekleyen-uyusmaz`) rather than acting on the
+  wrong text. Approval writes the daily log with a `source:pasaport`
+  session anchor (`retrieve.SESSION_SOURCES` gains `"pasaport"`), records
+  `kabul` in the C4 ledger, and spawns `compile.py --nezaket-del` by reusing
+  `kaydet._spawn_compile` directly; ISTEK items are recorded independently
+  of the DONUS block's fate and never touch the daily log. New
+  `scripts/pano_izleyici.py` (C2, Windows-only at runtime) is a
+  message-only window that registers `AddClipboardFormatListener` and reads
+  only `CF_UNICODETEXT` (`OpenClipboard` retried for `rdpclip`) on
+  `WM_CLIPBOARDUPDATE` — no polling loop, `GetClipboardSequenceNumber`
+  cross-checked to skip unrelated clipboard changes — dispatching relevant
+  text to `pasaport_kapi.isle_metin` in-process and writing a
+  `pano-izleyici.json` heartbeat; `--once` supports manual testing and the
+  panel's fallback button; off Windows it exits 2. `beyin.ps1` spawns it
+  hidden as its own child when the panel starts
+  (`BEYIN_PASAPORT_IZLEYICI=off` disables it) and stops it
+  (`CloseMainWindow` then `Kill`) in the single shutdown path both quit and
+  idle-timeout share — never restarted if it exits on its own. The panel's
+  new "Pasaport" card (`GET /api/pasaport`, polled 5s) shows the listener's
+  state, the pending candidate read-only with a short `raw_hash`, and the
+  ISTEK blind-spot map; "Onayla → günlüğe" streams through SSE under the
+  usual 409-before-anything-starts rule, "Reddet" runs synchronously (no
+  compile spawn), and "Panodan al" runs `pano_izleyici.py --once`. See
+  `docs/pasaport.md`.
+
+<!-- yazan: claude · sonnet -->
+- **F4 "Bağlam Pasaportu", part 2 — security review fixes**: four issues
+  from an independent review, fixed on top of the part-2 pipeline above.
+  (1) `isle_metin` now caps the WHOLE pasted reply
+  (`BEYIN_PASAPORT_GIRDI_MAX_KARAKTER`, default 60000 —
+  `pasaport-girdi-cok-uzun`) *before* `ayristir` ever parses it, and ODENA-
+  ISTEK items are capped to `BEYIN_PASAPORT_ISTEK_MAX_MADDE` (default 20) of
+  at most 300 characters each (`…`-truncated, `pasaport-istek-kirpildi`
+  warning) — previously an ISTEK block was unbounded straight into the
+  ledger. (2) Every surviving DONUS unit has `<!--`/`-->` escaped to
+  `&lt;!--`/`--&gt;` and any forged `> dogrulanmamis:` line stripped before
+  the daily-log write, closing an anchor-forgery hole where a crafted
+  `<!-- session:x ts:y source:claude -->` in a returned reply would have
+  been read by `retrieve.parse_session_anchors`/`compile.carry_source_anchors`
+  as a real, trusted session anchor and carried into a concept note. (3)
+  `context_pack.py` now substitutes ``` with `'''` in every note body before
+  it enters an outbound package (a footer note is added when it does),
+  keeping the composed package itself free of code fences while still
+  hashing the *original* body for manifest-dedup so a later package's
+  comparison against `retrieve.read_concept` still matches. (4) `onayla` is
+  now idempotent against a crash between the daily-log write and deleting
+  the pending file: the candidate is marked `uygulaniyor` atomically before
+  the write, and the ledger's `kabul` entry now carries `raw_hash`
+  (`pasaport_defteri.Defter.donus_kaydet` gains the field) so a retry that
+  finds the marker already set can tell "already written, just clean up"
+  from "crashed before the write, retry it" — the daily log is written at
+  most once per approval either way. Also: `pano_izleyici.py` calls
+  `KillTimer` on `WM_DESTROY`, and `beyin.ps1` validates `raw_hash` as
+  exactly 64 lowercase hex characters before use in both the approve and
+  reject routes (`bad_raw_hash`, 400). See `docs/pasaport.md`.
+
+<!-- yazan: claude · sonnet -->
 - **F3 "Kaydet" (Save — the golden path)**: `scripts/kaydet.py` is the
   panel's "Kaydet" action and its CLI equivalent — "flush + compile, local,
   now, like saving a project" — for **zero model tokens** spent on the note

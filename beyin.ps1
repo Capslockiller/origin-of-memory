@@ -30,6 +30,7 @@ $script:QuitRequested = $false
 $script:ShutdownAt = $null
 $script:IdleSeconds = $GraceSeconds
 $script:AllowedBackends = @('claude', 'antigravity', 'ollama', 'openai-compat')
+$script:PasaportIzleyiciProcess = $null
 
 function New-RandomToken {
   $bytes = New-Object byte[] 32
@@ -464,6 +465,93 @@ function Get-NezaketOperationCommand([object]$Kayit) {
   return New-PythonCommand $arguments
 }
 
+function Invoke-PasaportDurum {
+  $kapiScript = Join-Path $script:PanelPaths.Scripts 'pasaport_kapi.py'
+  $defterScript = Join-Path $script:PanelPaths.Scripts 'pasaport_defteri.py'
+  $bekleyen = $null
+  if (Test-Path -LiteralPath $kapiScript -PathType Leaf) {
+    $bekleyen = Invoke-PanelPythonJson (@($kapiScript, '--state-dir', $script:PanelPaths.State, '--vault-root', $script:PanelPaths.Vault, 'bekleyen', '--json')) 'The pending pasaport candidate produced no usable JSON.'
+  }
+  $sonPaketler = @()
+  $istekler = @()
+  if (Test-Path -LiteralPath $defterScript -PathType Leaf) {
+    $sonPaketler = @(Invoke-PanelPythonJson (@($defterScript, '--state-dir', $script:PanelPaths.State, 'durum', '--json')) 'The pasaport ledger produced no usable JSON.' | Select-Object -First 5)
+    $istekler = @(Invoke-PanelPythonJson (@($defterScript, '--state-dir', $script:PanelPaths.State, 'istekler', '--json')) 'The pasaport blind-spot map produced no usable JSON.')
+  }
+  $heartbeat = Read-JsonObject (Join-Path $script:PanelPaths.State 'pano-izleyici.json')
+  $calisiyor = [bool]($script:PasaportIzleyiciProcess -and -not $script:PasaportIzleyiciProcess.HasExited)
+  return [ordered]@{
+    bekleyen = $bekleyen
+    son_paketler = $sonPaketler
+    istekler = $istekler
+    izleyici = [ordered]@{
+      calisiyor = $calisiyor
+      heartbeat = $heartbeat
+    }
+  }
+}
+
+function New-PasaportOnaylaCommand([string]$RawHash) {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'pasaport_kapi.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'pasaport_kapi.py was not found.' }
+  $arguments = @(
+    $scriptPath, '--state-dir', $script:PanelPaths.State, '--vault-root', $script:PanelPaths.Vault,
+    'onayla', $RawHash
+  )
+  return New-PythonCommand $arguments
+}
+
+function New-PasaportPanodanCommand {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'pano_izleyici.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'pano_izleyici.py was not found.' }
+  $arguments = @(
+    $scriptPath, '--state-dir', $script:PanelPaths.State, '--vault-root', $script:PanelPaths.Vault, '--once'
+  )
+  return New-PythonCommand $arguments
+}
+
+function Start-PasaportIzleyici {
+  # Off-switch checked before anything else: BEYIN_PASAPORT_IZLEYICI=off means
+  # the listener is never spawned at all, not spawned-then-killed.
+  $off = [Environment]::GetEnvironmentVariable('BEYIN_PASAPORT_IZLEYICI')
+  if ($off -and $off.Trim().ToLowerInvariant() -eq 'off') { return }
+  if (-not $script:Python) { return }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'pano_izleyici.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { return }
+  $arguments = New-Object Collections.Generic.List[string]
+  foreach ($item in @($script:Python.Prefix)) { $arguments.Add([string]$item) }
+  $arguments.Add($scriptPath)
+  $arguments.Add('--state-dir')
+  $arguments.Add($script:PanelPaths.State)
+  $arguments.Add('--vault-root')
+  $arguments.Add($script:PanelPaths.Vault)
+  try {
+    $script:PasaportIzleyiciProcess = Start-Process -FilePath $script:Python.Exe -ArgumentList $arguments.ToArray() -WindowStyle Hidden -PassThru -ErrorAction Stop
+  } catch {
+    $script:PasaportIzleyiciProcess = $null
+  }
+}
+
+function Stop-PasaportIzleyici {
+  if (-not $script:PasaportIzleyiciProcess) { return }
+  try {
+    if (-not $script:PasaportIzleyiciProcess.HasExited) {
+      # The listener is a message-only window (no visible main window), so
+      # CloseMainWindow() can legitimately return false — that is not a
+      # failure, only proof the graceful path was tried before the kill.
+      [void]$script:PasaportIzleyiciProcess.CloseMainWindow()
+      if (-not $script:PasaportIzleyiciProcess.WaitForExit(2000)) {
+        $script:PasaportIzleyiciProcess.Kill()
+      }
+    }
+  } catch {
+  } finally {
+    $script:PasaportIzleyiciProcess = $null
+  }
+}
+
 function Get-LocalModelSummary {
   $result = [ordered]@{
     python_available = [bool]$script:Python
@@ -797,10 +885,12 @@ function Test-ApiEnvelope([object]$Request, [bool]$RequireCookie) {
 function Invoke-HttpRequest([object]$Request) {
   $allowed = @(
     '/', '/panel.html', '/api/session', '/api/health', '/api/today', '/api/local-models', '/api/events',
-    '/api/nezaket',
+    '/api/nezaket', '/api/pasaport',
     '/api/action/doctor', '/api/action/compile', '/api/action/index', '/api/action/watcher',
     '/api/action/pull', '/api/action/pull-cancel', '/api/action/backend', '/api/action/try',
-    '/api/action/kaydet', '/api/action/nezaket-serbest', '/api/quit'
+    '/api/action/kaydet', '/api/action/nezaket-serbest',
+    '/api/action/pasaport-onayla', '/api/action/pasaport-reddet', '/api/action/pasaport-panodan',
+    '/api/quit'
   )
   if ($allowed -cnotcontains $Request.Target) {
     Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'not_found' })
@@ -898,6 +988,23 @@ function Invoke-HttpRequest([object]$Request) {
       Write-JsonResponse $Request.Stream 200 'OK' (Invoke-NezaketDurum)
     } catch {
       Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'nezaket_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/pasaport') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Pasaport requires Python.' })
+      return
+    }
+    try {
+      Write-JsonResponse $Request.Stream 200 'OK' (Invoke-PasaportDurum)
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'pasaport_unavailable'; message = $_.Exception.Message })
     }
     return
   }
@@ -1181,6 +1288,94 @@ function Invoke-HttpRequest([object]$Request) {
     return
   }
 
+  if ($Request.Target -eq '/api/action/pasaport-onayla') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Approval requires Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $rawHash = if ($body -and $body.raw_hash) { [string]$body.raw_hash } else { '' }
+    if (-not $rawHash) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'missing_raw_hash' })
+      return
+    }
+    if ($rawHash -cnotmatch '^[0-9a-f]{64}$') {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'bad_raw_hash' })
+      return
+    }
+    try {
+      # Approval writes to the daily log and spawns compile — same
+      # streamed-through-SSE shape as Kaydet, so the panel sees the write
+      # and the compile outcome as they happen rather than after the fact.
+      [void](Start-PanelCommand 'pasaport-onayla' (New-PasaportOnaylaCommand $rawHash) ([ordered]@{ raw_hash = $rawHash }))
+      Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ started = $true; operation = 'pasaport-onayla' })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'pasaport_onayla_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/pasaport-reddet') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Rejection requires Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $rawHash = if ($body -and $body.raw_hash) { [string]$body.raw_hash } else { '' }
+    if (-not $rawHash) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'missing_raw_hash' })
+      return
+    }
+    if ($rawHash -cnotmatch '^[0-9a-f]{64}$') {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'bad_raw_hash' })
+      return
+    }
+    # Rejection never writes to the daily log and never spawns compile, so
+    # unlike approval it runs synchronously — no operation slot, no SSE.
+    $scriptPath = Join-Path $script:PanelPaths.Scripts 'pasaport_kapi.py'
+    try {
+      $result = Invoke-PanelPythonJson (@($scriptPath, '--state-dir', $script:PanelPaths.State, '--vault-root', $script:PanelPaths.Vault, 'reddet', $rawHash)) 'The rejection produced no usable JSON.'
+      Write-JsonResponse $Request.Stream 200 'OK' $result
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'pasaport_reddet_failed'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/pasaport-panodan') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Reading the clipboard requires Python.' })
+      return
+    }
+    try {
+      [void](Start-PanelCommand 'pasaport-panodan' (New-PasaportPanodanCommand) ([ordered]@{}))
+      Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ started = $true; operation = 'pasaport-panodan' })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'pasaport_panodan_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
   if ($Request.Target -like '/api/action/*') {
     if ($Request.Method -cne 'POST') {
       Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
@@ -1254,6 +1449,10 @@ try {
   $url = "$($script:ExpectedOrigin)/#$($script:LaunchToken)"
   Write-Host "PANEL_LISTENING $($endpoint.Address):$port"
   $script:ShutdownAt = [DateTime]::UtcNow.AddSeconds($script:IdleSeconds)
+  # The listener is born with the panel and dies with it — spawned once
+  # here, stopped once in the `finally` below (quit and idle-shutdown both
+  # funnel through the same loop exit into that block).
+  Start-PasaportIzleyici
   Open-PanelBrowser $url
 
   while ($true) {
@@ -1279,6 +1478,7 @@ try {
   Write-Error "The operations panel failed: $($_.Exception.Message)"
   exit 1
 } finally {
+  Stop-PasaportIzleyici
   if ($listener) { $listener.Stop() }
   if ($script:ActiveOperation) {
     try {

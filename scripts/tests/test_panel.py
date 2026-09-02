@@ -615,6 +615,171 @@ class KaydetPanelContractTests(unittest.TestCase):
         self.assertLess(encoding_at, pipe_at)
 
 
+class PasaportPanelContractTests(unittest.TestCase):
+    """Static, source-level checks for F4 part 2's panel wiring: the
+    ``/api/pasaport`` status route, the approve/reject/panodan actions, and
+    the listener child's spawn/kill lifecycle. Same rationale as
+    ``KaydetPanelContractTests`` — no live PowerShell listener required, so
+    these run (and catch a regression) even off Windows.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = (REPO_ROOT / "beyin.ps1").read_text(encoding="utf-8")
+        cls.page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+
+        def handler(route: str) -> str:
+            match = re.search(
+                r"if \(\$Request\.Target -eq '" + re.escape(route) + r"'\) \{\r?\n"
+                r"(?:.*?\r?\n)*?  \}\r?\n",
+                cls.source,
+            )
+            assert match, f"{route} route handler not found in beyin.ps1"
+            return match.group(0)
+
+        cls.onayla_handler = handler("/api/action/pasaport-onayla")
+        cls.reddet_handler = handler("/api/action/pasaport-reddet")
+        cls.panodan_handler = handler("/api/action/pasaport-panodan")
+        cls.get_handler = handler("/api/pasaport")
+
+        start_match = re.search(
+            r"function Start-PasaportIzleyici \{\r?\n(?:.*?\r?\n)*?\}\r?\n", cls.source
+        )
+        assert start_match, "Start-PasaportIzleyici not found in beyin.ps1"
+        cls.start_function = start_match.group(0)
+
+        stop_match = re.search(
+            r"function Stop-PasaportIzleyici \{\r?\n(?:.*?\r?\n)*?\}\r?\n", cls.source
+        )
+        assert stop_match, "Stop-PasaportIzleyici not found in beyin.ps1"
+        cls.stop_function = stop_match.group(0)
+
+    def test_every_pasaport_route_is_allowlisted(self) -> None:
+        allow_match = re.search(r"\$allowed = @\(\r?\n(?:.*?\r?\n)*?\s*\)\r?\n", self.source)
+        assert allow_match, "route allowlist not found"
+        allowlist = allow_match.group(0)
+        for route in (
+            "/api/pasaport",
+            "/api/action/pasaport-onayla",
+            "/api/action/pasaport-reddet",
+            "/api/action/pasaport-panodan",
+        ):
+            with self.subTest(route=route):
+                self.assertIn(f"'{route}'", allowlist)
+
+    def test_get_route_is_readonly(self) -> None:
+        self.assertIn("$Request.Method -cne 'GET'", self.get_handler)
+        self.assertIn("Invoke-PasaportDurum", self.get_handler)
+
+    def test_onayla_is_gated_by_the_409_active_operation_rule(self) -> None:
+        self.assertIn("$script:ActiveOperation", self.onayla_handler)
+        self.assertIn("operation_in_progress", self.onayla_handler)
+        conflict_at = self.onayla_handler.index("operation_in_progress")
+        start_at = self.onayla_handler.index("Start-PanelCommand")
+        self.assertLess(conflict_at, start_at)
+
+    def test_panodan_is_also_gated_by_the_409_rule(self) -> None:
+        self.assertIn("$script:ActiveOperation", self.panodan_handler)
+        self.assertIn("operation_in_progress", self.panodan_handler)
+
+    def test_onayla_passes_raw_hash_through_to_the_command_builder(self) -> None:
+        self.assertIn("$body.raw_hash", self.onayla_handler)
+        self.assertIn("missing_raw_hash", self.onayla_handler)
+        self.assertIn("New-PasaportOnaylaCommand $rawHash", self.onayla_handler)
+        self.assertIn("Start-PanelCommand 'pasaport-onayla'", self.onayla_handler)
+
+    def test_raw_hash_is_validated_as_64_lowercase_hex_chars(self) -> None:
+        # Both handlers must reject a malformed raw_hash with 400 before it
+        # ever reaches a command line — not just an empty one.
+        for handler in (self.onayla_handler, self.reddet_handler):
+            with self.subTest(handler=handler[:40]):
+                self.assertIn("bad_raw_hash", handler)
+                self.assertIn("-cnotmatch '^[0-9a-f]{64}$'", handler)
+                bad_at = handler.index("bad_raw_hash")
+                missing_at = handler.index("missing_raw_hash")
+                self.assertLess(missing_at, bad_at)
+
+    def test_reddet_runs_synchronously_not_as_a_streamed_operation(self) -> None:
+        # Reject never spawns compile, so unlike approve it must never touch
+        # $script:ActiveOperation / Start-PanelCommand — it just runs and
+        # returns its JSON result directly.
+        self.assertIn("$body.raw_hash", self.reddet_handler)
+        self.assertIn("'reddet', $rawHash", self.reddet_handler)
+        self.assertNotIn("Start-PanelCommand", self.reddet_handler)
+        self.assertNotIn("ActiveOperation", self.reddet_handler)
+
+    def test_listener_spawn_is_guarded_by_the_env_switch(self) -> None:
+        self.assertIn("BEYIN_PASAPORT_IZLEYICI", self.start_function)
+        self.assertIn("'off'", self.start_function)
+        # The off-switch must be checked before the process is ever started.
+        off_at = self.start_function.index("BEYIN_PASAPORT_IZLEYICI")
+        spawn_at = self.start_function.index("Start-Process")
+        self.assertLess(off_at, spawn_at)
+
+    def test_listener_is_spawned_hidden_and_kept_as_a_process_object(self) -> None:
+        self.assertIn("pano_izleyici.py", self.start_function)
+        self.assertIn("-WindowStyle Hidden", self.start_function)
+        self.assertIn("-PassThru", self.start_function)
+        self.assertIn("$script:PasaportIzleyiciProcess =", self.start_function)
+
+    def test_listener_is_stopped_with_close_then_kill(self) -> None:
+        self.assertIn("CloseMainWindow", self.stop_function)
+        self.assertIn(".Kill()", self.stop_function)
+        close_at = self.stop_function.index("CloseMainWindow")
+        kill_at = self.stop_function.index(".Kill()")
+        self.assertLess(close_at, kill_at)
+
+    def test_listener_is_started_at_panel_launch_and_stopped_in_the_finally_block(self) -> None:
+        self.assertIn("Start-PasaportIzleyici", self.source)
+        self.assertIn("Stop-PasaportIzleyici", self.source)
+        # Stop must live in the single `finally` block that both the quit
+        # path and the idle-shutdown path funnel through — never restarted.
+        finally_match = re.search(r"\} finally \{\r?\n(?:.*?\r?\n)*?\}\r?\n\Z", self.source)
+        assert finally_match, "top-level finally block not found"
+        self.assertIn("Stop-PasaportIzleyici", finally_match.group(0))
+
+    def test_panel_html_has_a_pasaport_card_wired_to_the_routes(self) -> None:
+        self.assertIn('id="pasaport-onayla-button"', self.page)
+        self.assertIn('id="pasaport-reddet-button"', self.page)
+        self.assertIn('id="pasaport-panodan-button"', self.page)
+        self.assertIn("/api/pasaport", self.page)
+        self.assertIn("/api/action/pasaport-onayla", self.page)
+        self.assertIn("/api/action/pasaport-reddet", self.page)
+        self.assertIn("/api/action/pasaport-panodan", self.page)
+
+    def test_approve_and_reject_buttons_send_the_raw_hash(self) -> None:
+        self.assertIn("JSON.stringify({ raw_hash: pasaportRawHash })", self.page)
+
+    def test_the_raw_hash_shown_is_a_short_form_not_the_full_hash(self) -> None:
+        self.assertIn(".slice(0, 12)", self.page)
+
+    def test_pasaport_card_never_uses_innerhtml(self) -> None:
+        card_match = re.search(
+            r"function renderPasaport\(data\) \{\r?\n(?:.*?\r?\n)*?      \}\r?\n",
+            self.page,
+        )
+        assert card_match, "renderPasaport not found in panel.html"
+        self.assertNotIn("innerHTML", card_match.group(0))
+        self.assertIn("textContent", card_match.group(0))
+
+    def test_units_and_blind_spot_items_are_rendered_as_plain_text_nodes(self) -> None:
+        card_match = re.search(
+            r"function renderPasaport\(data\) \{\r?\n(?:.*?\r?\n)*?      \}\r?\n",
+            self.page,
+        )
+        assert card_match
+        body = card_match.group(0)
+        self.assertIn("item.textContent = unit", body)
+        self.assertIn("item.textContent = '(' + entry.adet", body)
+
+    def test_buttons_are_disabled_while_an_operation_is_active(self) -> None:
+        # These must be plain `.action` buttons so the generic disable
+        # sweep in setActive() covers them with no bespoke wiring.
+        self.assertIn('class="action" id="pasaport-onayla-button"', self.page)
+        self.assertIn('class="action" id="pasaport-reddet-button"', self.page)
+        self.assertIn('class="action mini-action" id="pasaport-panodan-button"', self.page)
+
+
 @unittest.skipUnless(POWERSHELL, "Windows PowerShell is required")
 class PanelPullPreflightTests(unittest.TestCase):
     def test_pull_with_insufficient_disk_is_refused(self) -> None:
