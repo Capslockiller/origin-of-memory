@@ -565,6 +565,47 @@ raise SystemExit(0 if error is None else 1)
   return New-PythonStdinCommand $code @($script:PanelPaths.Scripts, $script:PanelPaths.Vault, $script:PanelPaths.State, $Backend, $Tier)
 }
 
+function New-KaydetCommand([string]$Metin, [string]$Baslik) {
+  if (-not $script:Python) { throw 'Python was not found. Set BEYIN_PYTHON to the interpreter path.' }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'kaydet.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'kaydet.py was not found.' }
+  # The note text goes over stdin, never argv — argv can end up in process
+  # listings and shell history, stdin does not. It is base64-encoded here
+  # only so it survives the EncodedCommand hop into the spawned PowerShell
+  # child untouched; kaydet.py itself reads plain UTF-8 text from stdin.
+  $encodedText = [Convert]::ToBase64String($script:Utf8.GetBytes($Metin))
+  $arguments = New-Object Collections.Generic.List[string]
+  $arguments.Add($scriptPath)
+  $arguments.Add('--stdin')
+  $arguments.Add('--vault-root')
+  $arguments.Add($script:PanelPaths.Vault)
+  $arguments.Add('--state-dir')
+  $arguments.Add($script:PanelPaths.State)
+  $arguments.Add('--json')
+  if ($Baslik) {
+    $arguments.Add('--baslik')
+    $arguments.Add($Baslik)
+  }
+  $parts = New-Object Collections.Generic.List[string]
+  $parts.Add('& ' + (ConvertTo-PowerShellLiteral $script:Python.Exe))
+  foreach ($item in @($script:Python.Prefix) + @($arguments)) {
+    $parts.Add((ConvertTo-PowerShellLiteral ([string]$item)))
+  }
+  return (
+    "`$env:PYTHONUTF8 = '1'; " +
+    "`$metin = (New-Object Text.UTF8Encoding(`$false)).GetString([Convert]::FromBase64String('$encodedText')); " +
+    # PowerShell 5.1 encodes text piped to a NATIVE (non-PowerShell) child
+    # process using $OutputEncoding, which defaults to the console's OEM/
+    # ANSI codepage — not UTF-8. Left unset, Turkish text piped to kaydet.py
+    # would be mangled before Python ever sees a byte of it. Setting both
+    # $OutputEncoding (governs the pipe) and [Console]::OutputEncoding
+    # (governs what a native child reads back) to UTF-8-no-BOM here, right
+    # before the pipe, keeps the bytes correct end to end.
+    "`$OutputEncoding = [Console]::OutputEncoding = New-Object Text.UTF8Encoding(`$false); " +
+    "`$metin | " + ($parts -join ' ') + '; exit $LASTEXITCODE'
+  )
+}
+
 function Convert-StateTime([object]$Value) {
   if ($Value -is [ValueType] -and $Value -isnot [bool]) {
     try { return [DateTimeOffset]::FromUnixTimeSeconds([long]$Value).ToLocalTime().ToString('o') } catch {}
@@ -759,7 +800,7 @@ function Invoke-HttpRequest([object]$Request) {
     '/api/nezaket',
     '/api/action/doctor', '/api/action/compile', '/api/action/index', '/api/action/watcher',
     '/api/action/pull', '/api/action/pull-cancel', '/api/action/backend', '/api/action/try',
-    '/api/action/nezaket-serbest', '/api/quit'
+    '/api/action/kaydet', '/api/action/nezaket-serbest', '/api/quit'
   )
   if ($allowed -cnotcontains $Request.Target) {
     Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'not_found' })
@@ -1051,6 +1092,35 @@ function Invoke-HttpRequest([object]$Request) {
       Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ started = $true; operation = 'try'; backend = $backend; tier = $tier })
     } catch {
       Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'try_unavailable'; message = $_.Exception.Message })
+    }
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/kaydet') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Kaydet requires Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $metin = if ($body -and $null -ne $body.metin) { [string]$body.metin } else { '' }
+    if (-not $metin.Trim()) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'missing_metin' })
+      return
+    }
+    $baslik = if ($body -and $body.baslik) { [string]$body.baslik } else { '' }
+    try {
+      [void](Start-PanelCommand 'kaydet' (New-KaydetCommand $metin $baslik) ([ordered]@{}))
+      Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{ started = $true; operation = 'kaydet' })
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'kaydet_unavailable'; message = $_.Exception.Message })
     }
     return
   }

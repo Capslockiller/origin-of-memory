@@ -481,6 +481,140 @@ class NezaketSerbestContractTests(unittest.TestCase):
         self.assertIn("kuyrukta bekliyor", page)
 
 
+class KaydetPanelContractTests(unittest.TestCase):
+    """Static, source-level checks for ``/api/action/kaydet`` (F3 Kaydet).
+
+    Same rationale as ``NezaketSerbestContractTests`` above: these need no
+    live PowerShell listener, so they run — and can catch a regression —
+    even off Windows.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = (REPO_ROOT / "beyin.ps1").read_text(encoding="utf-8")
+        match = re.search(
+            r"if \(\$Request\.Target -eq '/api/action/kaydet'\) \{\r?\n"
+            r"(?:.*?\r?\n)*?  \}\r?\n",
+            cls.source,
+        )
+        assert match, "kaydet route handler not found in beyin.ps1"
+        cls.handler = match.group(0)
+        function_match = re.search(
+            r"function New-KaydetCommand\(.*?\r?\n\}\r?\n",
+            cls.source,
+            flags=re.DOTALL,
+        )
+        assert function_match, "New-KaydetCommand not found in beyin.ps1"
+        cls.command_builder = function_match.group(0)
+
+    def test_route_is_allowlisted(self) -> None:
+        self.assertIn("'/api/action/kaydet'", self.source)
+        allow_match = re.search(r"\$allowed = @\(\r?\n(?:.*?\r?\n)*?\s*\)\r?\n", self.source)
+        assert allow_match, "route allowlist not found"
+        self.assertIn("/api/action/kaydet", allow_match.group(0))
+
+    def test_only_post_is_accepted(self) -> None:
+        self.assertIn("$Request.Method -cne 'POST'", self.handler)
+        self.assertIn("method_not_allowed", self.handler)
+
+    def test_an_active_operation_refuses_a_new_one_with_409(self) -> None:
+        self.assertIn("$script:ActiveOperation", self.handler)
+        self.assertIn("operation_in_progress", self.handler)
+
+    def test_missing_or_blank_metin_is_rejected_before_anything_starts(self) -> None:
+        self.assertIn("missing_metin", self.handler)
+        reject_at = self.handler.index("missing_metin")
+        start_at = self.handler.index("Start-PanelCommand")
+        self.assertLess(reject_at, start_at)
+
+    def test_the_operation_kind_wired_into_dispatch_is_kaydet(self) -> None:
+        self.assertIn("Start-PanelCommand 'kaydet'", self.handler)
+        self.assertIn("New-KaydetCommand $metin $baslik", self.handler)
+
+    def test_note_text_is_fed_over_stdin_never_as_an_argument(self) -> None:
+        # The whole point: the note text must never land in argv (process
+        # listings, shell history) — it goes over stdin, base64-only to
+        # survive the EncodedCommand hop, and kaydet.py reads it with --stdin.
+        self.assertIn("'--stdin'", self.command_builder)
+        self.assertIn("$metin | ", self.command_builder)
+        self.assertIn("FromBase64String", self.command_builder)
+        # The metin value itself must never be embedded as a literal argv
+        # token — only baslik (a short title) is ever added to $arguments.
+        self.assertNotIn("$arguments.Add($Metin)", self.command_builder)
+        self.assertIn("$arguments.Add($Baslik)", self.command_builder)
+
+    def test_vault_root_and_state_dir_are_passed_through(self) -> None:
+        self.assertIn("$script:PanelPaths.Vault", self.command_builder)
+        self.assertIn("$script:PanelPaths.State", self.command_builder)
+
+    def test_panel_html_has_a_kaydet_card_wired_to_the_route(self) -> None:
+        page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+        self.assertIn('id="kaydet-metin"', page)
+        self.assertIn('id="kaydet-baslik"', page)
+        self.assertIn('id="kaydet-button"', page)
+        self.assertIn("/api/action/kaydet", page)
+        self.assertIn("JSON.stringify({ metin, baslik })", page)
+        # The button must be a `.action`, so setActive()'s generic disable
+        # sweep covers it while any operation is running — no bespoke wiring.
+        self.assertIn('class="action" id="kaydet-button"', page)
+
+    def test_panel_html_never_persists_the_draft_to_local_storage(self) -> None:
+        page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+        self.assertNotIn("localStorage", page)
+
+    def test_draft_is_cleared_in_the_result_handler_not_the_post_handler(self) -> None:
+        # CRITICAL fix: a 202 only means the process started — every gate
+        # and the write itself still happen inside it. The draft must clear
+        # only once the real result (yazildi:true) comes back over SSE, not
+        # the instant the POST that launched the process succeeds.
+        page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+
+        click_match = re.search(
+            r"kaydetButton\.addEventListener\('click', async \(\) => \{\r?\n"
+            r"(?:.*?\r?\n)*?      \}\);\r?\n",
+            page,
+        )
+        assert click_match, "kaydet click handler not found in panel.html"
+        click_handler = click_match.group(0)
+
+        result_match = re.search(
+            r"function handleKaydetResult\(payload\) \{\r?\n"
+            r"(?:.*?\r?\n)*?      \}\r?\n",
+            page,
+        )
+        assert result_match, "handleKaydetResult not found in panel.html"
+        result_handler = result_match.group(0)
+
+        self.assertNotIn("kaydetMetin.value = ''", click_handler)
+        self.assertNotIn("kaydetBaslik.value = ''", click_handler)
+        self.assertIn("kaydetMetin.value = ''", result_handler)
+        self.assertIn("kaydetBaslik.value = ''", result_handler)
+        # And the clear in the result handler must itself be conditioned on
+        # yazildi — never unconditional.
+        self.assertIn("payload.yazildi === true", result_handler)
+        clear_at = result_handler.index("kaydetMetin.value = ''")
+        condition_at = result_handler.index("payload.yazildi === true")
+        self.assertLess(condition_at, clear_at)
+
+    def test_kaydet_result_line_is_detected_by_a_fixed_marker(self) -> None:
+        page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+        self.assertIn("KAYDET_MARKER = 'KAYDET-SONUC '", page)
+        self.assertIn("line.startsWith(KAYDET_MARKER)", page)
+        # And it matches the exact token kaydet.py itself prints.
+        kaydet_source = (REPO_ROOT / "scripts" / "kaydet.py").read_text(encoding="utf-8")
+        self.assertIn('RESULT_MARKER = "KAYDET-SONUC "', kaydet_source)
+
+    def test_output_encoding_is_set_before_the_pipe_to_kaydet(self) -> None:
+        # FOLLOW-UP fix: PowerShell 5.1 pipes to a native process using
+        # $OutputEncoding (OEM/ANSI by default), which would mangle Turkish
+        # text before kaydet.py ever sees a byte of it.
+        self.assertIn("OutputEncoding", self.command_builder)
+        self.assertIn("UTF8Encoding(`$false)", self.command_builder)
+        encoding_at = self.command_builder.index("OutputEncoding")
+        pipe_at = self.command_builder.index("$metin | ")
+        self.assertLess(encoding_at, pipe_at)
+
+
 @unittest.skipUnless(POWERSHELL, "Windows PowerShell is required")
 class PanelPullPreflightTests(unittest.TestCase):
     def test_pull_with_insufficient_disk_is_refused(self) -> None:

@@ -107,6 +107,22 @@ is greater than zero — check the button again once the running operation
 finishes to release the next one. See [nezaket.md](nezaket.md) for the gate
 itself.
 
+<!-- yazan: claude · sonnet -->
+Above the tabs, the **Kaydet** card is the golden path: type into the
+textarea, add an optional title, and press "Kaydet" (`POST
+/api/action/kaydet` with `{ metin, baslik }`). The note text travels to
+`kaydet.py --stdin --json` over stdin, never as a command-line argument, so
+it never reaches a process listing or shell history. Like every other
+operation it runs through the same SSE `operation-output` stream and the
+same 409-before-anything-starts rule, and the button disables itself while
+any operation — including its own — is in flight. The draft lives only in
+the textarea's own value; the panel never writes it to `localStorage`, and
+a successful `202` clears both fields immediately, since the note is
+already durably on disk by the time the operation starts — Kaydet writes
+before it ever spawns the compile that follows. See
+[kaydet.md](kaydet.md) for the full save-then-compile contract, including
+why that compile bypasses the A7 nezaket gate.
+
 ## Security boundary
 
 The server is a raw `TcpListener` bound to `127.0.0.1:0`. A 256-bit token is

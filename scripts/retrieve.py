@@ -62,10 +62,11 @@ DEFAULT_RECENCY_HALF_LIFE_DAYS = 180.0
 RECENCY_WEIGHT_FLOOR = 0.25
 SECONDS_PER_DAY = 86_400.0
 
-# Bookkeeping written by flush.py into each daily session block and carried into
-# a concept note's Kaynaklar section by the compiler.  Never context: stripped
-# out of the index at build time and out of every hit body at query time.
-SESSION_SOURCES = ("claude", "codex", "web", "gemini")
+# Bookkeeping written by flush.py (or, for "kaydet", by kaydet.py) into each
+# daily session block and carried into a concept note's Kaynaklar section by
+# the compiler.  Never context: stripped out of the index at build time and
+# out of every hit body at query time.
+SESSION_SOURCES = ("claude", "codex", "web", "gemini", "kaydet")
 DEFAULT_SESSION_SOURCE = "claude"
 SESSION_ANCHOR = re.compile(
     r"<!--[ \t]*session:(?P<session>\S+)[ \t]+ts:(?P<ts>\S+)"

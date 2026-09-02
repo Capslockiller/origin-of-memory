@@ -122,11 +122,13 @@ frontmatter `updated` reflects when a model last rewrote it, not when the
 underlying conversation happened. Session anchors fix that.
 
 ```
-<!-- session:<session-id> ts:<ISO8601> source:<claude|codex|web|gemini> -->
+<!-- session:<session-id> ts:<ISO8601> source:<claude|codex|web|gemini|kaydet> -->
 ```
 
-**Written** by `flush.py` into each daily-log session block, immediately under
-the `### Oturum (HH:MM)` heading. **Carried** by `compile.py`: every concept note
+**Written** by `flush.py` or `kaydet.py` into each daily-log session block,
+immediately under the `### Oturum (HH:MM)` heading — `kaydet.py`'s own
+`source:kaydet` anchors follow the identical shape and the identical
+round-trip; see `docs/kaydet.md`. **Carried** by `compile.py`: every concept note
 created or updated from a daily block gets that block's anchors appended to its
 `## Kaynaklar` section. **Stripped** by `retrieve.py`, both at index build time
 and again on every hit body.
