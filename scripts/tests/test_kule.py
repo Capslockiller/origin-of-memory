@@ -256,7 +256,14 @@ class JobCreationTests(KuleHarness):
         self.assertEqual(error, kule.TUR_BILINMIYOR_SLUG)
 
     def test_cwd_under_system_temp_is_refused(self) -> None:
-        with mock.patch.object(kule, "_system_temp_root", return_value=self.root):
+        # .resolve() matters: the real _system_temp_root resolves itself, and
+        # on GitHub's Windows runners %TEMP% carries an 8.3 short component
+        # (RUNNERADMIN~1). An unresolved mock root never string-matches the
+        # resolved cwd in commonpath, so the refusal silently stops firing —
+        # exactly how this test went green locally and red on CI (2026-09-02).
+        with mock.patch.object(
+            kule, "_system_temp_root", return_value=self.root.resolve()
+        ):
             record, error = kule.create_job(
                 self.kule, tur="claude", model="sonnet", prompt="x", cwd=self.cwd
             )
