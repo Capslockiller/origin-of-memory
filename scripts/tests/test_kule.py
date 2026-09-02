@@ -263,6 +263,23 @@ class JobCreationTests(KuleHarness):
         self.assertIsNone(record)
         self.assertEqual(error, kule.CWD_GECERSIZ_SLUG)
 
+    def test_cwd_on_another_drive_than_temp_is_valid(self) -> None:
+        # On Windows os.path.commonpath raises ValueError for paths on
+        # different drives. That means "cannot be under temp" — the cwd is
+        # VALID. The old blanket `except ValueError: return True` rejected
+        # every job whose cwd sat on another drive than %TEMP% (caught live
+        # in the 2026-09-02 Windows smoke run, temp C: vs vault E:).
+        with mock.patch.object(
+            kule, "_system_temp_root", return_value=self.root / "__not-temp__"
+        ), mock.patch(
+            "os.path.commonpath", side_effect=ValueError("different drives")
+        ):
+            record, error = kule.create_job(
+                self.kule, tur="claude", model="sonnet", prompt="x", cwd=self.cwd
+            )
+        self.assertIsNone(error)
+        self.assertEqual(record["durum"], "queued")
+
     def test_cwd_that_does_not_exist_is_refused(self) -> None:
         record, error = kule.create_job(
             self.kule, tur="claude", model="sonnet", prompt="x", cwd=self.cwd / "yok"

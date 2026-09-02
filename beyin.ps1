@@ -854,7 +854,7 @@ function Start-Kule {
   # own startup (a stale marker from an earlier Stop-Kule whose process has
   # since exited would otherwise make it return immediately, forever), but
   # moving it out of the way here too means a freshly-spawned process never
-  # even sees it. Moved, not deleted — same "never erase, only relocate"
+  # even sees it. Moved, not deleted — same "never wipe, only relocate"
   # posture as kule.py's own archive step.
   try {
     $kuleDur = Join-Path (Join-Path $script:PanelPaths.State 'kule') 'dur'

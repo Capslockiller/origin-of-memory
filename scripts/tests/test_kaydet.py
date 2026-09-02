@@ -8,6 +8,7 @@ import datetime as dt
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -595,16 +596,30 @@ class KillProcessTreeTests(unittest.TestCase):
         self.assertTrue(process.killed)
 
     def test_windows_branch_calls_taskkill_on_the_pid(self) -> None:
+        # taskkill is reserved for REAL Popen objects — a fake's made-up pid
+        # must never reach a live taskkill. So this test uses an actual
+        # (already exited) child to exercise the branch, on any platform.
+        process = subprocess.Popen(
+            [sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL
+        )
+        process.wait(timeout=30)
+        with mock.patch("sys.platform", "win32"), mock.patch(
+            "subprocess.run"
+        ) as fake_run:
+            kaydet._kill_process_tree(process)
+        fake_run.assert_called_once()
+        argv = fake_run.call_args[0][0]
+        self.assertEqual(argv, ["taskkill", "/T", "/F", "/PID", str(process.pid)])
+
+    def test_windows_branch_falls_back_to_kill_for_fakes(self) -> None:
         process = _FakeProcess(["x"])
         process.pid = 9999
         with mock.patch("sys.platform", "win32"), mock.patch(
             "subprocess.run"
         ) as fake_run:
             kaydet._kill_process_tree(process)
-        self.assertFalse(process.killed)  # Windows path never calls .kill()
-        fake_run.assert_called_once()
-        argv = fake_run.call_args[0][0]
-        self.assertEqual(argv, ["taskkill", "/T", "/F", "/PID", "9999"])
+        self.assertTrue(process.killed)
+        fake_run.assert_not_called()
 
     def test_never_raises_even_when_the_kill_itself_fails(self) -> None:
         class ExplodingProcess(_FakeProcess):
@@ -616,7 +631,10 @@ class KillProcessTreeTests(unittest.TestCase):
             kaydet._kill_process_tree(process)  # must not raise
 
     def test_never_raises_when_taskkill_itself_fails(self) -> None:
-        process = _FakeProcess(["x"])
+        process = subprocess.Popen(
+            [sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL
+        )
+        process.wait(timeout=30)
         with mock.patch("sys.platform", "win32"), mock.patch(
             "subprocess.run", side_effect=OSError("no taskkill")
         ):

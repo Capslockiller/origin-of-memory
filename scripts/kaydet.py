@@ -176,9 +176,15 @@ def _kill_process_tree(process: Any) -> None:
     keeps running as an orphan. On Windows, ``taskkill /T`` kills the whole
     process tree rooted at the pid; everywhere else a plain kill is enough
     because POSIX process groups aren't in play here.
+
+    ``taskkill`` fires only for a real ``subprocess.Popen``: a test fake's
+    made-up pid must never be handed to a live ``taskkill`` (it could hit an
+    unrelated real process), and the fake observes the kill through its own
+    ``kill()`` — this is what keeps the behavioural timeout/cancel tests
+    honest on Windows itself, not just on POSIX.
     """
     try:
-        if sys.platform == "win32":
+        if sys.platform == "win32" and isinstance(process, subprocess.Popen):
             subprocess.run(
                 ["taskkill", "/T", "/F", "/PID", str(process.pid)],
                 capture_output=True,
