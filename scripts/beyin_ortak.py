@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -53,16 +55,50 @@ def _lock_exclusive(lock_file: Any, blocking: bool) -> None:
         raise BlockingIOError(str(exc)) from exc
 
 
+# A pid-only temp name is NOT unique enough: kule's lane threads share the
+# pid, so two concurrent writers opened the SAME .tmp — one truncating the
+# other mid-write (silent corruption on any OS), and on Windows the loser's
+# open handle made os.replace throw WinError 32 (caught on CI 2026-09-02,
+# LaneCapTests). Thread id + a process-wide counter make each writer's temp
+# file its own.
+_TMP_SAYAC = itertools.count()
+
+
+def _unique_tmp(path: Path) -> Path:
+    return path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{next(_TMP_SAYAC)}.tmp"
+    )
+
+
+def _replace_with_retry(temporary: Path, path: Path) -> None:
+    """os.replace, absorbing Windows sharing-violation races, bounded.
+
+    A concurrent reader of the destination (CPython's open() does not pass
+    FILE_SHARE_DELETE) can make the replace fail transiently with
+    PermissionError. Retry briefly; past the deadline the error surfaces —
+    fail loud, never fail silent.
+    """
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.025)
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write durable UTF-8 JSON and atomically replace the destination."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary = _unique_tmp(path)
     try:
         with temporary.open("w", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
     finally:
         try:
             temporary.unlink()
@@ -105,13 +141,13 @@ def _rotate_calls_ledger(path: Path, max_bytes: int) -> None:
     # The seek lands mid-line; drop the partial head so every kept line parses.
     newline = tail.find(b"\n")
     tail = tail[newline + 1 :] if newline != -1 else b""
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary = _unique_tmp(path)
     try:
         with temporary.open("wb") as handle:
             handle.write(tail)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        _replace_with_retry(temporary, path)
     finally:
         try:
             temporary.unlink()
