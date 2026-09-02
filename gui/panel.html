@@ -1399,6 +1399,9 @@
           const response = await api('/api/action/kule-is-ver', { method: 'POST', body: JSON.stringify(body) });
           const result = await response.json();
           if (!response.ok) throw new Error(result.message || result.error || 'İş oluşturulamadı.');
+          // The route answers 200 even when kule refuses the job (e.g.
+          // kule-cwd-gecersiz) — success is result.olusturuldu, not HTTP.
+          if (result.olusturuldu === false) throw new Error(result.hata || 'İş oluşturulamadı.');
           const newId = result.is && result.is.id ? result.is.id : '?';
           kokpitSubmitResult.textContent = 'İş oluşturuldu: ' + newId;
           document.getElementById('kokpit-prompt').value = '';

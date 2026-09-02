@@ -406,7 +406,11 @@ class PanelServerTests(unittest.TestCase):
             r"\[IO\.File\]::Delete",
             r"\[IO\.Directory\]::Delete",
             r"\.Delete\s*\(",
-            r"\b(rm|del|erase|rmdir)\b",
+            # (?<![\w-]) instead of \b: a plain \b would also match the "del"
+            # inside the hyphenated Turkish flag `--nezaket-del` (delmek — to
+            # pierce), which deletes nothing. A real shell command is never
+            # preceded by "-", so the guard loses no coverage.
+            r"(?<![\w-])(rm|del|erase|rmdir)\b",
         )
         for pattern in forbidden:
             with self.subTest(pattern=pattern):
@@ -557,6 +561,14 @@ class KaydetPanelContractTests(unittest.TestCase):
         # The button must be a `.action`, so setActive()'s generic disable
         # sweep covers it while any operation is running — no bespoke wiring.
         self.assertIn('class="action" id="kaydet-button"', page)
+
+    def test_kule_is_ver_handler_treats_olusturuldu_false_as_failure(self) -> None:
+        # The kule-is-ver route answers HTTP 200 even when kule REFUSES the
+        # job ({olusturuldu:false, hata:"kule-cwd-gecersiz"}). Checking only
+        # response.ok painted that refusal as "İş oluşturuldu: ?" and wiped
+        # the prompt — caught live in the 2026-09-02 Windows smoke run.
+        page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+        self.assertIn("result.olusturuldu === false", page)
 
     def test_panel_html_never_persists_the_draft_to_local_storage(self) -> None:
         page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")

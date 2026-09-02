@@ -310,10 +310,17 @@ def _cwd_gecersiz(cwd: Path) -> bool:
         return True
     try:
         resolved = cwd.resolve()
-        temp_root = _system_temp_root()
-        return os.path.commonpath([temp_root, resolved]) == str(temp_root)
-    except (OSError, ValueError):
+    except OSError:
         return True
+    temp_root = _system_temp_root()
+    try:
+        return os.path.commonpath([temp_root, resolved]) == str(temp_root)
+    except ValueError:
+        # commonpath refuses to compare paths on different Windows drives.
+        # A cwd on another drive than the temp root cannot be under it —
+        # that is a VALID cwd, not an invalid one. (Caught live 2026-09-02:
+        # temp on C: rejected every job whose cwd was on E:.)
+        return False
 
 
 def _resolve_under(root: Path, candidate: Path) -> Path | None:

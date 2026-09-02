@@ -306,6 +306,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<!-- yazan: claude · fable-5 -->
+- **First real Windows run of the F2–F5 suite (built on Linux) found and fixed
+  three Windows-only defects.** `kule.py`'s cwd guard treated
+  `os.path.commonpath`'s different-drives `ValueError` as "invalid cwd", so
+  with `%TEMP%` on `C:` every job whose cwd sat on another drive was refused
+  (`kule-cwd-gecersiz`); a cwd on another drive cannot be under the temp root,
+  so it is now valid. The panel's kule-is-ver handler checked only HTTP 200 and
+  painted a refused job (`{olusturuldu:false}`) as "İş oluşturuldu: ?" while
+  wiping the prompt; it now surfaces the refusal slug. And
+  `kaydet._kill_process_tree` handed a test fake's made-up pid to a live
+  `taskkill /F` on win32 — `taskkill` is now reserved for real
+  `subprocess.Popen` objects, which also lets the behavioural timeout/cancel
+  tests observe the kill on Windows itself. The deletion-scan guard in
+  `test_panel.py` no longer misreads the hyphenated Turkish flag
+  `--nezaket-del` (delmek — to pierce) as a `del` command. Suite on Windows:
+  5 failed → 816 passed.
+
 <!-- yazan: claude · opus-5 -->
 - `kur.ps1` handed `model_oneri.py` the hardware probe as a native command
   argument. Windows PowerShell re-splits the quotes inside a JSON blob, so
