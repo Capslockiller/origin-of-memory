@@ -70,6 +70,15 @@ collide on atomic writes (a silent corruption risk on every OS) — all fixed
 with pinning tests. Suite on Windows: 837 passed, 1 skipped; CI green on
 3.12 and 3.13.
 
+## No installer executable this time
+
+This release ships without a `OriginOfMemory-Setup-0.5.0.exe`. The source
+zip's `Setup.cmd` does the same job (it starts the graphical wizard, falling
+back to the terminal one), and an existing v0.4.1 installation updates in
+place from the source tree. The `.iss` script already reports 0.5.0, so an
+executable can be built later from this exact tag with Inno Setup 6 and
+`installer/build.ps1`.
+
 ## Not verified
 
 The passport's paste round-trip was exercised against the clipboard and the
