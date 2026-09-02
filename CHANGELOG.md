@@ -7,14 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-02
+
 ### Added
+
+<!-- yazan: claude · fable-5 -->
+- **PII and unicode guards join the flush pipeline.** `scripts/pii_guard.py`
+  redacts checksum-validated Turkish structural PII — TCKN (mod-10), VKN
+  (GİB algorithm), IBAN-TR (mod-97), cards (Luhn), TR phones, plates —
+  silently, by deliberate scope choice: free-text names and addresses stay
+  out (they would need a local model and carry a false-positive risk that
+  was decided against). `scripts/unicode_guard.py` NFC-normalizes and strips
+  zero-width characters, the invisible-but-tokenizable Unicode Tags block
+  (U+E0000–E007F), bidi overrides, stray BOMs and control characters, and
+  converts U+2028/U+0085 into real newlines — closing the line-separator
+  trick that could slip text past the line-anchored `DIRECTIVE_SHAPED`
+  quarantine regex. Both mirror `secret_guard`'s contract exactly
+  (`scan(text)` / `redact|clean(text) -> (text, [classes])`, stdin filter
+  mode, `--self-test`) and are wired into `flush.py` at both ends: unicode
+  cleans the transcript *before* the directive-shape check, PII redacts
+  transcript and summary beside `secret_guard`, and every hit lands in
+  health telemetry (`warn:pii-redacted-input/output:<classes>`,
+  `warn:unicode-cleaned-input/output:<classes>`). Tests mirror
+  `test_secret_guard.py`; suite grows 818 → 837.
 
 <!-- yazan: claude · sonnet -->
 - **F5 "Kokpit" (Cockpit), part 1 — Kule (the tower)**: a standalone,
   stdlib-only, multi-lane background job manager for `claude -p`/`codex
-  exec` work, completely separate from the (not-yet-built) panel — "the
-  panel never computes, it displays," so every number a future panel would
-  show already lives in `<state_dir>/kule/durum.json`. New
+  exec` work, completely separate from the panel (part 2, below) — "the
+  panel never computes, it displays," so every number the panel shows
+  already lives in `<state_dir>/kule/durum.json`. New
   `scripts/kule.py`: jobs (`is-ver --tur claude|codex --model M
   --prompt-dosya P|--stdin --cwd D`) require an explicit model
   (`kule-model-eksik` otherwise — no silent default), a `cwd` that exists
@@ -45,8 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `goster`, `log`, `diff`, `onayla`, `reddet`, `iptal`, `calis [--once]`,
   `arsivle`; `is-ver --json` prints one `KULE-SONUC {...}` line, the same
   marker convention as Kaydet's `KAYDET-SONUC` and Pasaport's
-  `PASAPORT-SONUC`. See `docs/kokpit.md` — part 2 (the panel) is not built
-  here.
+  `PASAPORT-SONUC`. See `docs/kokpit.md` — part 2 (the panel) follows
+  below.
 
 <!-- yazan: claude · sonnet -->
 - **F5 "Kokpit" (Cockpit), part 2 — panel integration (B1 routes, B4 cards,
@@ -115,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   atomic-write-plus-lock, `BEYIN_PASAPORT_DEFTER_TAVAN` retention, default
   200) is the ISTEK ledger — the blind-spot map of what a web model asked
   for that the brain couldn't supply. It records package sizes, note slugs
-  and content-hashes, and later (part 2 — not built here) `[ODENA-DONUS]`
+  and content-hashes, and (since part 2, below) `[ODENA-DONUS]`
   outcome status/size and `[ODENA-ISTEK]` line items, but **never** a note
   body or a returned answer's text; `defter_md()` renders the recent
   packages plus the aggregated ISTEK list, most-frequent-first. CLI:
@@ -305,6 +327,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compile-gate harness and its report table).
 
 ### Fixed
+
+<!-- yazan: claude · fable-5 -->
+- **`_atomic_write_json` temp names were pid-only, so the tower's lane
+  threads inside one process could collide on the same temp file — a silent
+  state-corruption risk on every OS, not just Windows.** CI's 3.13 leg
+  caught it as a `LaneCapTests` failure. Temp names now carry
+  pid + thread id + a monotonic counter, `os.replace` retries for a bounded
+  2 s window (Windows can hold the target briefly), and an 8-thread hammer
+  test pins the fix.
+
+<!-- yazan: claude · fable-5 -->
+- CI's under-temp refusal test failed on GitHub runners whose `%TEMP%` is an
+  8.3 short path (`RUNNERADMIN~1`): the mocked temp root was never resolved,
+  so the guard compared a short path against a long one. The mock now
+  `.resolve()`s its root, matching what the production guard already did.
 
 <!-- yazan: claude · fable-5 -->
 - **First real Windows run of the F2–F5 suite (built on Linux) found and fixed
@@ -865,7 +902,8 @@ see [docs/attribution.md](docs/attribution.md) for the lineage.
   Untrusted-data delimiters are in place, but there is no exclusion list.
 - Windows only; no tested macOS or Linux path.
 
-[Unreleased]: https://github.com/Capslockiller/origin-of-memory/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Capslockiller/origin-of-memory/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Capslockiller/origin-of-memory/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Capslockiller/origin-of-memory/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Capslockiller/origin-of-memory/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Capslockiller/origin-of-memory/compare/v0.2.0...v0.3.0

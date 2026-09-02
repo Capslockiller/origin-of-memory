@@ -9,12 +9,12 @@ model: sonnet
 
 The tower gives jobs, the panel shows. `scripts/kule.py` is a standalone,
 headless, multi-lane job manager for background `claude`/`codex` CLI work —
-completely separate from the (not-yet-built) panel. Every number a future
-panel would show — queue counts, lane occupancy, a job's status, its last
+completely separate from the panel. Every number the panel shows — queue counts, lane occupancy, a job's status, its last
 event line, its diffs — is written by this module to a state file first.
-The panel's job, when it exists, is to read those files and render them; it
-must never compute a count or a status itself. That is the constitution
-this part follows even though part 1 has no panel at all yet.
+The panel's job is to read those files and render them; it must never
+compute a count or a status itself. That constitution was laid down here
+before the panel integration existed, and the panel now follows it (see
+`docs/panel.md` for the Kokpit card and the `/api/kule*` routes).
 
 A job here is one `claude -p` or one `codex exec` invocation, run as a
 background child, streamed to a log, and tracked through a small state

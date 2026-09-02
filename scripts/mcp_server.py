@@ -25,7 +25,7 @@ import retrieve  # noqa: E402  — sibling script, stdlib-only
 
 
 SERVER_NAME = "origin-of-memory"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.5.0"
 
 MODERN_VERSION = "2026-07-28"
 LEGACY_VERSIONS = ("2025-11-25", "2025-06-18")
