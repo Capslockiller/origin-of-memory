@@ -84,7 +84,10 @@ prompt-submit hook, which Claude Code provides. Other agents can still read the
 writes it into existing `AGENTS.md`, `GEMINI.md`, or `CLAUDE.md` files at the
 vault root, and can search on demand through the [MCP server](docs/mcp.md) or
 manually through the clipboard bridge. Static context is not retrieval, and
-automatic hookless capture is planned but not yet available. See the
+automatic capture for these hosts is only as good as what they write to disk:
+the [watcher](docs/watcher.md)'s generic transcript folders pick up any host
+that leaves JSONL transcripts behind, and hosts that don't are limited to
+manual import. See the
 [host-surfaces comparison](docs/compatibility.md#host-surfaces) for the exact
 boundaries.
 

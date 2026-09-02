@@ -210,7 +210,9 @@ another company's mark and is intended to be replaced by final artwork later.
 
 ## Not built yet
 
-- Shortcut creation and installer wiring are separate work.
+- ~~Shortcut creation and installer wiring are separate work.~~ Done since
+  v0.4.1: the installer creates the desktop shortcut and the `Local Brain.cmd`
+  entry point (see `docs/installer.md`).
 - Model installation/runtime installation is not exposed; a stopped or absent
   Ollama is reported rather than simulated or silently installed.
 - Model deletion is deliberately absent because the panel's hard safety boundary
