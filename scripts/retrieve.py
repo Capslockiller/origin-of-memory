@@ -66,7 +66,7 @@ SECONDS_PER_DAY = 86_400.0
 # daily session block and carried into a concept note's Kaynaklar section by
 # the compiler.  Never context: stripped out of the index at build time and
 # out of every hit body at query time.
-SESSION_SOURCES = ("claude", "codex", "web", "gemini", "kaydet")
+SESSION_SOURCES = ("claude", "codex", "web", "gemini", "kaydet", "pasaport")
 DEFAULT_SESSION_SOURCE = "claude"
 SESSION_ANCHOR = re.compile(
     r"<!--[ \t]*session:(?P<session>\S+)[ \t]+ts:(?P<ts>\S+)"

@@ -211,6 +211,18 @@
     .nezaket-status .badge { font-size: 1rem; }
     .nezaket-check { width: 1%; white-space: nowrap; }
     .nezaket-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 22px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+    .pasaport { margin-top: 28px; }
+    .pasaport-status { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+    .pasaport-status .badge { font-size: 1rem; }
+    .pasaport-candidate { border-top: 1px solid var(--line); }
+    .pasaport-hash { font: 12px/1.4 ui-monospace, "Cascadia Mono", monospace; color: var(--muted); }
+    .pasaport-units { margin: 12px 0 0; padding-left: 20px; }
+    .pasaport-units li { margin-bottom: 6px; }
+    .pasaport-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 0 22px 20px; }
+    .pasaport-istekler { list-style: none; margin: 0; padding: 0; }
+    .pasaport-istekler li { padding: 12px 22px; border-bottom: 1px solid var(--line); }
+    .pasaport-istekler li:last-child { border-bottom: 0; }
+    .pasaport-panel-gap { margin-top: 16px; }
     @media (max-width: 1050px) {
       .operation-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
       .accounting { grid-template-columns: 1fr; }
@@ -390,6 +402,32 @@
         </div>
       </section>
 
+      <section class="pasaport" aria-labelledby="pasaport-title">
+        <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="pasaport-title">Pasaport</h2><span class="section-note" id="pasaport-updated">Loading…</span></div>
+        <div class="panel">
+          <div class="panel-body">
+            <div class="pasaport-status">
+              <span id="pasaport-listener-badge" class="badge unknown">Loading…</span>
+              <span class="section-note" id="pasaport-listener-detail"></span>
+            </div>
+            <p class="section-note">Web-chat dönüşleri panoyu izler; hiçbir şey tek tıkla onay olmadan günlüğe girmez.</p>
+          </div>
+          <div class="panel-body pasaport-candidate" id="pasaport-candidate">
+            <p class="section-note" id="pasaport-empty">Bekleyen paket yok.</p>
+          </div>
+          <div class="pasaport-actions">
+            <button class="action" id="pasaport-onayla-button" type="button" disabled>Onayla → günlüğe</button>
+            <button class="action" id="pasaport-reddet-button" type="button" disabled>Reddet</button>
+            <button class="action mini-action" id="pasaport-panodan-button" type="button">Panodan al</button>
+          </div>
+          <div class="notice" id="pasaport-notice" hidden></div>
+        </div>
+        <div class="panel pasaport-panel-gap">
+          <div class="section-head"><h2>Kör nokta haritası</h2><span class="section-note">En sık istenen madde en üstte</span></div>
+          <ul class="pasaport-istekler" id="pasaport-istekler"><li class="empty">Loading…</li></ul>
+        </div>
+      </section>
+
       <section class="operations" aria-labelledby="operations-title">
         <div class="section-head" style="padding-left:0;padding-right:0;border:0"><h2 id="operations-title">Operations</h2><span class="section-note">Every operation asks first</span></div>
         <div class="operation-grid">
@@ -409,7 +447,7 @@
   <script>
     (() => {
       'use strict';
-      const labels = { doctor: 'Run the doctor', compile: 'Compile now', index: 'Rebuild the index', watcher: 'Watcher sweep once', pull: 'Pull model', backend: 'Switch backend', try: 'Try backend', kaydet: 'Kaydet' };
+      const labels = { doctor: 'Run the doctor', compile: 'Compile now', index: 'Rebuild the index', watcher: 'Watcher sweep once', pull: 'Pull model', backend: 'Switch backend', try: 'Try backend', kaydet: 'Kaydet', 'pasaport-onayla': 'Pasaport onayla', 'pasaport-panodan': 'Panodan al' };
       const confirmations = {
         doctor: 'Run the doctor now? This reads and reports the current system state.',
         compile: 'Compile the pending daily memory now?',
@@ -428,6 +466,11 @@
       const kaydetButton = document.getElementById('kaydet-button');
       const kaydetResult = document.getElementById('kaydet-result');
       const kaydetNotice = document.getElementById('kaydet-notice');
+      const pasaportOnaylaButton = document.getElementById('pasaport-onayla-button');
+      const pasaportReddetButton = document.getElementById('pasaport-reddet-button');
+      const pasaportPanodanButton = document.getElementById('pasaport-panodan-button');
+      const pasaportNotice = document.getElementById('pasaport-notice');
+      let pasaportRawHash = null;
       let lastEventId = 0;
       let stopped = false;
       let activeOperation = '';
@@ -579,6 +622,75 @@
         renderNezaket(await response.json());
       }
 
+      function renderPasaport(data) {
+        const izleyici = data.izleyici || {};
+        const calisiyor = Boolean(izleyici.calisiyor);
+        const badge = document.getElementById('pasaport-listener-badge');
+        badge.textContent = calisiyor ? 'Çalışıyor' : 'Durdu';
+        badge.className = 'badge ' + (calisiyor ? 'good' : 'warn');
+        const heartbeat = izleyici.heartbeat || {};
+        document.getElementById('pasaport-listener-detail').textContent = heartbeat.last_event_ts
+          ? 'Son olay: ' + formatTime(heartbeat.last_event_ts) + (heartbeat.last_slug ? ' · ' + heartbeat.last_slug : '')
+          : 'Henüz olay yok.';
+
+        const candidateBody = document.getElementById('pasaport-candidate');
+        candidateBody.replaceChildren();
+        const bekleyen = data.bekleyen;
+        pasaportRawHash = bekleyen ? bekleyen.raw_hash : null;
+        pasaportOnaylaButton.disabled = Boolean(activeOperation) || !bekleyen;
+        pasaportReddetButton.disabled = Boolean(activeOperation) || !bekleyen;
+        if (!bekleyen) {
+          const empty = document.createElement('p');
+          empty.className = 'section-note';
+          empty.textContent = 'Bekleyen paket yok.';
+          candidateBody.append(empty);
+        } else {
+          const meta = document.createElement('p');
+          meta.className = 'section-note pasaport-hash';
+          const dropped = bekleyen.dusen_adet ? (' · ' + bekleyen.dusen_adet + ' madde zaten biliniyordu') : '';
+          meta.textContent = 'paket ' + bekleyen.id + ' · hash ' + String(bekleyen.raw_hash || '').slice(0, 12) + dropped;
+          candidateBody.append(meta);
+          const list = document.createElement('ul');
+          list.className = 'pasaport-units';
+          (bekleyen.birimler || []).forEach((unit) => {
+            const item = document.createElement('li');
+            item.textContent = unit;
+            list.append(item);
+          });
+          candidateBody.append(list);
+          (bekleyen.uyarilar || []).forEach((warning) => {
+            const p = document.createElement('p');
+            p.className = 'section-note';
+            p.textContent = 'uyarı: ' + warning;
+            candidateBody.append(p);
+          });
+        }
+
+        const istekBody = document.getElementById('pasaport-istekler');
+        istekBody.replaceChildren();
+        const istekler = data.istekler || [];
+        if (!istekler.length) {
+          const item = document.createElement('li');
+          item.className = 'empty';
+          item.textContent = 'Henüz ISTEK kaydı yok.';
+          istekBody.append(item);
+        } else {
+          istekler.forEach((entry) => {
+            const item = document.createElement('li');
+            item.textContent = '(' + entry.adet + '×) ' + entry.madde;
+            istekBody.append(item);
+          });
+        }
+
+        document.getElementById('pasaport-updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+
+      async function loadPasaport() {
+        const response = await api('/api/pasaport');
+        if (!response.ok) throw new Error('Pasaport data is unavailable.');
+        renderPasaport(await response.json());
+      }
+
       function formatGb(value) {
         return typeof value === 'number' ? value.toFixed(2) + ' GB' : 'Unknown';
       }
@@ -711,6 +823,10 @@
       // running (e.g. the spawned compile subprocess's own stdout) is shown
       // as plain text, never parsed as the result.
       const KAYDET_MARKER = 'KAYDET-SONUC ';
+      // Same convention, for the approve operation — its spawned compile
+      // subprocess also inherits this process's stdout, so the panel needs
+      // a fixed marker to find the actual result line.
+      const PASAPORT_MARKER = 'PASAPORT-SONUC ';
 
       function formatKaydetFailure(payload) {
         let reason = 'Kaydedilmedi: ' + (payload.hata || 'bilinmeyen-hata');
@@ -760,6 +876,11 @@
             shown = formatKaydetResult(payload);
             handleKaydetResult(payload);
           } catch (_) {}
+        } else if (!isError && activeOperation === 'pasaport-onayla' && line.startsWith(PASAPORT_MARKER)) {
+          try {
+            const payload = JSON.parse(line.slice(PASAPORT_MARKER.length));
+            shown = payload.uygulandi ? ('Onaylandı: ' + payload.dosya) : ('Onaylanamadı: ' + (payload.hata || 'bilinmeyen-hata'));
+          } catch (_) {}
         }
         output.textContent += (isError ? '[error] ' : '') + shown + '\n';
         output.scrollTop = output.scrollHeight;
@@ -805,6 +926,7 @@
             loadData().catch(showConnectionError);
             if (localLoaded) loadLocalModels().catch(showConnectionError);
             loadNezaket().catch(() => {});
+            loadPasaport().catch(() => {});
           }
         });
       }
@@ -843,6 +965,13 @@
         }, 10000);
       }
 
+      function pasaportPollLoop() {
+        setInterval(() => {
+          if (stopped) return;
+          loadPasaport().catch(() => {});
+        }, 5000);
+      }
+
       async function begin() {
         const token = location.hash.slice(1);
         if (!token) throw new Error('The one-time panel token is missing. Re-run Local Brain.');
@@ -852,6 +981,8 @@
         await loadData();
         loadNezaket().catch(() => {});
         nezaketPollLoop();
+        loadPasaport().catch(() => {});
+        pasaportPollLoop();
         eventLoop();
       }
 
@@ -991,6 +1122,48 @@
           notice.hidden = false;
           notice.textContent = error.message;
           appendOutput(error.message, true);
+        }
+      });
+
+      pasaportOnaylaButton.addEventListener('click', async () => {
+        if (!pasaportRawHash) return;
+        if (!window.confirm('Bu paketi günlüğe yaz? Bu işlem geri alınamaz — hemen ardından derleme çalışır.')) return;
+        pasaportNotice.hidden = true;
+        try {
+          const response = await api('/api/action/pasaport-onayla', { method: 'POST', body: JSON.stringify({ raw_hash: pasaportRawHash }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'Onaylanamadı.');
+          setActive('pasaport-onayla');
+        } catch (error) {
+          pasaportNotice.hidden = false;
+          pasaportNotice.textContent = error.message;
+        }
+      });
+
+      pasaportReddetButton.addEventListener('click', async () => {
+        if (!pasaportRawHash) return;
+        pasaportNotice.hidden = true;
+        try {
+          const response = await api('/api/action/pasaport-reddet', { method: 'POST', body: JSON.stringify({ raw_hash: pasaportRawHash }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'Reddedilemedi.');
+          await loadPasaport();
+        } catch (error) {
+          pasaportNotice.hidden = false;
+          pasaportNotice.textContent = error.message;
+        }
+      });
+
+      pasaportPanodanButton.addEventListener('click', async () => {
+        pasaportNotice.hidden = true;
+        try {
+          const response = await api('/api/action/pasaport-panodan', { method: 'POST', body: '{}' });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.message || result.error || 'Panodan okunamadı.');
+          setActive('pasaport-panodan');
+        } catch (error) {
+          pasaportNotice.hidden = false;
+          pasaportNotice.textContent = error.message;
         }
       });
 

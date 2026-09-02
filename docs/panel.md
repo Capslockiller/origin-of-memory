@@ -108,6 +108,32 @@ finishes to release the next one. See [nezaket.md](nezaket.md) for the gate
 itself.
 
 <!-- yazan: claude · sonnet -->
+Below the Nezaket card, the **Pasaport** card is F4 part 2's approval
+surface, polled every 5 s (`GET /api/pasaport`): the clipboard listener's
+status (running/stopped, last event) from its heartbeat file, the single
+pending `[ODENA-DONUS]` candidate — if any — rendered read-only as its
+surviving bullet units, dropped-duplicate count, and warnings, with a short
+form of its `raw_hash` so the reviewer sees exactly what they are about to
+approve, and the aggregated ISTEK "kör nokta haritası" (blind-spot map).
+"Onayla → günlüğe" (`POST /api/action/pasaport-onayla` with `{ raw_hash }`)
+writes the candidate to the daily log and spawns compile — the same
+409-before-anything-starts rule as every other operation, streamed through
+the same SSE `operation-output` log with its own `PASAPORT-SONUC ` result
+marker (compile's own stdout is inherited, exactly like Kaydet's spawn).
+"Reddet" runs synchronously (it never touches the daily log or compile, so
+it needs no operation slot) and "Panodan al" is the manual fallback when
+the listener is not running, reading the clipboard once
+(`pano_izleyici.py --once`) through the normal SSE operation path. Both
+approve and reject refuse a stale `raw_hash` — a candidate a newer paste
+already replaced — rather than silently acting on the wrong text. The
+listener itself is spawned hidden as beyin.ps1's child when the panel
+starts (`BEYIN_PASAPORT_IZLEYICI=off` disables it) and stopped in the
+panel's single shutdown path, covering both an explicit quit and idle
+timeout; it is never restarted if it exits on its own. See
+[pasaport.md](pasaport.md) for the parser, the gate pipeline, and the
+listener itself.
+
+<!-- yazan: claude · sonnet -->
 Above the tabs, the **Kaydet** card is the golden path: type into the
 textarea, add an optional title, and press "Kaydet" (`POST
 /api/action/kaydet` with `{ metin, baslik }`). The note text travels to
