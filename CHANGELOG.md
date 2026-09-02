@@ -10,6 +10,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: claude · sonnet -->
+- **F5 "Kokpit" (Cockpit), part 1 — Kule (the tower)**: a standalone,
+  stdlib-only, multi-lane background job manager for `claude -p`/`codex
+  exec` work, completely separate from the (not-yet-built) panel — "the
+  panel never computes, it displays," so every number a future panel would
+  show already lives in `<state_dir>/kule/durum.json`. New
+  `scripts/kule.py`: jobs (`is-ver --tur claude|codex --model M
+  --prompt-dosya P|--stdin --cwd D`) require an explicit model
+  (`kule-model-eksik` otherwise — no silent default), a `cwd` that exists
+  and is not under the OS temp root (`kule-cwd-gecersiz` — Codex's sandbox
+  cannot read Windows Temp paths), and are prompt-redacted
+  (`secret_guard.redact`) before the prompt ever touches disk or a model.
+  Multi-lane from the start: `BEYIN_KULE_CLAUDE_TAVAN`/`BEYIN_KULE_CODEX_TAVAN`
+  (default 3/4) cap concurrent children per kind, claimed via the same
+  `O_CREAT|O_EXCL` marker pattern `flush.py`'s compile-trigger and
+  `compile.py`'s machine-id already use — two racing `kule calis`
+  processes can never both take the same job or the same lane slot. A
+  stale claim/lane marker (owning worker pid confirmed dead — `os.kill`
+  POSIX, `OpenProcess`+`GetExitCodeProcess` via `ctypes` on Windows,
+  `tasklist` fallback, fails open on a probe error) is reaped and its job
+  marked `failed`/`kule-worker-kayip`; on a graceful stop (`dur` file,
+  SIGINT/SIGTERM) already-running children are deliberately left running —
+  the next `calis` invocation's reaper reclaims them once this process's
+  own pid is gone. A job declaring `izlenen_dosyalar` gets a before/after
+  snapshot and a `difflib.unified_diff` per file; any non-empty diff parks
+  the job at `waiting-approval` until `onayla`/`reddet` (illegal
+  transitions refused with `kule-gecis-gecersiz`) — Kule only reads and
+  diffs, it never writes to a watched file itself. Finished jobs beyond
+  `BEYIN_KULE_TAVAN` (default 50) are moved — never deleted — to
+  `<state_dir>/kule/arsiv/`, oldest first; `queued`/`running`/
+  `waiting-approval` jobs are never archived. Prompt and log content never
+  reach `calls.jsonl` — that ledger stays numeric accounting only
+  (`beyin_ortak.record_call`, `component="kule"`). CLI: `is-ver`, `durum`,
+  `goster`, `log`, `diff`, `onayla`, `reddet`, `iptal`, `calis [--once]`,
+  `arsivle`; `is-ver --json` prints one `KULE-SONUC {...}` line, the same
+  marker convention as Kaydet's `KAYDET-SONUC` and Pasaport's
+  `PASAPORT-SONUC`. See `docs/kokpit.md` — part 2 (the panel) is not built
+  here.
+
+<!-- yazan: claude · sonnet -->
+- **F5 "Kokpit" (Cockpit), part 2 — panel integration (B1 routes, B4 cards,
+  B3 VS Code bridge)**: `beyin.ps1` gains the tower's own spawn/kill
+  lifecycle — `Start-Kule`/`Stop-Kule`, mirroring
+  `Start-PasaportIzleyici`/`Stop-PasaportIzleyici` exactly: `kule.py calis`
+  spawns hidden with the panel and is stopped in the single shutdown path
+  both quit and idle-timeout share, writing `<state>/kule/dur` first (the
+  same stop-file `calis()`'s own loop already checks), waiting up to 5s,
+  then `.Kill()` — any `claude`/`codex` child kule already spawned is
+  intentionally left running either way, exactly as part 1 documents.
+  `BEYIN_KULE=off` skips spawning it entirely. New routes, none of them
+  touching the panel's SSE/`$script:ActiveOperation` slot (kule already runs
+  its own multi-lane worker): `GET /api/kule` (durum.json verbatim + a new
+  `vscode: {bulundu, yol}` probe result + `calisiyor`), `GET /api/kule/is?id=`
+  (job record + last 60 log lines, `id` regex-validated before any file
+  read), `GET /api/kule/diff?id=&n=` (stored diff text as `text/plain`, `id`
+  and `n` validated before the path — which is always read from the job
+  record's own `diffler[n].diff_yol`, never assembled from the query
+  string), `POST /api/action/kule-is-ver` (`tur`/`model`/`prompt`/`cwd?`/
+  `izlenen?`/`izin?`, prompt piped to `kule.py is-ver --stdin --json
+  --kaynak panel` over stdin — bypassing the A7 nezaket gate the same way
+  Kaydet does, since kule already stamps `nezaket_del: true`), `POST
+  /api/action/kule-onayla`/`-reddet`/`-iptal` (`{id}`), and `POST
+  /api/action/kule-vscode` (`{id, n}` — B3's VS Code bridge: if `Find-VsCode`
+  found `code` (probed `PATH`, then `%LOCALAPPDATA%`, then `%ProgramFiles%`,
+  cached for the session) it runs `code --diff <once> <sonra>` with both
+  paths read from the job record; otherwise `409 vscode_yok` and the panel's
+  existing stored-diff-text fallback (`GET /api/kule/diff`) covers it — VS
+  Code installation stays the owner's decision, never the panel's). New
+  "Kokpit" section in `gui/panel.html`: a lane-meter/count-per-status row, an
+  "İş ver" form whose submit-disable is local state deliberately **not**
+  wired into `setActive()` (not an SSE operation), and a last-20 job list
+  with per-row Log/İptal/Diff/Onayla/Reddet buttons — polled every 5s with a
+  stacking guard flag, `textContent`-only throughout. B4's ISTEK-defteri
+  requirement is satisfied by linking to the *existing* Pasaport blind-spot
+  card rather than duplicating it. New static contract tests
+  (`scripts/tests/test_panel.py`) plus a real-subprocess test that `kule.py
+  is-ver --stdin --json --kaynak panel` prints the `KULE-SONUC` marker line
+  the panel parses. See `docs/kokpit.md`.
+
+<!-- yazan: claude · sonnet -->
 - **F4 "Bağlam Pasaportu" (Context passport), part 1 — C1 packager + C4
   ISTEK ledger**: a hand-carried memory channel for consumer web chats
   (ChatGPT/Gemini/claude.ai) that have no local tool access at all —

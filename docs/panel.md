@@ -149,6 +149,30 @@ before it ever spawns the compile that follows. See
 [kaydet.md](kaydet.md) for the full save-then-compile contract, including
 why that compile bypasses the A7 nezaket gate.
 
+<!-- yazan: claude · sonnet -->
+Below Pasaport, the **Kokpit** card is F5 part 2's face on the tower
+(`scripts/kule.py`): a lane meter and count-per-status row read straight
+from `kule/durum.json` (polled every 5 s, `GET /api/kule`, guarded against
+stacking two in-flight requests), an "İş ver" form
+(`POST /api/action/kule-is-ver` with `{ tur, model, prompt, cwd?, izlenen?,
+izin? }`, prompt piped to `kule.py` over stdin) whose submit button disables
+itself locally while its own request is in flight — deliberately **not**
+wired into the shared SSE `setActive()` sweep, since this is not an SSE
+operation — and a job list (last 20) with per-row Log/İptal/Diff/Onayla/
+Reddet actions. None of Kokpit's routes touch the panel's single
+operation-at-a-time slot: kule runs its own multi-lane background worker,
+so `/api/action/kule-is-ver`/`kule-onayla`/`kule-reddet`/`kule-iptal`/
+`kule-vscode` all answer synchronously instead of streaming through SSE.
+"VS Code'da aç" on a waiting-approval job's diff runs
+`code --diff <once> <sonra>` when `code` is found on `PATH` (or under the
+usual `LOCALAPPDATA`/`ProgramFiles` install locations); when it isn't, the
+same stored diff text is shown read-only instead — the panel never
+recomputes a diff either way. The tower child is spawned hidden when the
+panel starts and stopped (`dur` file, then a graceful wait, then `Kill()`)
+in the same single shutdown path as the pasaport listener
+(`BEYIN_KULE=off` disables it). See [kokpit.md](kokpit.md) for the full job
+lifecycle, the diff-approval flow, and the route contract.
+
 ## Security boundary
 
 The server is a raw `TcpListener` bound to `127.0.0.1:0`. A 256-bit token is
