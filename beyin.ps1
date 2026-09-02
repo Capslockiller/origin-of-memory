@@ -1073,14 +1073,19 @@ function Get-TodaySummary {
   }
 
   $sessions = New-Object Collections.ArrayList
-  $matches = [regex]::Matches($dailyText, '(?m)^### Oturum \((?<time>\d{2}:\d{2})\)(?<suffix>[^\r\n]*)$')
-  for ($index = 0; $index -lt $matches.Count; $index++) {
-    $match = $matches[$index]
-    $end = if ($index + 1 -lt $matches.Count) { $matches[$index + 1].Index } else { $dailyText.Length }
+  $sessionMatches = [regex]::Matches($dailyText, '(?m)^### Oturum \((?<time>\d{2}:\d{2})(?<meta>[^)\r\n]*)\)(?<suffix>[^\r\n]*)\r?$')
+  for ($index = 0; $index -lt $sessionMatches.Count; $index++) {
+    $match = $sessionMatches[$index]
+    $end = if ($index + 1 -lt $sessionMatches.Count) { $sessionMatches[$index + 1].Index } else { $dailyText.Length }
     $block = $dailyText.Substring($match.Index, $end - $match.Index)
     $agent = 'unknown'
     if ($block -match '<!--\s*session:\S+\s+ts:\S+\s+source:(?<source>[a-z]+)\s*-->') {
       $agent = $Matches['source']
+    }
+    $meta = $match.Groups['meta'].Value.Trim()
+    if ($meta -match '^,\s*(?<writer>[^,]+)') {
+      $writer = $Matches['writer'].Trim()
+      if ($writer) { $agent = $writer }
     }
     $suffix = $match.Groups['suffix'].Value.Trim()
     if ($suffix -match '^[—-]\s*(?<writer>[^·]+)') {
