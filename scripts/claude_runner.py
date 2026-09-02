@@ -19,6 +19,7 @@ import time
 from typing import Callable
 
 from beyin_ortak import record_call
+import nezaket
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -230,6 +231,7 @@ def run_claude(
         if warning:
             _LAST_WARNINGS.append(warning)
 
+    resolved_state_dir = STATE_DIR if state_dir is None else state_dir
     started = time.monotonic()
     output, error = _dispatch(
         prompt,
@@ -242,9 +244,10 @@ def run_claude(
         permission_mode=permission_mode,
         allowed_tools=allowed_tools,
         backend=backend,
+        state_dir=resolved_state_dir,
     )
     record_call(
-        STATE_DIR if state_dir is None else state_dir,
+        resolved_state_dir,
         backend=backend,
         model_tier=model,
         model_slug=_resolved_slug(backend, model),
@@ -269,6 +272,7 @@ def _dispatch(
     permission_mode: str | None,
     allowed_tools: str | None,
     backend: str,
+    state_dir: Path,
 ) -> tuple[str | None, str | None]:
     """Run the selected backend with the shared isolation and recursion hardening."""
     if backend == BACKEND_ANTIGRAVITY:
@@ -301,6 +305,7 @@ def _dispatch(
             timeout=timeout,
             cwd=cwd,
             vault_root=vault_root,
+            state_dir=state_dir,
             temporary_prefix=temporary_prefix,
             warnings=_LAST_WARNINGS,
         )
@@ -358,6 +363,7 @@ def _dispatch(
                 env=environment,
                 timeout=timeout,
                 check=False,
+                creationflags=nezaket.dusuk_oncelik_bayraklari(),
             )
         except subprocess.TimeoutExpired:
             return None, "claude-timeout"

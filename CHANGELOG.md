@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Added
+
+<!-- yazan: claude · sonnet -->
+- **F2 "A7 nezaket" (politeness layer)**: `scripts/nezaket.py` defers
+  `compile.py`, `watcher.py`, and `ingest.py` runs while Master Mind is
+  actively using the machine, instead of letting a background model call
+  fight Unreal/Blender/OBS/a fullscreen game for GPU and CPU. Windows-only
+  probes (foreground process and its parent, GPU utilization via
+  `nvidia-smi`, fullscreen state, idle time) feed a pure decision function;
+  every probe fails open to "unknown" rather than raising, and the gate is a
+  complete no-op on non-Windows platforms and when `BEYIN_NEZAKET=off`. A
+  busy verdict queues the deferred call in `nezaket-kuyruk.json` and the
+  entrypoint exits `75` (`EX_TEMPFAIL`) without spawning anything; release is
+  **explicit only** — a queued call runs solely when someone approves it by
+  id (`nezaket.py serbest <id>` or the panel), never on a timer or a night
+  window. `nezaket-izin.json` (allow-listed processes, parent launchers, GPU
+  threshold, harmless-fullscreen list, idle-release window) has built-in
+  defaults and fails loud on a malformed file rather than silently falling
+  back. On the busy transition, `vram_bosalt()` asks Ollama to drop every
+  loaded model's VRAM residency, and the Ollama runner adds
+  `keep_alive: 0` to requests made while busy (`BEYIN_OLLAMA_KEEP_ALIVE`
+  passes through unchanged when not busy; omitted and byte-identical to
+  before when neither applies). Child model-runner processes (`claude`,
+  `codex`) start at Windows idle priority, and `compile.py` asks Windows to
+  schedule itself in background mode. The panel gains a Nezaket card:
+  current decision, the deferred queue with per-row checkboxes, oldest
+  waiting time, and a "Seçilenleri çalıştır" button — polled every 10 s, no
+  new persistent process. See `docs/nezaket.md`.
+
+<!-- yazan: claude · fable-5 -->
+- The Ollama runner accepts `BEYIN_OLLAMA_NUM_CTX` and forwards it as
+  `options.num_ctx`. Root cause of a three-times-failed local flush (session 44):
+  Ollama truncates input past its default context window silently, so a long
+  transcript lost the schema instruction and came back `summary-schema-invalid`;
+  with `num_ctx=16384` the same transcript passed on the fourth attempt. Unset
+  keeps the request byte-identical to before.
 
 <!-- yazan: claude · fable-5 -->
 - Text-mode compilation gains a link-richness instruction (BAGLANTI ZENGINLIGI):

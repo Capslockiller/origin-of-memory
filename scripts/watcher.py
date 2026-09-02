@@ -19,10 +19,12 @@ from typing import Any, NamedTuple, Sequence
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from beyin_ortak import write_health_skip
 import flush
 import ingest_claude
 import ingest_codex
 import ingest_common
+import nezaket
 from ingest_common import Session
 
 
@@ -307,6 +309,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--no-claude", action="store_true")
     parser.add_argument("--no-codex", action="store_true")
     parser.add_argument("--generic", action="append", type=_generic_root, default=[])
+    parser.add_argument(
+        "--nezaket-del",
+        action="store_true",
+        help="Bypass the A7 politeness gate for this run.",
+    )
     args = parser.parse_args(argv)
     if args.interval <= 0 or args.settle_seconds < 0:
         parser.error("interval must be positive and settle-seconds non-negative")
@@ -319,6 +326,15 @@ def _health_failure(state_dir: Path, error: str) -> None:
     ingest_common.write_health(
         state_dir,
         f"watcher:{error}",
+        component="ingest",
+        health_name=ingest_common.HEALTH_NAME,
+    )
+
+
+def _health_skip(state_dir: Path) -> None:
+    write_health_skip(
+        state_dir,
+        nezaket.NEZAKET_ERTELENDI_SLUG,
         component="ingest",
         health_name=ingest_common.HEALTH_NAME,
     )
@@ -344,14 +360,36 @@ def _clear_watcher_failure(state_dir: Path) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     if os.environ.get("BEYIN_INVOKED_BY"):
         return 0
+    nezaket.kendini_arka_plana_al()
     state_dir = ingest_common.STATE_DIR
     try:
         args = _parse_args(argv)
-        while True:
+        effective_argv = list(argv) if argv is not None else list(sys.argv[1:])
+
+        if args.once:
+            # A one-shot run behaves exactly like compile/ingest: gate once,
+            # enqueue and exit 75 if busy, otherwise do the one sweep.
+            if nezaket.kapi("watcher", effective_argv, state_dir).mesgul:
+                return nezaket.EX_TEMPFAIL
             sweep(args, state_dir=state_dir, vault_root=ingest_common.VAULT_ROOT)
             _clear_watcher_failure(state_dir)
-            if args.once:
-                return 0
+            return 0
+
+        # A long-running watcher must never exit because of a busy reading —
+        # it started while free and has to keep noticing later busy spells,
+        # not spawn model children under them. Re-evaluate at the top of
+        # every iteration instead of gating once before the loop.
+        onceki_mesgul = False
+        while True:
+            karar_sonucu = nezaket.mesgul_mu(state_dir, effective_argv)
+            if karar_sonucu.mesgul:
+                if not onceki_mesgul:
+                    _health_skip(state_dir)
+                onceki_mesgul = True
+            else:
+                onceki_mesgul = False
+                sweep(args, state_dir=state_dir, vault_root=ingest_common.VAULT_ROOT)
+                _clear_watcher_failure(state_dir)
             time.sleep(args.interval)
     except KeyboardInterrupt:
         return 0

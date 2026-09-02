@@ -416,6 +416,54 @@ function Get-OllamaInventory {
   }
 }
 
+function Invoke-NezaketDurum {
+  $scriptPath = Join-Path $script:PanelPaths.Scripts 'nezaket.py'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw 'nezaket.py was not found.' }
+  $raw = Invoke-PanelPythonJson @($scriptPath, '--state-dir', $script:PanelPaths.State, 'durum', '--json') 'The politeness gate produced no usable JSON.'
+  # ConvertFrom-Json collapses a single-element JSON array into a bare object,
+  # which a one-record queue would otherwise trip on the round trip back out
+  # through ConvertTo-Json below (same pattern Get-OllamaInventory uses).
+  $kayitlar = @()
+  if ($raw.kuyruk -and $raw.kuyruk.kayitlar) { $kayitlar = @($raw.kuyruk.kayitlar) }
+  return [ordered]@{
+    mesgul = [bool]$raw.mesgul
+    neden = [string]$raw.neden
+    bilinmiyor = [bool]$raw.bilinmiyor
+    okuma = $raw.okuma
+    kuyruk = [ordered]@{
+      adet = $(if ($raw.kuyruk) { [int]$raw.kuyruk.adet } else { 0 })
+      en_eski_yas_sn = $(if ($raw.kuyruk) { $raw.kuyruk.en_eski_yas_sn } else { $null })
+      kayitlar = $kayitlar
+    }
+    izin_hatasi = $raw.izin_hatasi
+  }
+}
+
+function Get-NezaketOperationCommand([object]$Kayit) {
+  $tur = [string]$Kayit.tur
+  $scriptName = switch ($tur) {
+    'compile' { 'compile.py' }
+    'watcher' { 'watcher.py' }
+    'ingest' { 'ingest.py' }
+    default { throw "Cannot replay a deferred '$tur' operation from the panel." }
+  }
+  $scriptPath = Join-Path $script:PanelPaths.Scripts $scriptName
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+    throw "Operation script was not found: $scriptPath"
+  }
+  $argv = @()
+  if ($Kayit.argv) { $argv = @($Kayit.argv | ForEach-Object { [string]$_ }) }
+  # The release itself IS the explicit approval; --nezaket-del stops this one
+  # replay from being re-queued if the machine is somehow still busy.
+  # --nezaket-del MUST come BEFORE $argv, not after: for ingest, $argv starts
+  # with the subcommand (e.g. "claude"), and --nezaket-del is only defined on
+  # ingest.py's top-level parser, not on its subparsers — put after the
+  # subcommand token it is an "unrecognized arguments" argparse error (exit
+  # 2), which the caller then reads as a silent invalid-arguments no-op.
+  $arguments = @($scriptPath) + @('--nezaket-del') + $argv
+  return New-PythonCommand $arguments
+}
+
 function Get-LocalModelSummary {
   $result = [ordered]@{
     python_available = [bool]$script:Python
@@ -708,8 +756,10 @@ function Test-ApiEnvelope([object]$Request, [bool]$RequireCookie) {
 function Invoke-HttpRequest([object]$Request) {
   $allowed = @(
     '/', '/panel.html', '/api/session', '/api/health', '/api/today', '/api/local-models', '/api/events',
+    '/api/nezaket',
     '/api/action/doctor', '/api/action/compile', '/api/action/index', '/api/action/watcher',
-    '/api/action/pull', '/api/action/pull-cancel', '/api/action/backend', '/api/action/try', '/api/quit'
+    '/api/action/pull', '/api/action/pull-cancel', '/api/action/backend', '/api/action/try',
+    '/api/action/nezaket-serbest', '/api/quit'
   )
   if ($allowed -cnotcontains $Request.Target) {
     Write-JsonResponse $Request.Stream 404 'Not Found' ([ordered]@{ error = 'not_found' })
@@ -791,6 +841,23 @@ function Invoke-HttpRequest([object]$Request) {
       return
     }
     Write-JsonResponse $Request.Stream 200 'OK' (Get-LocalModelSummary)
+    return
+  }
+
+  if ($Request.Target -eq '/api/nezaket') {
+    if ($Request.Method -cne 'GET') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'The politeness gate requires Python.' })
+      return
+    }
+    try {
+      Write-JsonResponse $Request.Stream 200 'OK' (Invoke-NezaketDurum)
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'nezaket_unavailable'; message = $_.Exception.Message })
+    }
     return
   }
 
@@ -985,6 +1052,62 @@ function Invoke-HttpRequest([object]$Request) {
     } catch {
       Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'try_unavailable'; message = $_.Exception.Message })
     }
+    return
+  }
+
+  if ($Request.Target -eq '/api/action/nezaket-serbest') {
+    if ($Request.Method -cne 'POST') {
+      Write-JsonResponse $Request.Stream 405 'Method Not Allowed' ([ordered]@{ error = 'method_not_allowed' })
+      return
+    }
+    # Checked BEFORE anything is popped from the queue: this route must never
+    # drop work. If another operation is already running there is nothing
+    # safe to start right now, so refuse up front and leave every selected id
+    # exactly where it was in the queue.
+    if ($script:ActiveOperation) {
+      Write-JsonResponse $Request.Stream 409 'Conflict' ([ordered]@{ error = 'operation_in_progress'; operation = $script:ActiveOperation.Kind })
+      return
+    }
+    if (-not $script:Python) {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'python_missing'; message = 'Releasing queued operations requires Python.' })
+      return
+    }
+    try { $body = $Request.Body | ConvertFrom-Json } catch { $body = $null }
+    $ids = @()
+    if ($body -and $body.ids) { $ids = @($body.ids | ForEach-Object { [string]$_ } | Where-Object { $_ }) }
+    if ($ids.Count -eq 0) {
+      Write-JsonResponse $Request.Stream 400 'Bad Request' ([ordered]@{ error = 'missing_ids' })
+      return
+    }
+    # Only the first selected id ever leaves the queue — the rest stay
+    # queued, untouched. Popping every selected id up front (the previous
+    # behaviour) meant that once only the first could actually be started,
+    # every id after it was already gone from the queue with nothing ever
+    # started for it: work silently dropped. One id popped, one operation
+    # started (or the pop simply doesn't happen), every single time.
+    $firstId = [string]$ids[0]
+    $nezaketScript = Join-Path $script:PanelPaths.Scripts 'nezaket.py'
+    try {
+      $released = @(Invoke-PanelPythonJson (@($nezaketScript, '--state-dir', $script:PanelPaths.State, 'serbest', $firstId)) 'Releasing the queued operation produced no usable JSON.')
+    } catch {
+      Write-JsonResponse $Request.Stream 503 'Service Unavailable' ([ordered]@{ error = 'nezaket_release_failed'; message = $_.Exception.Message })
+      return
+    }
+    $started = $null
+    if ($released.Count -gt 0 -and $released[0]) {
+      try {
+        $command = Get-NezaketOperationCommand $released[0]
+        if (Start-PanelCommand ([string]$released[0].tur) $command ([ordered]@{ nezaket_id = [string]$released[0].id })) {
+          $started = $released[0]
+        }
+      } catch {
+        Add-PanelEvent 'operation-failed' ([ordered]@{ operation = [string]$released[0].tur; exit_code = 1; message = $_.Exception.Message })
+      }
+    }
+    Write-JsonResponse $Request.Stream 202 'Accepted' ([ordered]@{
+      started = $started
+      remaining_selected = [Math]::Max(0, $ids.Count - 1)
+    })
     return
   }
 

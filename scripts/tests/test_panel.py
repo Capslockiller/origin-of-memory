@@ -426,6 +426,61 @@ class PanelServerTests(unittest.TestCase):
         self.assertNotIn("-answers", source.lower())
 
 
+class NezaketSerbestContractTests(unittest.TestCase):
+    """Static, source-level checks for the ``/api/action/nezaket-serbest``
+    "never drop work" contract. Unlike PanelServerTests above these need no
+    live PowerShell listener — they inspect beyin.ps1's source text directly
+    for the required ordering and response shape, so they run (and can
+    catch a regression) even off Windows."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        source = (REPO_ROOT / "beyin.ps1").read_text(encoding="utf-8")
+        match = re.search(
+            r"if \(\$Request\.Target -eq '/api/action/nezaket-serbest'\) \{\r?\n"
+            r"(?:.*?\r?\n)*?  \}\r?\n",
+            source,
+        )
+        assert match, "nezaket-serbest route handler not found in beyin.ps1"
+        cls.handler = match.group(0)
+
+    def test_active_operation_is_checked_before_any_queue_pop(self) -> None:
+        # This route must never drop work: if an operation is already
+        # running there is nothing safe to start, so the 409 must come
+        # before nezaket.py serbest is ever invoked — popping first (the
+        # previous behaviour) could pop ids from the queue with no way left
+        # to start anything for them.
+        conflict_at = self.handler.index("operation_in_progress")
+        pop_at = self.handler.index("'serbest',")
+        self.assertLess(conflict_at, pop_at)
+
+    def test_only_the_first_selected_id_is_released(self) -> None:
+        self.assertIn("$firstId = [string]$ids[0]", self.handler)
+        self.assertIn("'serbest', $firstId", self.handler)
+        # The previous, reverted contract released every selected id in one
+        # call by appending the whole $ids array to the argv.
+        self.assertNotIn("+ $ids)", self.handler)
+
+    def test_response_shape_is_started_and_remaining_selected(self) -> None:
+        self.assertIn("started = $started", self.handler)
+        self.assertIn("remaining_selected = [Math]::Max(0, $ids.Count - 1)", self.handler)
+        # The previous, reverted response shape.
+        self.assertNotIn("remaining_to_start", self.handler)
+        self.assertNotIn("released = $released", self.handler)
+
+    def test_panel_html_shows_409_and_remaining_selected_as_a_visible_notice(
+        self,
+    ) -> None:
+        page = (REPO_ROOT / "gui" / "panel.html").read_text(encoding="utf-8")
+        self.assertIn('id="nezaket-notice"', page)
+        # The 409 must be surfaced, not swallowed into the scrolling output
+        # log alone.
+        self.assertIn("response.status === 409", page)
+        # The still-queued remainder must be called out by name.
+        self.assertIn("result.remaining_selected", page)
+        self.assertIn("kuyrukta bekliyor", page)
+
+
 @unittest.skipUnless(POWERSHELL, "Windows PowerShell is required")
 class PanelPullPreflightTests(unittest.TestCase):
     def test_pull_with_insufficient_disk_is_refused(self) -> None:

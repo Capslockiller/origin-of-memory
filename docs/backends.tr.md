@@ -102,6 +102,11 @@ makine taşır.
 - `BEYIN_OLLAMA_MODEL_FAST` — kurulu bir model kısaltması. Zorunlu.
 - `BEYIN_OLLAMA_MODEL_SMART` — isteğe bağlı; boşsa uyarıyla hızlı modele düşer.
 - `BEYIN_OLLAMA_URL` — varsayılanı `http://localhost:11434`.
+- `BEYIN_OLLAMA_NUM_CTX` — isteğe bağlı bağlam penceresi (token), `options.num_ctx`
+  olarak gönderilir. Ollama varsayılan pencereyi aşan girdiyi SESSİZCE kırpar
+  (<24 GiB kartlarda ~4k); uzun transkript `summary-schema-invalid` flush'a döner.
+  Flush boyutundaki girdiler için ölçülmüş güvenli taban `16384`. Boşsa sunucu
+  varsayılanı geçerli, istek birebir aynı.
 
 Derleme metin-araç kipidir ve Antigravity'de olduğu gibi reddedilir: `claude`
 varsa ona düşer, yoksa `ollama-backend-unsupported:compile` hatasıyla yüksek

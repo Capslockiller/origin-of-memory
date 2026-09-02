@@ -92,6 +92,21 @@ The Local models actions use the same confirmation and SSE event stream:
 Only one operation runs at a time. The rest of the page remains readable, and
 the panel refreshes both tabs when the operation ends.
 
+<!-- yazan: claude · sonnet -->
+Below the tabs and above the operation buttons, the **Nezaket** card shows the
+A7 politeness gate's current decision (Meşgul/Serbest and its reason) and the
+deferred-operation queue, polled from the page every 10 s
+(`GET /api/nezaket`) with no new persistent process. Checking rows and
+pressing "Seçilenleri çalıştır" (`POST /api/action/nezaket-serbest`) never
+drops work: if another operation is already running it responds
+`409 operation_in_progress` before touching the queue at all, and otherwise
+it releases exactly the **first** checked id and starts it, leaving every
+other checked id queued untouched. The card shows a note naming how many
+selected records are still queued when the response's `remaining_selected`
+is greater than zero — check the button again once the running operation
+finishes to release the next one. See [nezaket.md](nezaket.md) for the gate
+itself.
+
 ## Security boundary
 
 The server is a raw `TcpListener` bound to `127.0.0.1:0`. A 256-bit token is
