@@ -214,6 +214,54 @@ class PanelServerTests(unittest.TestCase):
         self.assertEqual(status, 200, body.decode("utf-8", "replace"))
         self.assertIn("sessions", json.loads(body))
 
+    def test_today_session_heading_pattern_accepts_crlf(self) -> None:
+        source = (REPO_ROOT / "beyin.ps1").read_text(encoding="utf-8")
+        function = re.search(
+            (
+                r"function Get-TodaySummary \{(?P<body>.*?)\r?\n\}"
+                r"\r?\n\r?\nfunction Receive-HttpRequest"
+            ),
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(function)
+        self.assertNotRegex(function.group("body"), r"(?i)\$matches\s*=")
+        match = re.search(
+            r"\$sessionMatches = \[regex\]::Matches\(\$dailyText, '([^']+)'\)",
+            source,
+        )
+        self.assertIsNotNone(match)
+        pattern = match.group(1).replace("'", "''")
+        completed = subprocess.run(
+            [
+                POWERSHELL,
+                "-NoProfile",
+                "-Command",
+                (
+                    "$text = [Console]::In.ReadToEnd(); "
+                    f"[regex]::Matches($text, '{pattern}').Count"
+                ),
+            ],
+            input=(
+                b"### Oturum (09:07) - codex\r\n"
+                b"\r\n<!-- session:test ts:2026-09-02T09:07:00+03:00 "
+                b"source:codex -->\r\n"
+                b"### Oturum (21:16, Cowork, manual layer)\r\n"
+            ),
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stderr.decode("utf-8", "replace"),
+        )
+        self.assertEqual(completed.stdout.strip(), b"2")
+        self.assertIn(
+            "$meta -match '^,\\s*(?<writer>[^,]+)'",
+            function.group("body"),
+        )
+
     def test_health_consumes_the_documented_json_contract(self) -> None:
         status, _, body = self._request_raw(
             "/api/health",

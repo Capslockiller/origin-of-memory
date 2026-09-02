@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+<!-- yazan: codex · gpt-5.6-sol -->
+- **The Today panel now reads every Windows daily-session heading.** CRLF line
+  endings no longer hide all sessions, PowerShell's automatic Matches variable
+  can no longer overwrite the session match collection, and headings carrying
+  inline provenance such as (21:16, Cowork, manual layer) are counted with that
+  writer label. A PowerShell-backed regression test locks the CRLF and
+  annotated-heading contract.
+
 ## [0.5.0] - 2026-09-02
 
 ### Added
