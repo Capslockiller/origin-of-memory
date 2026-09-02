@@ -303,6 +303,46 @@ class SharedHelperTests(unittest.TestCase):
         self.assertIs(ingest_common.write_health, beyin_ortak.write_health)
 
 
+class AtomicWriteConcurrencyTests(unittest.TestCase):
+    def test_parallel_writers_to_one_path_never_collide(self) -> None:
+        # A pid-only temp name let kule's lane THREADS (same pid) share one
+        # .tmp: one writer truncated the other mid-write, and on Windows the
+        # loser's open handle made os.replace throw WinError 32 (CI,
+        # 2026-09-02, LaneCapTests). Hammer the helper from many threads:
+        # no exception may escape and the survivor must be valid JSON.
+        import threading
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "durum.json"
+            errors: list[BaseException] = []
+
+            def yaz(n: int) -> None:
+                try:
+                    for i in range(25):
+                        beyin_ortak._atomic_write_json(
+                            target, {"yazar": n, "tur": i, "dolgu": "x" * 256}
+                        )
+                except BaseException as exc:  # noqa: BLE001 — toplayıp asserte taşıyoruz
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=yaz, args=(n,)) for n in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errors, [])
+            data = json.loads(target.read_text(encoding="utf-8"))
+            self.assertIn("yazar", data)
+            leftovers = list(Path(tmp).glob(".durum.json.*.tmp"))
+            self.assertEqual(leftovers, [])
+
+    def test_unique_tmp_names_differ_across_calls(self) -> None:
+        p = Path("durum.json")
+        a = beyin_ortak._unique_tmp(p)
+        b = beyin_ortak._unique_tmp(p)
+        self.assertNotEqual(a, b)
+
+
 class TimeoutTests(unittest.TestCase):
     def test_defaults_depend_on_the_resolved_backend(self) -> None:
         for backend, flush_ingest in (
