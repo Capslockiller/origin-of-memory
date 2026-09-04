@@ -12,3 +12,8 @@ installer/output/
 
 # Compiled launcher - a binary does not belong in the repo.
 LocalBrain.exe
+
+tools/benchmark/.data/
+tools/benchmark/.versions/
+tools/benchmark/.out/
+tools/benchmark/.out-*/
