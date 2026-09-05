@@ -118,6 +118,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   promoted into invisibility. It is now held with the schema-gate reason
   `nested-path`, and the promotion path refuses it a second time.
 
+### Added
+
+<!-- yazan: claude · fable-5.1 (Faz 0 onarım, şerit D/E) -->
+- `scripts/giris_kapisi.py`: one privacy gate (unicode → secret → PII) shared by ingest, kaydet and
+  pasaport on both input and output; MCP search results and context-pack output carry the
+  data-only header. Previously only live flush applied all three guards.
+- `scripts/bakim.py`: bounded-state maintenance (retrieve-session ledgers >7 d, orphan tmp files,
+  zero-byte lock carriers, `enjeksiyon.jsonl` rotation, stale per-session hook dirs); dry-run by
+  default, `--uygula` to act.
+- Hooks keep per-session counters under `.state/oturum-<session>/` (concurrent sessions no longer
+  clobber each other), resolve Python once, and record a failure line to `hook-hatalari.jsonl`
+  instead of silently succeeding. Compile-trigger markers expire (`BEYIN_COMPILE_TRIGGER_TTL_MIN`).
+- Not done in this round: `durum.py` warning ageing/`--temizle-uyarilar` (kusur kütüğü #18).
+
 ## [0.5.0] - 2026-09-02
 
 ### Added
