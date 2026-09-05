@@ -1,7 +1,13 @@
 param([string]$Reason = 'sessionend')
+# Oturum ozetleme yerel modelde kosar (Master karari 2026-08-30); derleyici
+# backend'i flush.py icindeki pin ile 'claude' kalir (A4 muhru).
+$env:BEYIN_MODEL_BACKEND = 'ollama'
+$env:BEYIN_OLLAMA_MODEL_FAST = 'qwen3:8b'
+$env:BEYIN_OLLAMA_MODEL_SMART = 'qwen3:30b-a3b-instruct-2507-q4_K_M'
+$env:BEYIN_OLLAMA_NUM_CTX = '16384'   # Ollama sessiz 4k kirpmasi (44. oturum teshisi)
 # v2 flush launcher: store hook stdin, detach flush.py, return under 1s.
 # Wired at USER level so every session on this machine flushes into the vault.
-# yazan: codex · model: gpt-5.6-sol
+# yazan: codex - model: gpt-5.6-sol
 $ErrorActionPreference = 'SilentlyContinue'
 
 function Test-BeyinPython {
@@ -68,6 +74,19 @@ if (-not $python) {
 $inputPath = Join-Path $stateDir ("hookin-{0}-{1}.json" -f $PID, (Get-Random))
 # UTF-8 without BOM: flush.py parses this as strict JSON.
 [System.IO.File]::WriteAllText($inputPath, $stdin, [System.Text.UTF8Encoding]::new($false))
+
+# PreCompact (48. oturum, 2026-09-02, A8-lite): compaction baglami sildigi icin oturum-ici getirme
+# dedup defteri sifirlanir; aksi halde bir kez gosterilen not o oturumda bir daha gelmez.
+# Defter yeniden uretilebilir onbellektir (retrieve.py --session), veri degildir.
+if ($Reason -eq 'precompact') {
+  try {
+    if ($stdin -match '"session_id"\s*:\s*"([A-Za-z0-9_.-]{1,128})"') {
+      $ledger = Join-Path $stateDir ("retrieve-session-" + $Matches[1] + ".json")
+      if (Test-Path -LiteralPath $ledger) { Remove-Item -LiteralPath $ledger -Force -ErrorAction SilentlyContinue }
+    }
+  } catch {}
+}
+
 
 $py = $python.Path
 $pyPrefix = @($python.Prefix)
