@@ -16,6 +16,7 @@ from pathlib import Path
 import statistics
 from typing import Any, Sequence
 
+import beyin_ortak
 from beyin_ortak import CALLS_LEDGER_NAME
 
 
@@ -24,6 +25,8 @@ STATE_DIR = SCRIPT_DIR / ".state"
 SCHEMA_VERSION = 1
 COMPONENTS = ("flush", "compile", "ingest")
 CALLS_WINDOW_DAYS = 7
+WARNING_STALE_SECONDS = 24 * 60 * 60
+HEALTH_NAME = "health.json"
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -52,6 +55,111 @@ def _problem(health: dict[str, Any], component: str) -> str:
         if isinstance(reason, str) and reason:
             return reason
     return "unknown"
+
+
+def _warning_message(entry: Any) -> str:
+    if isinstance(entry, dict):
+        for key in ("message", "warning", "text"):
+            value = entry.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return json.dumps(entry, ensure_ascii=False, sort_keys=True)
+    return str(entry)
+
+
+def _warning_entry_ts(entry: Any) -> float | None:
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get("ts")
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _resolve_warning_ts(entry: Any, top_ts: float | None) -> float | None:
+    own = _warning_entry_ts(entry)
+    return own if own is not None else top_ts
+
+
+def summarize_warnings(
+    health: dict[str, Any], now: dt.datetime | None = None
+) -> list[dict[str, Any]]:
+    """Age each health warning from its own ``ts`` if present, else the top-level one."""
+    moment = (now or dt.datetime.now()).astimezone()
+    now_ts = moment.timestamp()
+    top_ts_raw = health.get("ts")
+    top_ts = (
+        top_ts_raw
+        if isinstance(top_ts_raw, (int, float)) and not isinstance(top_ts_raw, bool)
+        else None
+    )
+    raw_warnings = health.get("warnings", [])
+    if not isinstance(raw_warnings, list):
+        raw_warnings = []
+
+    result = []
+    for entry in raw_warnings:
+        effective_ts = _resolve_warning_ts(entry, top_ts)
+        age_seconds = (
+            max(0, int(round(now_ts - effective_ts))) if effective_ts is not None else None
+        )
+        eski = age_seconds is not None and age_seconds > WARNING_STALE_SECONDS
+        result.append(
+            {
+                "message": _warning_message(entry),
+                "ts": int(effective_ts) if effective_ts is not None else None,
+                "age_seconds": age_seconds,
+                "eski": eski,
+            }
+        )
+    return result
+
+
+def temizle_uyarilar(
+    state_dir: Path,
+    now: dt.datetime | None = None,
+    health_name: str = HEALTH_NAME,
+) -> dict[str, Any]:
+    """Rewrite ``health.json`` keeping only warnings younger than 24 h.
+
+    A no-op (file untouched) when the file is absent, unreadable, has no
+    warnings, or has nothing stale to drop — the atomic replace only happens
+    when the warning list actually shrinks.
+    """
+    path = Path(state_dir) / health_name
+    if not path.exists():
+        return {"kept": 0, "dropped": 0, "changed": False}
+    payload = _read_object(path)
+    if not payload:
+        return {"kept": 0, "dropped": 0, "changed": False}
+    raw_warnings = payload.get("warnings", [])
+    if not isinstance(raw_warnings, list) or not raw_warnings:
+        return {"kept": 0, "dropped": 0, "changed": False}
+
+    aged = summarize_warnings(payload, now=now)
+    kept_raw = [
+        entry for entry, info in zip(raw_warnings, aged) if not info["eski"]
+    ]
+    dropped = len(raw_warnings) - len(kept_raw)
+    if dropped == 0:
+        return {"kept": len(kept_raw), "dropped": 0, "changed": False}
+
+    payload["warnings"] = kept_raw
+    beyin_ortak._atomic_write_json(path, payload)
+    return {"kept": len(kept_raw), "dropped": dropped, "changed": True}
+
+
+def _format_age(age_seconds: int | None) -> str:
+    if age_seconds is None:
+        return "unknown"
+    if age_seconds < 60:
+        return f"{age_seconds}s"
+    minutes = age_seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}h"
+    days = hours // 24
+    return f"{days}d"
 
 
 def _percentile_ms(durations: Sequence[float], fraction: float) -> int:
@@ -181,6 +289,7 @@ def summarize_calls(
 def build_summary(
     state_dir: Path, now: dt.datetime | None = None
 ) -> dict[str, Any]:
+    moment = (now or dt.datetime.now()).astimezone()
     health = _read_object(state_dir / "health.json")
     ingest_health = _read_object(state_dir / "ingest-health.json")
     compile_state = _read_object(state_dir / "compile-state.json")
@@ -230,7 +339,8 @@ def build_summary(
     return {
         "schema_version": SCHEMA_VERSION,
         "rows": rows,
-        "calls": summarize_calls(state_dir, now=now),
+        "warnings": summarize_warnings(health, now=moment),
+        "calls": summarize_calls(state_dir, now=moment),
     }
 
 
@@ -316,6 +426,26 @@ def _print_calls(calls: dict[str, Any]) -> None:
         )
 
 
+def _print_warnings(warnings: Sequence[dict[str, Any]]) -> None:
+    print()
+    if not warnings:
+        print("warnings: none recorded")
+        return
+    print(f"warnings: {len(warnings)}")
+    print()
+    _print_grid(
+        ("warning", "age", "eski"),
+        [
+            (
+                str(entry["message"]),
+                _format_age(entry["age_seconds"]),
+                "eski" if entry["eski"] else "",
+            )
+            for entry in warnings
+        ],
+    )
+
+
 def _print_table(summary: dict[str, Any]) -> None:
     _print_grid(
         ("component", "last status", "last run", "last error/skip", "quarantine"),
@@ -330,6 +460,7 @@ def _print_table(summary: dict[str, Any]) -> None:
             for row in summary["rows"]
         ],
     )
+    _print_warnings(summary.get("warnings", []))
     _print_calls(summary["calls"])
 
 
@@ -337,6 +468,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--state-dir", type=Path, default=STATE_DIR)
+    parser.add_argument(
+        "--temizle-uyarilar",
+        action="store_true",
+        help="health.json'daki 24 saatten eski uyarıları siler ve çıkar",
+    )
     return parser.parse_args(argv)
 
 
@@ -345,6 +481,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     try:
         args = _parse_args(argv)
+        if args.temizle_uyarilar:
+            result = temizle_uyarilar(args.state_dir)
+            if result["changed"]:
+                print(
+                    f"temizlendi: {result['dropped']} eski uyarı silindi, "
+                    f"{result['kept']} kaldı."
+                )
+            else:
+                print("temizlenecek eski uyarı yok.")
+            return 0
         summary = build_summary(args.state_dir)
         if args.json:
             print(json.dumps(summary, ensure_ascii=False, indent=2))
