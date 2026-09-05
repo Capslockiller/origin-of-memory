@@ -578,8 +578,11 @@ first 5 characters when longer than 5. Both indexing and querying call the same
 function, so the two can never drift. This is the dual-form scheme — raw form plus
 fixed-length truncation — chosen over a Turkish stemmer, which over-stems badly.
 
-**`query`** ranks with `bm25(notes, 8.0, 6.0, 3.0, 1.0)`: title 8, aliases 6, tags
-3, body 1. `--min-score` applies a floor on the positive `-bm25` relevance.
+**`query`** ranks with `bm25(notes, 0.0, 8.0, 6.0, 3.0, 1.0)`: bm25() weights
+are positional over every column including the UNINDEXED `name`, so the
+leading `0.0` is required to keep title=8, aliases=6, tags=3, body=1 landing
+on the right columns — a four-weight call silently shifts them all one column
+left. `--min-score` applies a floor on the positive `-bm25` relevance.
 Results are capped at `PER_NOTE_CAP = 1_500` characters per note and
 `TOTAL_BODY_CAP = 4_500` overall. With `--session`, hits already served in that
 session are recorded in `.state/retrieve-session-<id>.json` and not repeated;

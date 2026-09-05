@@ -40,27 +40,25 @@ TOTAL_BODY_CAP = 4_500
 LEDGER_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 # Schema 1 = name/title/aliases/tags/body.  Schema 2 adds documents.source_date,
-# the note's newest source timestamp, which the recency signals below rank on.
+# the note's newest source timestamp.  Query-time-only changes (e.g. bm25()
+# weights) do not need a bump: they read the same columns.
 SCHEMA_VERSION = 2
 
 MODE_BM25 = "bm25"
-MODE_RRF = "rrf"
-RETRIEVAL_MODES = (MODE_BM25, MODE_RRF)
-# The fused path stays opt-in until it is measured against the gold set.
-DEFAULT_RETRIEVAL_MODE = MODE_BM25
-RETRIEVAL_MODE_ENV = "BEYIN_RETRIEVAL"
+# The retired fused-ranking mode is gone, but the constant stays as a
+# single-element tuple: callers written against the old two-mode world
+# iterate this to exercise "every ranking mode" and must keep working.
+RETRIEVAL_MODES = (MODE_BM25,)
 
-RRF_K_ENV = "BEYIN_RRF_K"
-DEFAULT_RRF_K = 60
-RRF_RECENCY_CHANNEL_WEIGHT_ENV = "BEYIN_RRF_RECENCY_CHANNEL_WEIGHT"
-DEFAULT_RRF_RECENCY_CHANNEL_WEIGHT = 1.0
-RRF_LEGACY_MULTIPLIER_ENV = "BEYIN_RRF_LEGACY_MULTIPLIER"
-
-RECENCY_HALF_LIFE_ENV = "BEYIN_RECENCY_HALFLIFE_DAYS"
-DEFAULT_RECENCY_HALF_LIFE_DAYS = 180.0
-# Legacy comparison mode bounds decay so an old-but-perfect match stays reachable.
-RECENCY_WEIGHT_FLOOR = 0.25
-SECONDS_PER_DAY = 86_400.0
+# FTS5's bm25(tbl, w1, w2, ...) weights are POSITIONAL over every column of the
+# table, UNINDEXED ones included, not just the indexed ones. ``notes`` is
+# ``(name UNINDEXED, title, aliases, tags, body)``, so the first weight is
+# ``name``'s (unindexed, but still occupies a position) and must be supplied
+# even though it can never contribute a match. Without it the weights below
+# silently shift left: title gets the tags weight, aliases gets body's, and
+# the last weight is dropped. Intended weights: title=8, aliases=6, tags=3,
+# body=1.
+BM25_WEIGHTS = (0.0, 8.0, 6.0, 3.0, 1.0)
 
 # Bookkeeping written by flush.py (or, for "kaydet", by kaydet.py) into each
 # daily session block and carried into a concept note's Kaynaklar section by
@@ -501,327 +499,6 @@ def _open_readonly(db_path: Path) -> sqlite3.Connection:
     return connection
 
 
-def resolve_mode(
-    mode: str | None = None,
-    environment: dict[str, str] | None = None,
-) -> str:
-    """Explicit argument wins, then ``BEYIN_RETRIEVAL``, then the safe default."""
-    if mode in RETRIEVAL_MODES:
-        return mode
-    env = os.environ if environment is None else environment
-    candidate = (env.get(RETRIEVAL_MODE_ENV) or "").strip().lower()
-    return candidate if candidate in RETRIEVAL_MODES else DEFAULT_RETRIEVAL_MODE
-
-
-def resolve_rrf_k(environment: dict[str, str] | None = None) -> int:
-    """``BEYIN_RRF_K``; anything unparsable or below 1 falls back to 60."""
-    env = os.environ if environment is None else environment
-    try:
-        value = int((env.get(RRF_K_ENV) or "").strip())
-    except ValueError:
-        return DEFAULT_RRF_K
-    return value if value >= 1 else DEFAULT_RRF_K
-
-
-def resolve_rrf_recency_channel_weight(
-    environment: dict[str, str] | None = None,
-) -> float:
-    """Recency-channel weight; invalid or negative values fall back to 1.0."""
-    env = os.environ if environment is None else environment
-    try:
-        value = float((env.get(RRF_RECENCY_CHANNEL_WEIGHT_ENV) or "").strip())
-    except ValueError:
-        return DEFAULT_RRF_RECENCY_CHANNEL_WEIGHT
-    return (
-        value
-        if math.isfinite(value) and value >= 0.0
-        else DEFAULT_RRF_RECENCY_CHANNEL_WEIGHT
-    )
-
-
-def resolve_rrf_legacy_multiplier(
-    environment: dict[str, str] | None = None,
-) -> bool:
-    """Enable the deprecated comparison-only multiplier only for exact ``1``."""
-    env = os.environ if environment is None else environment
-    return (env.get(RRF_LEGACY_MULTIPLIER_ENV) or "").strip() == "1"
-
-
-def resolve_half_life_days(environment: dict[str, str] | None = None) -> float:
-    """Legacy multiplier half-life; ``0`` disables decay, junk falls back."""
-    env = os.environ if environment is None else environment
-    raw = (env.get(RECENCY_HALF_LIFE_ENV) or "").strip()
-    if not raw:
-        return DEFAULT_RECENCY_HALF_LIFE_DAYS
-    try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_RECENCY_HALF_LIFE_DAYS
-    if value < 0 or value != value:  # negatives and NaN are not a half-life
-        return DEFAULT_RECENCY_HALF_LIFE_DAYS
-    return value
-
-
-def competition_ranks(
-    ordered_names: Sequence[str],
-    key: Any,
-) -> dict[str, int]:
-    """1-based ranks over an already-sorted list, ties sharing the best rank.
-
-    Equal evidence must earn equal rank: BM25 returns 0.0 for a term every note
-    contains, and without this the alphabetical tie-break would silently hand
-    the first note a better rank in two lists at once.
-    """
-    ranks: dict[str, int] = {}
-    previous_key: Any = _UNSET
-    previous_rank = 0
-    for position, name in enumerate(ordered_names, 1):
-        current = key(name)
-        if previous_key is _UNSET or current != previous_key:
-            previous_rank = position
-            previous_key = current
-        ranks[name] = previous_rank
-    return ranks
-
-
-def rrf_fuse(
-    ranked_lists: Sequence[Sequence[str] | dict[str, int]],
-    k: int = DEFAULT_RRF_K,
-    channel_weights: Sequence[float] | None = None,
-) -> dict[str, float]:
-    """Reciprocal Rank Fusion: ``score = Σ w_i/(k + rank_i)`` over the lists.
-
-    Each list is either a sequence of names, where rank is position, or a
-    ``{name: rank}`` mapping, which is how tied notes share one rank.  A note
-    absent from a list simply contributes nothing from it, which is what makes
-    sparse signals (tag overlap) safe to fuse with dense ones (BM25).  Channel
-    weights default to 1.0; a zero-weight channel contributes nothing.
-    """
-    if channel_weights is None:
-        channel_weights = (1.0,) * len(ranked_lists)
-    elif len(channel_weights) != len(ranked_lists):
-        raise ValueError("channel_weights must match ranked_lists")
-
-    scores: dict[str, float] = {}
-    for ranked, channel_weight in zip(ranked_lists, channel_weights):
-        if channel_weight == 0.0:
-            continue
-        pairs = (
-            ranked.items()
-            if isinstance(ranked, dict)
-            else ((name, rank) for rank, name in enumerate(ranked, 1))
-        )
-        for name, rank in pairs:
-            denominator = k + rank
-            if denominator <= 0:
-                continue
-            scores[name] = scores.get(name, 0.0) + channel_weight / denominator
-    return scores
-
-
-def recency_weight(
-    age_days: float,
-    half_life_days: float = DEFAULT_RECENCY_HALF_LIFE_DAYS,
-    floor: float = RECENCY_WEIGHT_FLOOR,
-) -> float:
-    """Bounded exponential decay: ``0.5 ** (age/half_life)``, never below floor."""
-    if half_life_days <= 0:
-        return 1.0
-    try:
-        weight = 0.5 ** (age_days / half_life_days)
-    except OverflowError:
-        weight = 0.0
-    return min(1.0, max(floor, weight))
-
-
-def tag_overlap(query_tokens: set[str], title: str, aliases: str, tags: str) -> int:
-    """Query tokens that also appear in a note's title, aliases or tags.
-
-    Both sides go through :func:`expanded_tokens`, so Turkish dotted/dotless I
-    folds exactly as it does in the index and no separate rule can drift.
-    """
-    if not query_tokens:
-        return 0
-    field_tokens = set(expanded_tokens(f"{title} {aliases} {tags}"))
-    return len(query_tokens & field_tokens)
-
-
-def indexed_tag_overlap(query_tokens: set[str], *tokenized_fields: str) -> int:
-    """:func:`tag_overlap` over fields the index already tokenized.
-
-    ``token_text`` stored these as a space-joined stream at build time, so this
-    is the same set intersection without re-running the tokenizer per row.
-    """
-    if not query_tokens:
-        return 0
-    field_tokens: set[str] = set()
-    for field in tokenized_fields:
-        if field:
-            field_tokens.update(field.split())
-    return len(query_tokens & field_tokens)
-
-
-# SQLite's host-parameter ceiling is far higher, but chunking keeps a very
-# large match set from ever reaching it.
-_NAME_CHUNK = 500
-
-
-def _bm25_rows(
-    connection: sqlite3.Connection,
-    expression: str,
-) -> list[sqlite3.Row]:
-    """Every FTS match with the metadata the fused lists need — never bodies.
-
-    The title/aliases/tags columns come from ``notes``, not ``documents``: the
-    FTS side already holds them as the exact token stream :func:`token_text`
-    produced at build time, so the tag-overlap signal costs a ``split()``
-    instead of re-running the tokenizer over every matched row.
-    """
-    for date_column in ("documents.source_date", "'' AS source_date"):
-        try:
-            return list(
-                connection.execute(
-                    f"""
-                    SELECT documents.name, documents.title, {date_column},
-                           notes.title AS fts_title,
-                           notes.aliases AS fts_aliases,
-                           notes.tags AS fts_tags,
-                           bm25(notes, 8.0, 6.0, 3.0, 1.0) AS score
-                    FROM notes
-                    JOIN documents ON documents.rowid = notes.rowid
-                    WHERE notes MATCH ?
-                    ORDER BY score, documents.name
-                    """,
-                    (expression,),
-                )
-            )
-        except sqlite3.OperationalError:
-            # An index built before schema 2 has no source_date; the recency
-            # signal is simply empty until the next rebuild.
-            continue
-    return []
-
-
-def _column_by_name(
-    connection: sqlite3.Connection,
-    column: str,
-    names: Sequence[str],
-) -> dict[str, str]:
-    """Fetch one ``documents`` column for the given note names, in chunks."""
-    values: dict[str, str] = {}
-    for start in range(0, len(names), _NAME_CHUNK):
-        chunk = tuple(names[start : start + _NAME_CHUNK])
-        rows = connection.execute(
-            f"SELECT name, {column} FROM documents "
-            f"WHERE name IN ({','.join('?' * len(chunk))})",
-            chunk,
-        )
-        for row in rows:
-            values[str(row["name"])] = str(row[column] or "")
-    return values
-
-
-def _fused_search(
-    text: str,
-    *,
-    limit: int,
-    connection: sqlite3.Connection,
-    min_score: float,
-    k: int,
-    recency_channel_weight: float,
-    legacy_multiplier: bool,
-    half_life_days: float,
-    now: dt.datetime,
-) -> list[SearchHit]:
-    """Fuse BM25, recency and tag overlap; optionally reproduce legacy decay."""
-    expression = _fts_query(text)
-    rows = _bm25_rows(connection, expression)
-    if not rows:
-        return []
-
-    scores = {str(row["name"]): float(row["score"]) for row in rows}
-    titles = {str(row["name"]): str(row["title"]) for row in rows}
-
-    # 1. BM25 — today's ranking, unchanged.  The --min-score floor is a floor on
-    #    this component alone; the fused score lives on a different scale.
-    bm25_list = [name for name, score in scores.items() if -score >= min_score]
-    bm25_ranks = competition_ranks(bm25_list, scores.__getitem__)
-
-    # 2. Tag/entity overlap — sparse by construction: zero-overlap notes are
-    #    absent from the list rather than ranked last.
-    query_tokens = set(expanded_tokens(text))
-    overlaps = {
-        str(row["name"]): indexed_tag_overlap(
-            query_tokens,
-            str(row["fts_title"]),
-            str(row["fts_aliases"]),
-            str(row["fts_tags"]),
-        )
-        for row in rows
-    }
-    tag_list = sorted(
-        (name for name, count in overlaps.items() if count > 0),
-        key=lambda name: (-overlaps[name], name),
-    )
-    tag_ranks = competition_ranks(tag_list, overlaps.__getitem__)
-
-    # Only notes present in at least one list are candidates.  Recency ranks
-    # those candidates; it never introduces a note of its own, or every query
-    # would inherit the whole corpus sorted by date.
-    candidates = set(bm25_list) | set(tag_list)
-    if not candidates:
-        return []
-
-    parsed_dates = {}
-    for row in rows:
-        name = str(row["name"])
-        if name not in candidates:
-            continue
-        stamp = _parse_timestamp(str(row["source_date"] or ""))
-        if stamp is not None:
-            parsed_dates[name] = stamp
-
-    # 3. Recency — newest source date first.
-    recency_list = sorted(
-        parsed_dates,
-        key=lambda name: (-parsed_dates[name].timestamp(), name),
-    )
-    recency_ranks = competition_ranks(
-        recency_list, lambda name: parsed_dates[name]
-    )
-
-    fused = rrf_fuse(
-        [bm25_ranks, recency_ranks, tag_ranks],
-        k=k,
-        channel_weights=(1.0, recency_channel_weight, 1.0),
-    )
-    final_scores = fused
-    if legacy_multiplier:
-        final_scores = {}
-        for name in candidates:
-            score = fused.get(name, 0.0)
-            stamp = parsed_dates.get(name)
-            if stamp is None:
-                final_scores[name] = score
-                continue
-            age_days = (now - stamp).total_seconds() / SECONDS_PER_DAY
-            final_scores[name] = score * recency_weight(age_days, half_life_days)
-
-    ordered = sorted(
-        final_scores, key=lambda name: (-final_scores[name], name)
-    )[:limit]
-    bodies = _column_by_name(connection, "body", ordered)
-    return [
-        SearchHit(
-            name=name,
-            title=titles.get(name, name),
-            body=strip_session_anchors(bodies.get(name, "")),
-            score=final_scores[name],
-        )
-        for name in ordered
-    ]
-
-
 def search(
     text: str,
     *,
@@ -831,12 +508,14 @@ def search(
     min_score: float = 0.0,
     mode: str | None = None,
 ) -> list[SearchHit]:
-    """Return ranked matches for ``text``.
+    """Return ranked matches for ``text``, ranked by ``bm25()``.
 
-    In ``bm25`` mode (the default) ``score`` is raw ``bm25()`` — lower is
-    better — and ``min_score`` is a floor on positive ``-bm25`` relevance.  In
-    ``rrf`` mode ``score`` is the fused RRF sum, where *higher* is better;
-    ``min_score`` still gates the BM25 component only.
+    ``score`` is the raw ``bm25()`` value — lower (more negative) is better —
+    and ``min_score`` is a floor on positive ``-bm25`` relevance.
+
+    ``mode`` is accepted and ignored: it is a compatibility shim for callers
+    written against the retired fused-ranking mode (see CHANGELOG). Every
+    call ranks by BM25.
     """
     if limit < 1:
         return []
@@ -848,22 +527,10 @@ def search(
         resolved = Path(db_path) if db_path is not None else STATE_DIR / DB_NAME
         connection = _open_readonly(resolved)
     try:
-        if resolve_mode(mode) == MODE_RRF:
-            return _fused_search(
-                text,
-                limit=limit,
-                connection=connection,
-                min_score=min_score,
-                k=resolve_rrf_k(),
-                recency_channel_weight=resolve_rrf_recency_channel_weight(),
-                legacy_multiplier=resolve_rrf_legacy_multiplier(),
-                half_life_days=resolve_half_life_days(),
-                now=dt.datetime.now(dt.timezone.utc),
-            )
         rows = connection.execute(
-            """
+            f"""
             SELECT documents.name, documents.title, documents.body,
-                   bm25(notes, 8.0, 6.0, 3.0, 1.0) AS score
+                   bm25(notes, {", ".join(str(weight) for weight in BM25_WEIGHTS)}) AS score
             FROM notes
             JOIN documents ON documents.rowid = notes.rowid
             WHERE notes MATCH ?
@@ -921,7 +588,12 @@ def hook_result(
     state_dir: Path | None = None,
     mode: str | None = None,
 ) -> dict[str, Any]:
-    """Produce capped hook JSON and update the optional session ledger."""
+    """Produce capped hook JSON and update the optional session ledger.
+
+    ``mode`` is accepted and ignored — same compatibility shim as
+    :func:`search`, for callers written against the retired fused-ranking
+    mode.
+    """
     resolved_db = Path(db_path) if db_path is not None else STATE_DIR / DB_NAME
     resolved_state = Path(state_dir) if state_dir is not None else resolved_db.parent
     ledger = _ledger_path(resolved_state, session) if session is not None else None
@@ -932,7 +604,6 @@ def hook_result(
         limit=2_147_483_647,
         db_path=resolved_db,
         min_score=min_score,
-        mode=mode,
     )
     notes: list[dict[str, Any]] = []
     total = 0
@@ -971,7 +642,6 @@ def run_hook_stdin(
     min_prompt_len: int = HOOK_MIN_PROMPT_LEN,
     db_path: Path | None = None,
     state_dir: Path | None = None,
-    mode: str | None = None,
 ) -> str | None:
     """Direct-python counterpart to ``hooks/memory-retrieve.ps1`` (D1).
 
@@ -1013,7 +683,6 @@ def run_hook_stdin(
             session=session,
             db_path=db_path,
             state_dir=state_dir,
-            mode=mode,
         )
     except (sqlite3.Error, OSError, RetrieveError):
         return None
@@ -1039,16 +708,14 @@ def _plain_output(hits: list[SearchHit]) -> str:
 
 def benchmark(
     db_path: Path | None = None,
-    mode: str | None = None,
 ) -> dict[str, Any]:
     resolved = Path(db_path) if db_path is not None else STATE_DIR / DB_NAME
-    resolved_mode = resolve_mode(mode)
     connection = _open_readonly(resolved)
     timings: list[dict[str, Any]] = []
     try:
         for query in BENCH_QUERIES:
             started = time.perf_counter()
-            hits = search(query, limit=3, connection=connection, mode=resolved_mode)
+            hits = search(query, limit=3, connection=connection)
             elapsed_ms = (time.perf_counter() - started) * 1_000
             timings.append(
                 {
@@ -1061,7 +728,7 @@ def benchmark(
         connection.close()
     ordered = sorted(float(item["ms"]) for item in timings)
     p95 = ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
-    return {"mode": resolved_mode, "queries": timings, "p95_ms": round(p95, 3)}
+    return {"mode": MODE_BM25, "queries": timings, "p95_ms": round(p95, 3)}
 
 
 def verify_index(
@@ -1178,15 +845,6 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     query_parser.add_argument("--min-score", type=float, default=0.0)
     query_parser.add_argument("--db", type=Path, default=STATE_DIR / DB_NAME)
     query_parser.add_argument("--bench", action="store_true")
-    query_parser.add_argument(
-        "--retrieval",
-        choices=RETRIEVAL_MODES,
-        default=None,
-        help=(
-            "Ranking mode; defaults to $"
-            f"{RETRIEVAL_MODE_ENV} and then to {DEFAULT_RETRIEVAL_MODE}."
-        ),
-    )
 
     hook_parser = subparsers.add_parser(
         "hook",
@@ -1200,11 +858,6 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     hook_parser.add_argument("--state-dir", type=Path)
     hook_parser.add_argument(
         "--min-prompt-len", type=int, default=HOOK_MIN_PROMPT_LEN
-    )
-    hook_parser.add_argument(
-        "--retrieval",
-        choices=RETRIEVAL_MODES,
-        default=None,
     )
     return parser.parse_args(argv)
 
@@ -1222,7 +875,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             min_prompt_len=args.min_prompt_len,
             db_path=args.db,
             state_dir=args.state_dir,
-            mode=args.retrieval,
         )
         if output is not None:
             print(output)
@@ -1242,7 +894,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.bench:
         print(
             json.dumps(
-                benchmark(args.db, mode=args.retrieval),
+                benchmark(args.db),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -1261,7 +913,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             session=args.session,
             min_score=args.min_score,
             db_path=args.db,
-            mode=args.retrieval,
         )
         print(json.dumps(result, ensure_ascii=False))
     else:
@@ -1272,7 +923,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     limit=args.limit,
                     db_path=args.db,
                     min_score=args.min_score,
-                    mode=args.retrieval,
                 )
             )
         )

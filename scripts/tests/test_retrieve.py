@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import sys
@@ -41,6 +42,8 @@ class RetrieveHarness(unittest.TestCase):
         aliases: tuple[str, ...] = (),
         tags: tuple[str, ...] = (),
         body: str = "Gövde metni.",
+        created: str = "2026-08-27",
+        updated: str = "2026-08-27",
     ) -> None:
         alias_text = json.dumps(aliases, ensure_ascii=False)
         tag_text = json.dumps(tags, ensure_ascii=False)
@@ -50,8 +53,8 @@ class RetrieveHarness(unittest.TestCase):
             f"aliases: {alias_text}\n"
             f"tags: {tag_text}\n"
             "sources: [sentetik.md]\n"
-            "created: 2026-08-27\n"
-            "updated: 2026-08-27\n"
+            f"created: {created}\n"
+            f"updated: {updated}\n"
             "---\n\n"
             f"{body}",
             encoding="utf-8",
@@ -98,6 +101,186 @@ class RankingTests(RetrieveHarness):
 
         self.assertEqual([hit.name for hit in hits], ["title-hit", "body-hit"])
         self.assertLess(hits[0].score, hits[1].score)
+
+    def test_mode_kwarg_is_accepted_and_ignored(self) -> None:
+        """Backward-compat shim for callers written against the retired rrf mode."""
+        self.write_note("bir", title="Ortak bir")
+        self.write_note("iki", title="Ortak iki")
+        self.build()
+
+        default = retrieve.search("ortak", limit=2, db_path=self.db)
+        explicit_bm25 = retrieve.search("ortak", limit=2, db_path=self.db, mode="bm25")
+        legacy_rrf = retrieve.search("ortak", limit=2, db_path=self.db, mode="rrf")
+
+        self.assertEqual(default, explicit_bm25)
+        self.assertEqual(default, legacy_rrf)
+
+
+class Bm25FieldWeightTests(RetrieveHarness):
+    """Regression: bm25()'s weights are positional over EVERY notes column,
+    including the UNINDEXED ``name`` one. Passing only four weights for a
+    five-column table silently shifts them left (title gets tags' weight,
+    aliases gets body's, and the last weight is dropped). See BM25_WEIGHTS.
+    """
+
+    def test_five_positional_weights_are_passed_to_bm25(self) -> None:
+        self.assertEqual(len(retrieve.BM25_WEIGHTS), 5)
+        self.assertEqual(retrieve.BM25_WEIGHTS[0], 0.0)  # name (UNINDEXED)
+
+        self.write_note("bir", title="Ortak bir")
+        self.build()
+        executed: list[str] = []
+        connection = retrieve._open_readonly(self.db)
+        connection.set_trace_callback(executed.append)
+        try:
+            retrieve.search("ortak", db_path=self.db, connection=connection)
+        finally:
+            connection.close()
+
+        bm25_calls = [sql for sql in executed if "bm25(notes" in sql]
+        self.assertTrue(bm25_calls, "no bm25(notes, ...) call was executed")
+        for sql in bm25_calls:
+            call = re.search(r"bm25\(notes,\s*([^)]*)\)", sql)
+            self.assertIsNotNone(call, sql)
+            weight_count = len([part for part in call.group(1).split(",") if part.strip()])
+            self.assertEqual(
+                weight_count,
+                5,
+                f"{sql!r} must pass five positional weights (name is "
+                "UNINDEXED but still occupies a column position)",
+            )
+
+    def test_title_aliases_tags_body_rank_in_declared_weight_order(self) -> None:
+        # One shared query token, planted in exactly one field per note, plus
+        # ~20 noise notes so the ordering isn't an artifact of a tiny corpus.
+        self.write_note(
+            "only-title", title="Kirlibudak", body="Sıradan gövde metni."
+        )
+        self.write_note(
+            "only-aliases", title="Sıradan", aliases=("Kirlibudak",),
+            body="Sıradan gövde metni.",
+        )
+        self.write_note(
+            "only-tags", title="Sıradan", tags=("Kirlibudak",),
+            body="Sıradan gövde metni.",
+        )
+        self.write_note(
+            "only-body", title="Sıradan", body="Kirlibudak gövde içinde geçiyor."
+        )
+        for index in range(20):
+            self.write_note(
+                f"noise-{index:02d}",
+                title=f"Alakasız başlık {index}",
+                body=f"Tamamen ilgisiz gövde {index}.",
+            )
+        self.build()
+
+        hits = retrieve.search("kirlibudak", limit=10, db_path=self.db)
+
+        self.assertEqual(
+            [hit.name for hit in hits],
+            ["only-title", "only-aliases", "only-tags", "only-body"],
+        )
+        # bm25() is negative and lower (more negative) is a stronger match.
+        scores = [hit.score for hit in hits]
+        self.assertEqual(scores, sorted(scores))
+
+
+class SourceDateTests(RetrieveHarness):
+    def test_frontmatter_updated_wins_over_created(self) -> None:
+        self.write_note("not", created="2020-01-01", updated="2024-06-05")
+        self.build()
+
+        connection = sqlite3.connect(self.db)
+        try:
+            stored = connection.execute(
+                "SELECT source_date FROM documents WHERE name = 'not'"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+        self.assertTrue(stored.startswith("2024-06-05"))
+
+    def test_missing_dates_fall_back_to_file_mtime(self) -> None:
+        (self.concepts / "tarihsiz.md").write_text(
+            "---\ntitle: Tarihsiz\naliases: []\ntags: []\n---\n\nGövde.\n",
+            encoding="utf-8",
+        )
+        self.build()
+
+        connection = sqlite3.connect(self.db)
+        try:
+            stored = connection.execute(
+                "SELECT source_date FROM documents WHERE name = 'tarihsiz'"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+        self.assertTrue(retrieve._parse_timestamp(stored) is not None)
+
+
+class VerifyIndexTests(RetrieveHarness):
+    def test_healthy_index_reports_ok(self) -> None:
+        self.write_note("bir")
+        self.write_note("iki")
+        self.build()
+
+        report = retrieve.verify_index(vault_root=self.root, state_dir=self.state)
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["expected_count"], 2)
+        self.assertEqual(report["indexed_count"], 2)
+        self.assertEqual(report["fts_count"], 2)
+        self.assertEqual(report["missing"], [])
+        self.assertEqual(report["extra"], [])
+        self.assertEqual(report["schema_version"], retrieve.SCHEMA_VERSION)
+
+    def test_note_added_after_the_build_is_reported_missing(self) -> None:
+        self.write_note("bir")
+        self.build()
+        self.write_note("sonradan")
+
+        report = retrieve.verify_index(vault_root=self.root, state_dir=self.state)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["missing"], ["sonradan"])
+        self.assertEqual(report["extra"], [])
+
+    def test_note_deleted_after_the_build_is_reported_extra(self) -> None:
+        self.write_note("bir")
+        self.write_note("silinen")
+        self.build()
+        (self.concepts / "silinen.md").unlink()
+
+        report = retrieve.verify_index(vault_root=self.root, state_dir=self.state)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["missing"], [])
+        self.assertEqual(report["extra"], ["silinen"])
+
+    def test_missing_database_is_named_not_crashed(self) -> None:
+        self.write_note("bir")
+
+        report = retrieve.verify_index(vault_root=self.root, state_dir=self.state)
+
+        self.assertFalse(report["ok"])
+        self.assertEqual(report["error"], "index-missing")
+        self.assertEqual(report["missing"], ["bir"])
+
+    def test_cli_exit_code_follows_the_diff(self) -> None:
+        self.write_note("bir")
+        self.build()
+        arguments = [
+            "verify",
+            "--vault-root",
+            str(self.root),
+            "--state-dir",
+            str(self.state),
+        ]
+
+        self.assertEqual(retrieve.main(arguments), 0)
+        self.write_note("sonradan")
+        self.assertEqual(retrieve.main(arguments), 1)
 
 
 class HookOutputTests(RetrieveHarness):

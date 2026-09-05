@@ -1,4 +1,4 @@
-# Retrieval fusion and memory hygiene
+# Retrieval and memory hygiene
 
 What ranks a note, what a note's date means, and what the pipeline is allowed to
 skip. Companion to [evaluation.md](evaluation.md), which covers how ranking is
@@ -9,113 +9,57 @@ gives the same order, every time, with no model in the loop.
 
 ---
 
-## 1. Two ranking modes
+## 1. Ranking: BM25 over four weighted fields
 
-`scripts/retrieve.py` has two ranking paths, selected by `BEYIN_RETRIEVAL`:
+`scripts/retrieve.py` ranks with a single signal: FTS5's `bm25()` over the
+`notes` virtual table, weighted so a title match outranks a body match.
 
-| Mode | What it is | Default |
-|---|---|---|
-| `bm25` | A single signal: FTS5 `bm25(notes, 8, 6, 3, 1)` over title, aliases, tags and body | **yes** |
-| `rrf` | Reciprocal Rank Fusion over BM25, recency and tag-overlap channels | opt-in |
-
-`bm25` is the default and is byte-for-byte the behaviour that shipped before
-fusion existed — same SQL, same ordering, same `score` field. **`rrf` is
-deliberately opt-in until it is measured against the gold set.** Read
-[§7 Measurements](#7-measurements) before switching it on; the fused path is
-implemented, tested and unmeasured, in that order.
-
-Precedence for the mode is: the `--retrieval` flag, then `$BEYIN_RETRIEVAL`,
-then `bm25`. An unrecognised value is not an error — it falls back to `bm25`,
-because a retrieval hook that refuses to run is worse than one that ranks the
-old way.
-
-## 2. The three signals
-
-Fusion needs ranked lists. These three cost nothing extra — no new dependency,
-no second index, no embedding:
-
-1. **BM25** — today's ranking, unchanged.
-2. **Recency** — candidates ordered by their newest source date, newest first
-   (see [§4](#4-session-anchors-and-what-a-notes-date-means) for where that date
-   comes from). Notes with no resolvable date are absent from this list.
-3. **Tag/entity overlap** — how many query tokens also appear in the note's
-   title, `aliases` or `tags`. Zero-overlap notes are **absent from this list,
-   not ranked last** — that is what makes a sparse signal safe to fuse.
-
-Both sides of the overlap count go through the same `expanded_tokens()` the
-index uses, so Turkish folding cannot drift between them: `İSTANBUL` and
-`istanbul` are one token, and `ISTANBUL` correctly is not — capital `I` folds to
-dotless `ı`. On the hot path the note's side is read from the FTS columns, which
-already hold that exact token stream, so ranking a match costs a `split()`
-rather than a second pass of the tokenizer.
-
-### What can be a candidate
-
-**Only notes present in at least one list are candidates.** In practice the
-candidate pool is the FTS match set: a note can only have tag overlap if one of
-its indexed fields matched, so the tag list is always a subset of the matches.
-
-The recency list is a **re-ranker, never a source of candidates**: it orders
-candidates the other signals already found. Ranking the whole corpus by date
-would make every query inherit every note, sorted by nothing that has anything
-to do with the question.
-
-## 3. Fusion and recency channel weighting
-
-```
-final(note) = Σ channel_weight_i / (k + rank_i)
-channel weights = (BM25: 1.0, recency: 1.0, tag overlap: 1.0)
+```sql
+CREATE VIRTUAL TABLE notes USING fts5(name UNINDEXED, title, aliases, tags, body);
 ```
 
-`k` defaults to 60 (`BEYIN_RRF_K`), the conventional value. The recency channel
-weight defaults to 1.0 (`BEYIN_RRF_RECENCY_CHANNEL_WEIGHT`); `0.0` cleanly
-removes recency's contribution while leaving BM25 and tag overlap unchanged.
-There is no post-fusion recency multiplier in the default path.
+`bm25(notes, ...)` weights are **positional over every column of the table,
+UNINDEXED ones included** — not just the indexed ones. `name` occupies the
+first position even though it can never match, so the call must pass five
+weights, not four:
 
-For side-by-side measurement only, `BEYIN_RRF_LEGACY_MULTIPLIER=1` restores the
-deprecated former multiplier after fusion:
-
-```
-legacy_final(note) = fused(note) × clamp(
-    0.5 ** (age_days / half_life), 0.25, 1.0
-)
+```python
+BM25_WEIGHTS = (0.0, 8.0, 6.0, 3.0, 1.0)  # name, title, aliases, tags, body
 ```
 
-Its half-life defaults to 180 days (`BEYIN_RECENCY_HALFLIFE_DAYS`), and `0`
-disables the legacy decay. A note with no resolvable date remains unmultiplied
-in that comparison path.
+Passing only four weights silently shifts every one of them left: `title`
+would get `aliases`' weight, `aliases` would get `tags`', `tags` would get
+`body`'s, and `body`'s own weight would be dropped entirely — the field
+priority the schema intends (title > aliases > tags > body) never actually
+applies. This was a real, shipped defect, fixed by adding the leading `0.0`
+placeholder; no index rebuild is needed, since it is a query-time-only change
+that reads the same columns as before.
 
-### Ties share a rank
+**`--min-score`** is a floor on positive `-bm25()` relevance: any hit whose
+`-score` falls below it is discarded before ranking.
 
-Ranks are **competition ranks**: notes with identical evidence get identical
-rank (1, 1, 3, …). This matters more than it sounds. `bm25()` returns `0.0` for
-a term that appears in every note, so exact ties are routine; with positional
-ranks the alphabetical tie-break would silently hand the first note a better
-rank in *two* lists at once and manufacture a winner out of its file name.
+## 2. A fused-ranking mode was tried and removed
 
-### `--min-score` gates BM25, not the fused score
+A previous revision added an opt-in Reciprocal Rank Fusion mode (`rrf`) over
+BM25, recency and tag-overlap channels, gated behind `BEYIN_RETRIEVAL=rrf`.
+It was measured against BM25 on the LoCoMo long-context benchmark and all 11
+public BEIR-family datasets in the benchmark harness
+(`tools/benchmark/`): LoCoMo hit@5 was 0.55 for `bm25` versus 0.13 for `rrf`,
+and `rrf` scored worse than `bm25` on every one of the 11 BEIR sets too — the
+fusion collapses on the dated, mixed-recency corpora this system actually
+indexes. `rrf` and everything it depended on (the RRF arithmetic, the
+recency and tag-overlap channels, the legacy post-fusion multiplier, the
+`BEYIN_RETRIEVAL`/`BEYIN_RRF_K`/`BEYIN_RRF_RECENCY_CHANNEL_WEIGHT`/
+`BEYIN_RRF_LEGACY_MULTIPLIER`/`BEYIN_RECENCY_HALFLIFE_DAYS` environment
+variables, and the `--retrieval` CLI flag) have been deleted. `search()` and
+`hook_result()` still accept a `mode` keyword for source compatibility with
+existing callers, but it is now a no-op: every call ranks by BM25.
 
-`--min-score` is a floor on positive `-bm25()` relevance. In `rrf` mode it is
-applied to the **BM25 component only** — the fused score lives on a completely
-different scale (hundredths, not units), so comparing them would be meaningless.
+`documents.source_date` (see [§3](#3-session-anchors-and-what-a-notes-date-means)
+below) is unrelated to this and stays — other code reads a note's resolved
+source date independent of ranking.
 
-One consequence is worth stating plainly: a note filtered out of the BM25 list
-by the floor can still enter through the tag-overlap list, with a strictly
-smaller fused score. If you need a hard "return nothing weak" cut, use `bm25`
-mode, where the floor is absolute.
-
-### Score semantics differ by mode
-
-| Mode | `SearchHit.score` | Better is |
-|---|---|---|
-| `bm25` | raw `bm25()` | lower (negative) |
-| `rrf` | fused RRF sum | higher (positive) |
-
-Anything that reads the score numerically has to know which mode produced it.
-Both hook output and the MCP tool return whole notes rather than scores, so this
-only affects `--format plain` and direct API callers.
-
-## 4. Session anchors, and what a note's date means
+## 3. Session anchors, and what a note's date means
 
 A concept note distilled from a daily log used to have no reliable date: its
 frontmatter `updated` reflects when a model last rewrote it, not when the
@@ -158,7 +102,7 @@ first:
 Stored normalised to UTC ISO8601, so lexicographic order is chronological order.
 A naive date such as `2026-08-27` is read as UTC midnight.
 
-## 5. Maintenance gating
+## 4. Maintenance gating
 
 Two things used to happen more often than they needed to.
 
@@ -204,15 +148,10 @@ a nightly no-op cannot grow the file without bound. Current reasons:
 | `skip:compile-trigger:min-interval:<elapsed>h<<minimum>h` | A successful run is too recent |
 | `skip:compile-trigger:day-already-claimed` | Today's `compile-trigger-<date>` file already exists |
 
-## 6. Configuration
+## 5. Configuration
 
 | Variable | Default | Effect |
 |---|---|---|
-| `BEYIN_RETRIEVAL` | `bm25` | `bm25` or `rrf`; anything else falls back to `bm25` |
-| `BEYIN_RRF_K` | `60` | RRF constant; below 1 or unparsable falls back to 60 |
-| `BEYIN_RRF_RECENCY_CHANNEL_WEIGHT` | `1.0` | Multiplier for the recency channel's RRF contribution; `0.0` removes recency influence |
-| `BEYIN_RRF_LEGACY_MULTIPLIER` | unset | Deprecated, comparison-only: exact value `1` restores the former post-fusion multiplier |
-| `BEYIN_RECENCY_HALFLIFE_DAYS` | `180` | Legacy multiplier half-life in days; `0` disables legacy decay |
 | `BEYIN_COMPILE_MIN_INTERVAL_HOURS` | `20` | Minimum gap after a successful compile; `0` disables the gate |
 
 Every one of these degrades to its default on junk input rather than raising.
@@ -221,14 +160,11 @@ These run inside hooks, and a hook that crashes takes the session's turn with it
 ### Command line
 
 ```powershell
-# Query, honouring $BEYIN_RETRIEVAL
+# Query
 python <vault>\.claude\scripts\retrieve.py query "kalıcı bellek"
 
-# Force a mode for one call
-python <vault>\.claude\scripts\retrieve.py query "kalıcı bellek" --retrieval rrf
-
-# Latency, per mode (--bench lives under the `query` subcommand)
-python <vault>\.claude\scripts\retrieve.py query --bench --retrieval rrf
+# Latency (--bench lives under the `query` subcommand)
+python <vault>\.claude\scripts\retrieve.py query --bench
 
 # Does the index still match the notes on disk?
 python <vault>\.claude\scripts\retrieve.py verify --vault-root <vault>
@@ -240,74 +176,43 @@ python <vault>\.claude\scripts\retrieve.py verify --vault-root <vault>
 only, so a note with broken frontmatter shows up as missing instead of hiding
 the drift behind a parse error. The `beyin-doktor` skill runs it as check 14 and
 reports 🟢/🟡/🔴 from the same JSON; a `schema_version` below 2 is the 🟡 case,
-an index built before `source_date` existed, which makes `rrf` fall back to
-BM25-only ranking until the next rebuild.
+an index built before `source_date` existed.
 
-## 7. Measurements
+## 6. Measurements
 
-**Quality verdict (2026-08-29, sealed):** on the 125-question gold set,
-`bm25` scored recall@3 83.2% / recall@5 91.2% while `rrf` (repaired and
-legacy alike) scored 69.6% at both cutoffs — a significant loss (McNemar
-p=0.003; rrf buries gold notes outside the top 5 instead of demoting them).
-**`bm25` stays the default; the fused path's default candidacy is closed**
-until a redesigned fusion (channel weights / low-variance channel drop)
-measures better on the same set. Run: `Degerlendirme/kos.py --yarisma`,
-CSV `yarisma-2026-08-29.csv`.
+**Quality verdict (sealed):** on the LoCoMo long-context benchmark, `bm25`
+scored hit@5 0.55 against `rrf`'s 0.13, and `bm25` also outscored `rrf` on
+every one of the 11 public BEIR-family datasets in the benchmark harness. The
+fused path collapsed specifically on dated, mixed-recency corpora — the kind
+this system actually indexes. `bm25` is the only ranking path; see
+[§2](#2-a-fused-ranking-mode-was-tried-and-removed) for what was removed and why.
 
 Hard gate: **p95 under 500 ms**.
 
 Measured with `retrieve.py query --bench` (20 fixed Turkish queries, `limit=3`,
 warm connection) against a **synthetic 250-note fixture** — multi-kilobyte
 bodies, vocabulary deliberately overlapping the bench queries so most queries
-match most of the corpus, which is the worst case for a fused path that has to
-consume every match.
+match most of the corpus, which is close to the worst case for this workload.
 
-| Corpus | `bm25` p95 | `rrf` p95 | Ratio |
-|---|---|---|---|
-| 250 notes | 1.25 ms | 2.96 ms | 2.4× |
-| 500 notes | 2.0 ms | 6.9 ms | 3.5× |
-| 1 000 notes | 8.2 ms | 13.0 ms | 1.6× |
-| 2 000 notes | 15.3 ms | 25.6 ms | 1.7× |
+| Corpus | `bm25` p95 |
+|---|---|
+| 250 notes | 1.25 ms |
+| 500 notes | 2.0 ms |
+| 1 000 notes | 8.2 ms |
+| 2 000 notes | 15.3 ms |
 
-The 250-note row is the median of five runs; the rest are single runs.
-
-Both modes clear the gate by two orders of magnitude on this fixture, and the
-ratio settles around 1.6–1.8× as the corpus grows.
+The 250-note row is the median of five runs; the rest are single runs. This
+clears the gate by two orders of magnitude on this fixture.
 
 **These are not the gold-set numbers and must not be quoted as such.** The gold
 corpus is unpublished (see [evaluation.md](evaluation.md)) and its documented
 `bm25` p95 is 347 ms — two orders of magnitude above this fixture, on different
-hardware and different note sizes. Applying the measured ratio to that baseline
-would put `rrf` somewhere around 550–870 ms, i.e. **over the 500 ms gate**. That
-extrapolation is a warning, not a measurement: real queries are more selective
-than these bench queries, which shrinks the fused path's extra work. Re-measure
-`rrf` on the real corpus before changing the default.
+hardware and different note sizes.
 
-Where the extra cost goes, and what was already removed: `bm25` with `limit=3`
-stops consuming rows after three hits, while `rrf` must read every match to fuse
-it. Reading the pre-tokenized FTS columns instead of re-tokenizing each row, and
-folding `source_date` into the main query instead of issuing a second one, cut
-the fused path's p95 by roughly 40% on the 250-note fixture. Note bodies are
+`bm25` with `limit=3` stops consuming rows after three hits. Note bodies are
 fetched only for the notes actually returned.
 
-## 8. Known limits
-
-<!-- yazan: codex · gpt-5 -->
-**The former post-fusion recency dominance is fixed by default.** RRF compresses
-nearby ranks into a narrow band — with `k=60`, rank 1 contributes `1/61` and
-rank 2 contributes `1/62`, a difference of about 1.6% — while the removed
-multiplier spanned 4× from 1.0 to its 0.25 floor. That mismatch let a fresh weak
-match outrank an old exact match.
-
-The repaired path uses recency only as one fusion channel, so the final score is
-the RRF sum. `BEYIN_RRF_RECENCY_CHANNEL_WEIGHT` can scale that one channel and
-`0.0` removes its influence; its default remains deliberately untuned at 1.0.
-`BEYIN_RRF_LEGACY_MULTIPLIER=1` restores the deprecated multiplier solely for
-comparison measurements and must not be treated as the recommended mode.
-
-Historically, the dominance failure was kept visible by
-`test_a_fresh_weak_match_can_still_outrank_an_old_exact_one`; that test now pins
-the legacy reproduction while a companion test pins the repaired ordering.
+## 7. Known limits
 
 <!-- yazan: codex · gpt-5.6-sol -->
 **Archive anchor coverage follows the source's identity guarantees.** Claude
@@ -335,7 +240,7 @@ at 20:00 leaves that session's log waiting for the next night. This is the
 specified behaviour (the gate is an `AND`), and it is the conservative
 direction: at worst a daily log is compiled a day later than it could have been.
 
-## 9. Epistemic status in distilled notes
+## 8. Epistemic status in distilled notes
 
 The compiler's distillation instruction now carries three rules about certainty,
 because the failure mode is invisible once it happens — a hedge that becomes a

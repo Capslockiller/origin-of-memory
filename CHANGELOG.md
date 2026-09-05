@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<!-- yazan: claude · fable-5.1 -->
+- **`bm25()`'s field weights were never actually applied.** FTS5's
+  `bm25(notes, ...)` weights are positional over every column of `notes(name
+  UNINDEXED, title, aliases, tags, body)`, including the UNINDEXED `name`
+  column — passing four weights for a five-column table silently shifted
+  every one of them left, so the documented title=8/aliases=6/tags=3/body=1
+  priority never applied (the effective weights were title=6, aliases=3,
+  tags=1, body=1). Fixed by passing five weights, `(0.0, 8.0, 6.0, 3.0, 1.0)`,
+  now a named `BM25_WEIGHTS` constant. Query-time only; no index rebuild
+  needed, no `SCHEMA_VERSION` bump.
+
+### Removed
+
+<!-- yazan: claude · fable-5.1 -->
+- **The `rrf` retrieval mode is gone.** Measured against `bm25` on the
+  LoCoMo benchmark (hit@5 0.55 vs 0.13) and on every one of 11 public BEIR
+  datasets, `rrf` scored significantly worse throughout and collapsed on
+  dated, mixed-recency corpora. Deleted: `MODE_RRF`, `_fused_search`,
+  `rrf_fuse`, `tag_overlap`/`indexed_tag_overlap`, the recency-channel and
+  legacy-multiplier machinery, the `BEYIN_RETRIEVAL`/`BEYIN_RRF_K`/
+  `BEYIN_RRF_RECENCY_CHANNEL_WEIGHT`/`BEYIN_RRF_LEGACY_MULTIPLIER`/
+  `BEYIN_RECENCY_HALFLIFE_DAYS` environment variables, `resolve_mode`, and
+  the `--retrieval` CLI flag. `search()` and `hook_result()` keep accepting
+  a `mode` keyword as a no-op for source compatibility with existing
+  callers; every call now ranks by BM25 only.
+
 <!-- yazan: codex · gpt-5.6-sol -->
 - **The Today panel now reads every Windows daily-session heading.** CRLF line
   endings no longer hide all sessions, PowerShell's automatic Matches variable
