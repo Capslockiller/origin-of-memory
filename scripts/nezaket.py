@@ -67,6 +67,22 @@ DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 DEFAULT_GPU_ESIK = 60
 DEFAULT_BOSTA_SERBEST_SN = 900.0
+# Overrides gpu_esik (from nezaket-izin.json or the built-in default) without
+# touching that file — a quick knob for a machine whose GPU baseline differs.
+# Unset changes nothing: the documented default stays 60.
+GPU_ESIK_ENV = "BEYIN_NEZAKET_GPU_ESIK"
+
+
+def _gpu_esik_env_override(environment: dict[str, str] | None = None) -> int | None:
+    env = os.environ if environment is None else environment
+    raw = (env.get(GPU_ESIK_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 # Dört sınıf: canlı düzenleyici, 3D/render, previs, kayıt — hepsi meşguliyeti
 # doğrudan işaret eder; kullanıcı nezaket-izin.json ile genişletebilir.
@@ -479,11 +495,12 @@ def karar(okuma: Okuma, izin: "IzinListesi") -> Karar:
     """Pure decision function — no I/O, no probes, no clock.
 
     Priority order: an allow-listed process, then an allow-listed parent
-    process, then GPU load, then the fullscreen heuristic, then "every signal
-    is unknown", then the idle-release window, then the default free state.
-    Idle time is checked last on purpose — it can never override a busy
-    verdict reached above it, so a compiling Unreal Editor stays "busy" no
-    matter how long the keyboard has been quiet.
+    process, then this system's own Ollama activity, then GPU load, then the
+    fullscreen heuristic, then "every signal is unknown", then the
+    idle-release window, then the default free state. Idle time is checked
+    last on purpose — it can never override a busy verdict reached above it,
+    so a compiling Unreal Editor stays "busy" no matter how long the keyboard
+    has been quiet.
     """
     surec_cf = okuma.surec.casefold() if okuma.surec else None
     ust_cf = okuma.ust_surec.casefold() if okuma.ust_surec else None
@@ -493,6 +510,15 @@ def karar(okuma: Okuma, izin: "IzinListesi") -> Karar:
 
     if ust_cf is not None and ust_cf in izin.ust_surecler:
         return Karar(mesgul=True, neden=f"ust-surec:{okuma.ust_surec}", bilinmiyor=False)
+
+    # A local Ollama server (its own foreground console, or a child process
+    # of one) driving the GPU is this pipeline's own inference, not a game —
+    # never defer compile for it. Checked before the GPU-load heuristic on
+    # purpose, since that heuristic is exactly what used to misread it.
+    if (surec_cf is not None and "ollama" in surec_cf) or (
+        ust_cf is not None and "ollama" in ust_cf
+    ):
+        return Karar(mesgul=False, neden="kendi-yerel-model", bilinmiyor=False)
 
     if okuma.gpu is not None and okuma.gpu >= izin.gpu_esik:
         return Karar(mesgul=True, neden=f"gpu-yuk:{okuma.gpu}", bilinmiyor=False)
@@ -553,7 +579,7 @@ class IzinListesi:
         return cls(
             surecler=frozenset(name.casefold() for name in DEFAULT_SURECLER),
             ust_surecler=frozenset(name.casefold() for name in DEFAULT_UST_SURECLER),
-            gpu_esik=DEFAULT_GPU_ESIK,
+            gpu_esik=_gpu_esik_env_override() or DEFAULT_GPU_ESIK,
             zararsiz_tam_ekran=frozenset(
                 name.casefold() for name in DEFAULT_ZARARSIZ_TAM_EKRAN
             ),
@@ -589,7 +615,7 @@ class IzinListesi:
         return cls(
             surecler=frozenset(name.casefold() for name in surecler),
             ust_surecler=frozenset(name.casefold() for name in ust_surecler),
-            gpu_esik=int(gpu_esik),
+            gpu_esik=_gpu_esik_env_override() or int(gpu_esik),
             zararsiz_tam_ekran=frozenset(name.casefold() for name in zararsiz),
             bosta_serbest_sn=float(bosta_serbest_sn),
         )
@@ -826,17 +852,91 @@ def son_karar(state_dir: Path) -> bool | None:
 
 
 # --------------------------------------------------------------------------
+# nezaket-ollama-yukler.json — model names THIS system loaded via
+# ollama_runner, so vram_bosalt never evicts a model the user loaded by hand.
+# --------------------------------------------------------------------------
+
+OLLAMA_YUKLER_NAME = "nezaket-ollama-yukler.json"
+
+
+class OllamaYukler:
+    """Tracks which Ollama model names this pipeline itself asked to load."""
+
+    def __init__(self, state_dir: Path):
+        self.state_dir = Path(state_dir)
+        self.path = self.state_dir / OLLAMA_YUKLER_NAME
+        self.lock_path = self.state_dir / f".{OLLAMA_YUKLER_NAME}.lock"
+
+    def _kilitli(self, blocking: bool = True):
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        lock_file = self.lock_path.open("a+", encoding="utf-8")
+        _lock_exclusive(lock_file, blocking=blocking)
+        return lock_file
+
+    def _oku(self) -> list[str]:
+        if not self.path.exists():
+            return []
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return []
+        models = raw.get("modeller") if isinstance(raw, dict) else None
+        if not isinstance(models, list):
+            return []
+        return [name for name in models if isinstance(name, str) and name]
+
+    def kaydet(self, model: str) -> None:
+        """Remember that this pipeline asked Ollama to load ``model``.
+
+        Called by ``ollama_runner`` right before it issues the generate
+        request that makes Ollama load the model — the only place this
+        system ever causes a load, so anything not recorded here is the
+        user's own, untouched by ``vram_bosalt``.
+        """
+        if not model:
+            return
+        lock_file = self._kilitli()
+        try:
+            models = self._oku()
+            if model not in models:
+                models.append(model)
+                _atomic_write_json(self.path, {"modeller": models})
+        finally:
+            lock_file.close()
+
+    def yuklenenler(self) -> set[str]:
+        lock_file = self._kilitli()
+        try:
+            return set(self._oku())
+        finally:
+            lock_file.close()
+
+
+# --------------------------------------------------------------------------
 # VRAM release on the serbest -> mesgul transition (Ç4 keep_alive support)
 # --------------------------------------------------------------------------
 
 
-def vram_bosalt(url: str | None = None) -> list[str]:
-    """Ask Ollama to drop every currently-loaded model's VRAM residency.
+def vram_bosalt(url: str | None = None, state_dir: Path | None = None) -> list[str]:
+    """Ask Ollama to drop VRAM residency for models this system itself loaded.
+
+    With ``state_dir`` given, only models recorded in
+    ``nezaket-ollama-yukler.json`` (via ``ollama_runner``) are unloaded — a
+    model the user loaded by hand for their own work is left alone. Without
+    ``state_dir`` there is no tracked set to consult, so every currently
+    loaded model is unloaded (the historical, pre-tracking behaviour).
 
     Never raises: every failure is folded into the returned problem list.
     """
     base = (url or os.environ.get("BEYIN_OLLAMA_URL") or DEFAULT_OLLAMA_URL).rstrip("/")
     problems: list[str] = []
+    izinli: set[str] | None = None
+    if state_dir is not None:
+        try:
+            izinli = OllamaYukler(state_dir).yuklenenler()
+        except Exception as exc:
+            problems.append(f"yukler-okunamadi:{exc.__class__.__name__}")
+            izinli = set()
     try:
         with urllib.request.urlopen(base + "/api/ps", timeout=2) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -849,6 +949,8 @@ def vram_bosalt(url: str | None = None) -> list[str]:
     for entry in models:
         name = entry.get("name") if isinstance(entry, dict) else None
         if not isinstance(name, str) or not name:
+            continue
+        if izinli is not None and name not in izinli:
             continue
         body = json.dumps({"model": name, "keep_alive": 0}).encode("utf-8")
         request = urllib.request.Request(
@@ -963,7 +1065,7 @@ def _degerlendir(
     gecis = durum.guncelle(sonuc)
 
     if gecis == "serbest->mesgul":
-        vram_bosalt(env.get("BEYIN_OLLAMA_URL"))
+        vram_bosalt(env.get("BEYIN_OLLAMA_URL"), state_dir=state_dir)
 
     if sonuc.bilinmiyor and not onceki_bilinmiyor and _windows_mu():
         # Off Windows every signal is None by design (the probes are

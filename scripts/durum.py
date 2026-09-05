@@ -117,6 +117,7 @@ def summarize_calls(
     backend_durations: dict[str, list[float]] = {}
     component_totals: dict[str, dict[str, int]] = {}
     ok_calls = 0
+    real_usage_calls = 0
     for record in records:
         backend = str(record.get("backend", "unknown")) or "unknown"
         component = str(record.get("component", "unknown")) or "unknown"
@@ -124,11 +125,28 @@ def summarize_calls(
             float(_number(record, "duration_ms"))
         )
         totals = component_totals.setdefault(
-            component, {"calls": 0, "input_tokens_est": 0, "output_tokens_est": 0}
+            component,
+            {
+                "calls": 0,
+                "input_tokens_est": 0,
+                "output_tokens_est": 0,
+                "real_usage_calls": 0,
+                "input_tokens_real": 0,
+                "output_tokens_real": 0,
+                "cache_read_tokens_real": 0,
+                "cache_write_tokens_real": 0,
+            },
         )
         totals["calls"] += 1
         totals["input_tokens_est"] += _number(record, "input_tokens_est")
         totals["output_tokens_est"] += _number(record, "output_tokens_est")
+        if record.get("usage_source") == "session-log":
+            totals["real_usage_calls"] += 1
+            real_usage_calls += 1
+            totals["input_tokens_real"] += _number(record, "input_tokens")
+            totals["output_tokens_real"] += _number(record, "output_tokens")
+            totals["cache_read_tokens_real"] += _number(record, "cache_read_tokens")
+            totals["cache_write_tokens_real"] += _number(record, "cache_write_tokens")
         if record.get("outcome") == "ok":
             ok_calls += 1
 
@@ -154,12 +172,15 @@ def summarize_calls(
         "total_calls": len(records),
         "ok_calls": ok_calls,
         "failed_calls": len(records) - ok_calls,
+        "real_usage_calls": real_usage_calls,
         "backends": backends,
         "components": components,
     }
 
 
-def build_summary(state_dir: Path) -> dict[str, Any]:
+def build_summary(
+    state_dir: Path, now: dt.datetime | None = None
+) -> dict[str, Any]:
     health = _read_object(state_dir / "health.json")
     ingest_health = _read_object(state_dir / "ingest-health.json")
     compile_state = _read_object(state_dir / "compile-state.json")
@@ -209,7 +230,7 @@ def build_summary(state_dir: Path) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
         "rows": rows,
-        "calls": summarize_calls(state_dir),
+        "calls": summarize_calls(state_dir, now=now),
     }
 
 
@@ -264,6 +285,35 @@ def _print_calls(calls: dict[str, Any]) -> None:
             for entry in calls["components"]
         ],
     )
+    if calls.get("real_usage_calls"):
+        print()
+        print(
+            f"real usage (provider-reported, {calls['real_usage_calls']} of "
+            f"{calls['total_calls']} calls):"
+        )
+        print()
+        _print_grid(
+            (
+                "component",
+                "real calls",
+                "in tokens",
+                "out tokens",
+                "cache read",
+                "cache write",
+            ),
+            [
+                (
+                    str(entry["component"]),
+                    str(entry["real_usage_calls"]),
+                    str(entry["input_tokens_real"]),
+                    str(entry["output_tokens_real"]),
+                    str(entry["cache_read_tokens_real"]),
+                    str(entry["cache_write_tokens_real"]),
+                )
+                for entry in calls["components"]
+                if entry["real_usage_calls"]
+            ],
+        )
 
 
 def _print_table(summary: dict[str, Any]) -> None:

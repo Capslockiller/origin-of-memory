@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+<!-- yazan: claude · sonnet -->
+- **The call ledger records real Claude usage, not just the chars/4 estimate.**
+  `claude_runner.py`'s claude backend now runs `claude -p --output-format json`
+  (was `text`) and reads that reply's own `usage`/`modelUsage` blocks — already
+  aggregated across every turn of the session by the CLI itself — instead of
+  estimating from character counts alone. New ledger fields per call:
+  `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
+  `model_actual`, and `usage_source` (`"session-log"` when these are real,
+  `"estimate"` — with the four token fields `null` — when they are not, e.g. a
+  local backend, a CLI error, or a reply that failed to parse). The old
+  `input_tokens_est`/`output_tokens_est` fields are unchanged. `durum.py`'s
+  summary now prints a real-usage table alongside the existing estimate table
+  whenever at least one call in the window has real usage. A fresh
+  `--session-id` is passed on every call for external traceability, though
+  usage is read from the JSON reply directly rather than by locating a
+  transcript file.
+- **Claude tier names now resolve to explicit model ids.** The claude CLI's
+  aliases had drifted (`--model haiku` was landing on Sonnet); `claude_runner`
+  now maps `haiku`/`sonnet`/`opus` through a table (`claude-haiku-4-5-20251001`
+  / `claude-sonnet-5` / `claude-opus-5`), overridable per tier via
+  `BEYIN_CLAUDE_MODEL_<TIER>`, and the ledger's `model_slug` records the id
+  actually sent.
+
 ### Fixed
 
 <!-- yazan: claude · fable-5.1 -->
@@ -34,6 +59,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `--retrieval` CLI flag. `search()` and `hook_result()` keep accepting
   a `mode` keyword as a no-op for source compatibility with existing
   callers; every call now ranks by BM25 only.
+<!-- yazan: claude · sonnet -->
+- **`durum`'s call summary no longer breaks on a real-clock rollover.**
+  `build_summary()`/`_print_table()` now accept a `now` for the "last 7 days"
+  window (already true of `summarize_calls`), so a fixture pinned to a past
+  date can be tested without racing the real clock — the two tests that were
+  time-bombed for exactly that reason (`test_call_ledger.py`) are fixed by
+  injecting the clock, not by moving the fixture date.
+- **nezaket no longer treats this system's own Ollama load as a game.** The
+  decision function now recognises a foreground (or parent) process whose
+  image name contains `ollama` and reports `kendi-yerel-model` rather than
+  deferring compile on the GPU-load heuristic. A new `BEYIN_NEZAKET_GPU_ESIK`
+  env var overrides the GPU threshold (default unchanged, 60).
+- **`vram_bosalt()` only unloads models this system itself loaded.** Loads
+  made through `ollama_runner` are now tracked in
+  `nezaket-ollama-yukler.json` (`OllamaYukler`); given a `state_dir`,
+  `vram_bosalt()` unloads only names in that set, leaving a model the user
+  loaded by hand for their own work untouched. Without a `state_dir` it
+  keeps the old unload-everything behaviour.
 
 <!-- yazan: codex · gpt-5.6-sol -->
 - **The Today panel now reads every Windows daily-session heading.** CRLF line

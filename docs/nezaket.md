@@ -48,15 +48,19 @@ In priority order:
 
 1. Foreground process name is in `nezaket-izin.json`'s `surecler` → busy.
 2. Foreground window's parent process name is in `ust_surecler` → busy.
-3. GPU load is at or above `gpu_esik` → busy.
-4. Foreground window is fullscreen:
+3. The foreground process or its parent is a local Ollama server (image name
+   contains `ollama`) → **not** busy (`kendi-yerel-model`). Checked before the
+   GPU-load rule on purpose: without it, this pipeline's own model inference
+   driving the GPU used to be misread as a game and deferred compile.
+4. GPU load is at or above `gpu_esik` → busy.
+5. Foreground window is fullscreen:
    - process name is in `zararsiz_tam_ekran` (a browser, a video player) →
      **not** busy.
    - anything else → busy ("oyun sezgisi" — the fullscreen-game heuristic).
-5. Every signal above is unknown (`None`) → **not** busy, `bilinmiyor=true`.
-6. Idle time is at or above `bosta_serbest_sn` (default 900 s / 15 min) and no
+6. Every signal above is unknown (`None`) → **not** busy, `bilinmiyor=true`.
+7. Idle time is at or above `bosta_serbest_sn` (default 900 s / 15 min) and no
    signal above claimed busy → **not** busy ("bosta").
-7. Otherwise → **not** busy.
+8. Otherwise → **not** busy.
 
 Idle time is checked last on purpose: it can never override a busy verdict
 reached above it. A machine sitting idle in front of a compiling Unreal
@@ -87,16 +91,27 @@ when a human releases it by id, either from the CLI (`nezaket.py serbest
 - `BEYIN_OLLAMA_KEEP_ALIVE` — passed through as Ollama's `keep_alive` when
   the gate is not busy and this is set; omitted when unset. Ignored while
   busy, when `keep_alive` is forced to `0` instead (see below).
+- `BEYIN_NEZAKET_GPU_ESIK` — overrides `gpu_esik` (from `nezaket-izin.json`
+  or the built-in default of 60) without touching that file. Unset changes
+  nothing; a non-numeric or non-positive value is ignored.
 
 ## Ollama VRAM handling
 
 On the transition from free to busy, `vram_bosalt()` calls Ollama's
-`GET /api/ps` and asks it to drop every currently-loaded model
-(`POST /api/generate {"model": name, "keep_alive": 0}`), so a game or a
-render gets the VRAM back instead of sharing it with an idle-loaded model.
-While busy, every request the Ollama runner makes carries `keep_alive: 0` for
-the same reason. Both directions are best-effort: a failure is folded into a
-returned problem list and never raises.
+`GET /api/ps` and asks it to drop every currently-loaded model this pipeline
+itself loaded (`POST /api/generate {"model": name, "keep_alive": 0}`), so a
+game or a render gets the VRAM back instead of sharing it with an
+idle-loaded model — without touching a model the user loaded by hand with
+`ollama run` for their own work. The tracked set lives in
+`nezaket-ollama-yukler.json` (`OllamaYukler`), written to by
+`ollama_runner.run_ollama` right before each generate request that would
+make Ollama load a model; `vram_bosalt(url, state_dir=...)` only unloads
+names present in that file. Without a `state_dir` there is nothing to
+consult, so every currently loaded model is unloaded — the historical,
+pre-tracking behaviour. While busy, every request the Ollama runner makes
+still carries `keep_alive: 0` for the same reason. Both directions are
+best-effort: a failure is folded into a returned problem list and never
+raises.
 
 ## Child process priority
 

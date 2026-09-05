@@ -138,6 +138,13 @@ def run_ollama(
             mesgul = nezaket.son_karar(state_dir)
         except Exception:
             mesgul = None
+        try:
+            # Record the load so nezaket.vram_bosalt only ever evicts models
+            # THIS system asked Ollama to load, never one the user loaded by
+            # hand for their own work.
+            nezaket.OllamaYukler(state_dir).kaydet(slug)
+        except Exception:
+            pass
 
     body = json.dumps(
         {

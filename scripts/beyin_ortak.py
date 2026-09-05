@@ -115,6 +115,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _clean_int(value: Any) -> int | None:
+    """``value`` as a real ``int``, or ``None`` — bools never pass as counts."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
 def estimate_tokens(chars: int) -> int:
     """Characters ÷ 4. An estimate — never call it a token count."""
     return max(0, int(chars)) // CHARS_PER_TOKEN_ESTIMATE
@@ -166,6 +173,12 @@ def record_call(
     output_chars: int,
     duration_ms: int,
     outcome: str,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    model_actual: str | None = None,
+    usage_source: str = "estimate",
     ledger_name: str = CALLS_LEDGER_NAME,
     max_bytes: int = CALLS_LEDGER_MAX_BYTES,
 ) -> None:
@@ -176,6 +189,15 @@ def record_call(
     reach the file — a ledger is not a log. ``outcome`` carries the runner's
     fixed error vocabulary (``claude-timeout``, ``ollama-model-unset``, …),
     which is written by this repository rather than by a model.
+
+    ``input_tokens``/``output_tokens``/``cache_read_tokens``/``cache_write_tokens``
+    and ``model_actual`` are real provider-reported figures when the caller has
+    them (currently: the claude backend, from its own ``--output-format json``
+    session summary) — never the chars/4 estimate, which stays in
+    ``*_tokens_est`` regardless. ``usage_source`` says which kind the real
+    fields are: ``"session-log"`` when they come from the provider, or the
+    default ``"estimate"`` when nothing better was available, in which case
+    the four real-usage fields are recorded as ``None``.
 
     Accounting must never break the call it is accounting for, so every failure
     here is swallowed the way ``write_health`` swallows its own.
@@ -193,6 +215,12 @@ def record_call(
             "output_tokens_est": estimate_tokens(output_chars),
             "duration_ms": int(duration_ms),
             "outcome": str(outcome),
+            "input_tokens": _clean_int(input_tokens),
+            "output_tokens": _clean_int(output_tokens),
+            "cache_read_tokens": _clean_int(cache_read_tokens),
+            "cache_write_tokens": _clean_int(cache_write_tokens),
+            "model_actual": str(model_actual) if model_actual else "",
+            "usage_source": str(usage_source) if usage_source else "estimate",
         }
         line = json.dumps(record, ensure_ascii=False) + "\n"
         state_dir = Path(state_dir)

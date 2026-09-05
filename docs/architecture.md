@@ -517,19 +517,39 @@ wrapper around it times the call and hands the numbers to
 {"ts": "2026-08-28T02:10:00+03:00", "backend": "ollama", "component": "flush",
  "model_tier": "haiku", "model_slug": "qwen3:8b", "input_chars": 12000,
  "output_chars": 1800, "input_tokens_est": 3000, "output_tokens_est": 450,
- "duration_ms": 5200, "outcome": "ok"}
+ "duration_ms": 5200, "outcome": "ok", "input_tokens": null, "output_tokens": null,
+ "cache_read_tokens": null, "cache_write_tokens": null, "model_actual": "",
+ "usage_source": "estimate"}
 ```
 
 `outcome` is `ok` or the runner's own error string (`claude-timeout`,
 `ollama-model-unset`, …). `model_slug` is what the backend actually resolved —
-the Claude CLI takes the tier name itself, the local backends map it through
-their `resolve_model()`; an unmapped tier records an empty slug rather than a
-guess.
+the Claude CLI is given an explicit model id per tier (`CLAUDE_MODEL_IDS`;
+`BEYIN_CLAUDE_MODEL_<TIER>` overrides it), because the CLI's own tier aliases
+have drifted (`--model haiku` has landed on Sonnet); the local backends map
+the tier through their own `resolve_model()`. An unmapped tier records an
+empty slug rather than a guess.
 
-**It is a ledger, not a log.** `record_call()` is handed character *counts*, not
-the prompt and not the response, so there is no path by which content can reach
-the file. That is the signature doing the work rather than a rule someone has to
-remember, and a test asserts the field set never grows.
+**Real usage vs. the chars ÷ 4 estimate.** `input_tokens_est`/
+`output_tokens_est` are always the character-count estimate and never claim
+to be anything else. `input_tokens`, `output_tokens`, `cache_read_tokens`,
+`cache_write_tokens`, and `model_actual` are the provider-reported figures
+when the caller has them — currently only the `claude` backend, which runs
+`claude -p --output-format json` (instead of the historical `text`) and reads
+its `usage`/`modelUsage` blocks, already aggregated across every turn of the
+session by the CLI itself. `usage_source` says which: `"session-log"` when
+these came from the provider, or the default `"estimate"` when they did not
+(local backends, a CLI error, or a reply that failed to parse as the expected
+JSON shape) — in which case the four real-usage fields are `null`.
+`durum`'s summary shows both: the chars ÷ 4 estimate always, plus a
+real-usage table when at least one call in the window has
+`usage_source == "session-log"`.
+
+**It is a ledger, not a log.** `record_call()` is handed character *counts*
+(and, for the real-usage fields, provider-reported token *counts*), never the
+prompt and never the response, so there is no path by which content can reach
+the file. That is the signature doing the work rather than a rule someone has
+to remember, and a test asserts the field set never grows.
 
 The file is append-only and capped at 5 MB. Past the cap the newest lines that
 fit in half of it are kept and rewritten atomically — halving rather than
@@ -722,13 +742,22 @@ ollama  | 3     | 5200      | 15300
 component | calls | in tokens (est) | out tokens (est)
 ----------+-------+-----------------+-----------------
 flush     | 5     | 15475           | 2250
+
+real usage (provider-reported, 6 of 9 calls):
+
+component | real calls | in tokens | out tokens | cache read | cache write
+----------+------------+-----------+------------+------------+------------
+flush     | 6          | 812       | 1930       | 998000     | 500
 ```
 
 An absent or empty ledger prints `model calls (last 7 days): none recorded`
 rather than an empty grid, and a line that will not parse costs that one call
 rather than the report. p95 is nearest-rank, the same convention
-`retrieve.benchmark` uses. The token columns are the ledger's chars ÷ 4
-estimates — the `(est)` in the header is not decoration.
+`retrieve.benchmark` uses. The token columns in the first grid are the
+ledger's chars ÷ 4 estimates — the `(est)` in the header is not decoration.
+The real-usage grid only appears when at least one call in the window has
+`usage_source == "session-log"` (§5.8) — its counts are provider-reported,
+summed only over those calls.
 
 `--json` emits the same data in the shape the future TUI health tab will consume,
 so treat it as a stable contract:
@@ -750,12 +779,16 @@ so treat it as a stable contract:
     "total_calls": 9,
     "ok_calls": 8,
     "failed_calls": 1,
+    "real_usage_calls": 6,
     "backends": [
       {"backend": "claude", "calls": 6, "median_ms": 610, "p95_ms": 2400}
     ],
     "components": [
       {"component": "flush", "calls": 5,
-       "input_tokens_est": 15475, "output_tokens_est": 2250}
+       "input_tokens_est": 15475, "output_tokens_est": 2250,
+       "real_usage_calls": 3, "input_tokens_real": 812,
+       "output_tokens_real": 1930, "cache_read_tokens_real": 998000,
+       "cache_write_tokens_real": 500}
     ]
   }
 }
