@@ -442,6 +442,57 @@ def _bounded_env_int(name: str, default: int) -> int:
     return max(0, value)
 
 
+# Registry hub matching (K1, 2026-09-05). The old probe built
+# ``Concept(name=daily_body, tags=())`` and handed it to ``assign_memberships``,
+# whose tag path was therefore dead: only a raw ``title_key in body`` substring
+# test survived, so a daily that never spelled a title key fell to the catch-all
+# hub and the duplicate registry went blind to the day's own topic (measured
+# 2026-09-04: 77/527 rows, ``odenaos-hafiza`` invisible on an OdenaOS day).
+_ASCII_FOLD = str.maketrans("ıiğüşöçâîû", "iigusocaiu")
+_HUB_MIN_TAG_LEN = 5
+
+
+def _match_fold(value: str) -> str:
+    """turkish_fold plus an ASCII squash so ``hafıza`` meets the tag ``hafiza``."""
+    return rootmap.turkish_fold(value).translate(_ASCII_FOLD)
+
+
+def daily_hub_matches(daily_body: str, config: dict[str, Any] | None) -> set[str]:
+    """Hub ids the daily touches: whole-token hits of hub tags and title keys.
+
+    Tags shorter than ``_HUB_MIN_TAG_LEN`` are skipped (``sse``, ``llm`` would
+    over-match); a key ending in ``-`` is a prefix (``ai-``). ``assign_memberships``
+    is left untouched — the root map depends on its concept-side semantics.
+    """
+    if not daily_body or not config:
+        return set()
+    body = _match_fold(daily_body)
+
+    def hit(key: str) -> bool:
+        key = _match_fold(str(key))
+        prefix = key.endswith("-")
+        core = key.rstrip("-")
+        if not core:
+            return False
+        pattern = r"(?<![^\W_])" + re.escape(core) + ("" if prefix else r"(?![^\W_])")
+        return re.search(pattern, body) is not None
+
+    matched: set[str] = set()
+    for hub in config.get("hubs", []):
+        # A title key is specific by design; a lone tag is not ("iletisim" pulled
+        # kisisel-saglik into a Vale day) — tags need two distinct hits.
+        if any(hit(key) for key in hub.get("title_keys", [])):
+            matched.add(hub["id"])
+            continue
+        tag_hits = sum(
+            1 for tag in hub.get("tags", [])
+            if len(str(tag)) >= _HUB_MIN_TAG_LEN and hit(tag)
+        )
+        if tag_hits >= 2:
+            matched.add(hub["id"])
+    return matched
+
+
 def build_compact_registry(
     index_full_text: str,
     concepts_dir: Path,
@@ -472,19 +523,10 @@ def build_compact_registry(
     selected: list[str] = []
     selected_set: set[str] = set()
     if config is not None and daily_body:
-        daily_probe = rootmap.Concept(
-            name=daily_body,
-            title="",
-            aliases=(),
-            tags=(),
-            updated="",
-            body="",
-            links=(),
-        )
-        daily_memberships = rootmap.assign_memberships([daily_probe], config)
-        matched_hubs = {
-            hub_id for hub_id, members in daily_memberships.items() if members
-        }
+        matched_hubs = daily_hub_matches(daily_body, config)
+        if not matched_hubs:
+            # Same fallback the old probe had: an unmatched daily sees the catch-all.
+            matched_hubs = {config.get("catch_all")}
         concept_memberships = rootmap.assign_memberships(concepts, config)
         topical = {
             rootmap.turkish_fold(concept.name)
