@@ -73,3 +73,26 @@ LoCoMo is retrieval-only and uses the official `data/locomo10.json` from Snap Re
 The Turkish MTEB datasets are translations, so they do not measure the same language distribution as official English BEIR. SQLite FTS5 BM25 fixes `k1=1.2, b=0.75`; common Anserini BEIR runs use `k1=0.9, b=0.4`, so absolute results are not directly comparable. LongMemEval-S here is English-only.
 
 BM25 tokenizer behavior and weights are identical across all checkpoints. Identical BM25 numbers are therefore expected, and the runner deliberately reuses byte-identical checkpoint groups V1/V3 and V7/V8/V9. RRF differs between V2/V4 and V5+, while Profile A (V1/V3) has no RRF mode.
+
+<!-- yazan: codex · gpt-5.6-sol -->
+
+## E2E LoCoMo
+
+The end-to-end experiment under `e2e/` compares raw-turn BM25, notes produced by the real daily-log → `compile.py` → concept-note pipeline, and full conversation context. All conditions use the same Ollama answerer and Mem0 public J-score judge prompt. Generated vaults, checkpoints, costs, and reports stay under ignored `.e2e/`; condition c automatically uses the fixed seed-42 stratified 300-question subset, while a and b run all 1,531 scored questions.
+
+Run the live experiment from the repository root:
+
+```powershell
+python tools/benchmark/e2e/vault_kur.py
+python tools/benchmark/e2e/derle.py --backend claude --max-calls 3 --timeout 900
+python tools/benchmark/e2e/cevapla.py --condition a --backend ollama --workers 1 --resume
+python tools/benchmark/e2e/cevapla.py --condition b --backend ollama --workers 1 --resume
+python tools/benchmark/e2e/cevapla.py --condition c --backend ollama --workers 1 --resume
+python tools/benchmark/e2e/yargila.py --condition a --backend claude --workers 4 --resume
+python tools/benchmark/e2e/yargila.py --condition b --backend claude --workers 4 --resume
+python tools/benchmark/e2e/yargila.py --condition c --backend claude --workers 4 --resume
+$benchPython = "$env:USERPROFILE/.local/venvs/benchmark/Scripts/python.exe"
+& $benchPython tools/benchmark/e2e/skorla_e2e.py
+```
+
+Live durations are not yet known. Answer and judge stages checkpoint incrementally and support `--resume`; `derle.py` resumes inherently from compiler state and advances until no changed daily logs remain. Use `--backend fake` on compile, answer, and judge stages for a deterministic offline pipeline test.

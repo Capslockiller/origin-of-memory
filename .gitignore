@@ -17,3 +17,4 @@ tools/benchmark/.data/
 tools/benchmark/.versions/
 tools/benchmark/.out/
 tools/benchmark/.out-*/
+tools/benchmark/.e2e/
