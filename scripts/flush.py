@@ -41,6 +41,8 @@ STALE_HOOK_INPUT_SECONDS = 3_600
 STALE_FLUSH_STATE_SECONDS = 7 * 24 * 60 * 60
 COMPILE_MIN_INTERVAL_ENV = "BEYIN_COMPILE_MIN_INTERVAL_HOURS"
 DEFAULT_COMPILE_MIN_INTERVAL_HOURS = 20.0
+COMPILE_TRIGGER_TTL_ENV = "BEYIN_COMPILE_TRIGGER_TTL_MIN"
+DEFAULT_COMPILE_TRIGGER_TTL_MINUTES = 180.0
 
 # yazan: codex · model: gpt-5.6-sol
 
@@ -512,16 +514,55 @@ def maybe_trigger_compile(
         return False
 
     state_dir.mkdir(parents=True, exist_ok=True)
+    marker_max_age = 2 * 24 * 60 * 60
+    now_epoch = current.timestamp()
+    for old_trigger in state_dir.glob("compile-trigger-????-??-??"):
+        try:
+            details = old_trigger.lstat()
+            if (
+                stat.S_ISREG(details.st_mode)
+                and not stat.S_ISLNK(details.st_mode)
+                and now_epoch - details.st_mtime > marker_max_age
+            ):
+                old_trigger.unlink()
+        except (FileNotFoundError, OSError):
+            continue
+
     trigger = state_dir / f"compile-trigger-{current.strftime('%Y-%m-%d')}"
+    raw_ttl = (os.environ.get(COMPILE_TRIGGER_TTL_ENV) or "").strip()
+    try:
+        trigger_ttl_minutes = (
+            float(raw_ttl) if raw_ttl else DEFAULT_COMPILE_TRIGGER_TTL_MINUTES
+        )
+    except ValueError:
+        trigger_ttl_minutes = DEFAULT_COMPILE_TRIGGER_TTL_MINUTES
+    if trigger_ttl_minutes < 0 or trigger_ttl_minutes != trigger_ttl_minutes:
+        trigger_ttl_minutes = DEFAULT_COMPILE_TRIGGER_TTL_MINUTES
+
     try:
         descriptor = os.open(trigger, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
-        write_health_skip(
-            state_dir,
-            "skip:compile-trigger:day-already-claimed",
-            component="flush",
-        )
-        return False
+        try:
+            details = trigger.lstat()
+            stale = (
+                stat.S_ISREG(details.st_mode)
+                and not stat.S_ISLNK(details.st_mode)
+                and now_epoch - details.st_mtime > trigger_ttl_minutes * 60
+            )
+            if stale:
+                trigger.unlink()
+                descriptor = os.open(
+                    trigger, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+                )
+            else:
+                raise FileExistsError
+        except (FileExistsError, FileNotFoundError, OSError):
+            write_health_skip(
+                state_dir,
+                "skip:compile-trigger:day-already-claimed",
+                component="flush",
+            )
+            return False
     os.close(descriptor)
 
     environment = os.environ.copy()
@@ -529,6 +570,28 @@ def maybe_trigger_compile(
     # The compile default (backend+mode) is sealed by the A4 gate decision;
     # a flush running on a local backend must not leak it into the compiler.
     environment["BEYIN_MODEL_BACKEND"] = "claude"
+    maintenance = vault_root / ".claude" / "scripts" / "bakim.py"
+    if maintenance.is_file():
+        try:
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(maintenance),
+                    "--uygula",
+                    "--state-dir",
+                    str(state_dir),
+                    "--hook-state-dir",
+                    str(vault_root / ".claude" / "hooks" / ".state"),
+                ],
+                cwd=vault_root,
+                env=environment,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     launcher = popen_factory or subprocess.Popen
     try:
         launcher(

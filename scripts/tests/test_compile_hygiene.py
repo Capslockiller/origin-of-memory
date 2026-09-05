@@ -272,7 +272,11 @@ class TriggerIntervalTests(unittest.TestCase):
         self.launched: list[list[str]] = []
         # These must be genuinely absent, not blank: flush treats a set-but-empty
         # BEYIN_FAKE_HOUR as a parse error.
-        self._unset("BEYIN_FAKE_HOUR", flush.COMPILE_MIN_INTERVAL_ENV)
+        self._unset(
+            "BEYIN_FAKE_HOUR",
+            flush.COMPILE_MIN_INTERVAL_ENV,
+            flush.COMPILE_TRIGGER_TTL_ENV,
+        )
 
     def _unset(self, *names: str) -> None:
         for name in names:
@@ -391,6 +395,41 @@ class TriggerIntervalTests(unittest.TestCase):
         self.assertIn(
             "skip:compile-trigger:day-already-claimed", self._skip_reasons()
         )
+
+    def test_a_stale_same_day_claim_is_replaced_and_retried(self) -> None:
+        trigger = self.state_dir / "compile-trigger-2026-08-27"
+        trigger.write_text("", encoding="utf-8")
+        stale = (EVENING - dt.timedelta(minutes=31)).timestamp()
+        os.utime(trigger, (stale, stale))
+
+        with mock.patch.dict(
+            "os.environ", {flush.COMPILE_TRIGGER_TTL_ENV: "30"}
+        ):
+            self.assertTrue(self._trigger())
+
+        self.assertEqual(len(self.launched), 1)
+        self.assertGreaterEqual(trigger.stat().st_mtime, stale)
+
+    def test_claim_markers_older_than_two_days_are_pruned(self) -> None:
+        old = self.state_dir / "compile-trigger-2026-08-24"
+        old.write_text("", encoding="utf-8")
+        stamp = (EVENING - dt.timedelta(days=2, seconds=1)).timestamp()
+        os.utime(old, (stamp, stamp))
+
+        self.assertTrue(self._trigger())
+
+        self.assertFalse(old.exists())
+
+    def test_compiler_launcher_applies_maintenance_when_installed(self) -> None:
+        maintenance = self.root / ".claude" / "scripts" / "bakim.py"
+        maintenance.write_text("# fixture\n", encoding="utf-8")
+
+        with mock.patch("flush.subprocess.run") as runner:
+            self.assertTrue(self._trigger())
+
+        command = runner.call_args.args[0]
+        self.assertEqual(command[1:3], [str(maintenance), "--uygula"])
+        self.assertIn("--hook-state-dir", command)
 
     def test_before_the_evening_nothing_fires(self) -> None:
         morning = EVENING.replace(hour=9)
