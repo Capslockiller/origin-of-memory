@@ -14,6 +14,7 @@ import re
 import shutil
 import tempfile
 from typing import Any, Iterable
+import uuid
 
 from beyin_ortak import _atomic_write_json, write_health
 
@@ -348,10 +349,61 @@ def _inbound_counts(concepts: Iterable[Concept]) -> dict[str, int]:
     return counts
 
 
+def _unlink_quietly(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
 def _publish(staged: dict[Path, Path]) -> None:
-    for temporary, destination in staged.items():
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(temporary, destination)
+    """Publish the whole map layer or none of it.
+
+    The map is one document spread over several files: an index that promises
+    hubs, and hubs that answer for it. Renaming them one by one leaves readers
+    holding an index whose hubs are a generation behind if the loop dies half
+    way. Phase one copies every live target aside as ``<dest>.bak-<run id>``
+    and writes the new content next to it as ``<dest>.tmp-<run id>``; phase two
+    renames them all. Any failure restores what was already renamed and
+    re-raises, so a partial map never reaches the vault.
+    """
+    run_id = uuid.uuid4().hex[:12]
+    entries: list[tuple[Path, Path | None]] = []
+    temporaries: list[Path] = []
+    renamed: list[tuple[Path, Path | None]] = []
+    try:
+        for temporary, destination in staged.items():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            backup: Path | None = None
+            if destination.exists():
+                backup = destination.with_name(f"{destination.name}.bak-{run_id}")
+                shutil.copy2(destination, backup)
+            entries.append((destination, backup))
+            target = destination.with_name(f"{destination.name}.tmp-{run_id}")
+            shutil.copyfile(temporary, target)
+            temporaries.append(target)
+        for index, (destination, backup) in enumerate(entries):
+            os.replace(temporaries[index], destination)
+            renamed.append((destination, backup))
+    except BaseException:
+        for destination, backup in reversed(renamed):
+            try:
+                if backup is None:
+                    if destination.exists():
+                        destination.unlink()
+                else:
+                    os.replace(backup, destination)
+            except OSError:
+                pass
+        for target in temporaries:
+            _unlink_quietly(target)
+        for _destination, backup in entries:
+            if backup is not None:
+                _unlink_quietly(backup)
+        raise
+    for _destination, backup in entries:
+        if backup is not None:
+            _unlink_quietly(backup)
 
 
 def regenerate(

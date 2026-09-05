@@ -43,6 +43,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writer label. A PowerShell-backed regression test locks the CRLF and
   annotated-heading contract.
 
+<!-- yazan: claude · opus-5 -->
+- **Rejected or empty compiler output no longer consumes the daily it came
+  from.** A daily log is marked `ingested` only when every note the run produced
+  passed both the directive and the schema gate. Any other ending — a
+  quarantined output, a schema rejection, or a model call that wrote nothing —
+  now promotes nothing from that run (rejection is all-or-nothing per daily),
+  records the file in the new `rejected` state ledger with its digest, reason
+  slugs, timestamp and attempt count, and offers it again on the next compile.
+  After `MAX_REJECT_ATTEMPTS = 3` attempts on the same content — 2 for an empty
+  answer — the entry moves to `parked` with the health warning
+  `parked:<reason>`; parked is still not ingested, and editing the daily makes
+  it eligible again. Previously the clean half of a rejected run was published
+  *and* the source was consumed, so the held notes lost the only material they
+  could have been rebuilt from, and a single silent model call could retire a
+  daily forever. Old state files without the two new keys load unchanged.
+- **Publication is transactional in both publishers.**
+  `compile._promote_changes()` and `rootmap._publish()` now stage every write as
+  `<dest>.tmp-<run id>` beside a `<dest>.bak-<run id>` copy of the live file,
+  then rename in a second loop; a failure restores the destinations already
+  renamed, deletes the temporaries and fails the run, so a half-published
+  compile or a root map without its hubs can no longer reach the vault.
+- **The root map and the search index are rebuilt before the daily is marked
+  ingested.** A failed rebuild used to be downgraded to a health warning after
+  the source had already been consumed, leaving promoted notes no reader could
+  find. The promotion is now rolled back and the run fails with
+  `fail:rootmap-regen-failed` / `fail:retrieve-rebuild-failed`.
+- **A concept written under a subdirectory is refused.** The output policy
+  allowed `knowledge/concepts/<sub>/x.md` while retrieve, the root map and the
+  manifest all use the non-recursive `concepts/*.md` glob, so such a note was
+  promoted into invisibility. It is now held with the schema-gate reason
+  `nested-path`, and the promotion path refuses it a second time.
+
 ## [0.5.0] - 2026-09-02
 
 ### Added

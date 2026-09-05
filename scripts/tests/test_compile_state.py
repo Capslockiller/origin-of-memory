@@ -86,8 +86,16 @@ class CompileHarness(unittest.TestCase):
         return [entry["status"] for entry in self._state()["runs"]]
 
 
-class NoChangesIsBenignTests(CompileHarness):
-    def test_no_changes_ingests_and_continues(self) -> None:
+class NoChangesDoesNotConsumeTests(CompileHarness):
+    """An empty answer is benign for the RUN and never final for the DAILY.
+
+    "The model wrote nothing" is a statement about one call, not about the
+    file. Marking the daily ingested on that basis handed the model an
+    irreversible authority it was never given: the source would be dropped
+    from the queue forever on a single silent call.
+    """
+
+    def test_no_changes_does_not_consume_the_daily_and_continues(self) -> None:
         self._daily("2026-08-12.md")
         self._daily("2026-08-13.md")
 
@@ -102,7 +110,12 @@ class NoChangesIsBenignTests(CompileHarness):
             self.assertEqual(compile_module.main([]), 0)
 
         state = self._state()
-        self.assertIn("2026-08-12.md", state["ingested"])
+        self.assertNotIn("2026-08-12.md", state["ingested"])
+        self.assertEqual(
+            state["rejected"]["2026-08-12.md"]["reasons"], ["no-changes"]
+        )
+        self.assertEqual(state["rejected"]["2026-08-12.md"]["attempts"], 1)
+        # The empty call stops nothing: the next daily is still compiled.
         self.assertIn("2026-08-13.md", state["ingested"])
         self.assertEqual(self._statuses(), ["ok:no-changes", "ok"])
         self.assertEqual(state["last_status"], "ok")
@@ -111,7 +124,7 @@ class NoChangesIsBenignTests(CompileHarness):
             (self.root / "knowledge" / "concepts" / "deneme.md").exists()
         )
 
-    def test_second_run_does_not_recall_the_model(self) -> None:
+    def test_a_second_empty_answer_parks_the_daily(self) -> None:
         self._daily("2026-08-12.md")
         calls: list[str] = []
 
@@ -121,10 +134,78 @@ class NoChangesIsBenignTests(CompileHarness):
 
         with mock.patch.object(compile_module, "_run_claude", stub):
             self.assertEqual(compile_module.main([]), 0)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(self._state()["rejected"]["2026-08-12.md"]["attempts"], 1)
+            # Re-presented rather than dropped.
+            self.assertEqual(compile_module.main([]), 0)
+            self.assertEqual(len(calls), 2)
+            # Parked: the bound stops the nightly model call, but the file is
+            # still not recorded as ingested.
             self.assertEqual(compile_module.main([]), 0)
 
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(self._statuses(), ["ok:no-changes"])
+        state = self._state()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self._statuses(), ["ok:no-changes", "parked:no-changes"])
+        self.assertNotIn("2026-08-12.md", state["ingested"])
+        self.assertNotIn("2026-08-12.md", state["rejected"])
+        parked = state["parked"]["2026-08-12.md"]
+        self.assertEqual(parked["reason"], "no-changes")
+        self.assertEqual(parked["attempts"], compile_module.MAX_NO_CHANGE_ATTEMPTS)
+        self.assertIn("parked:no-changes", self._health()["warnings"])
+
+    def test_editing_a_parked_daily_offers_it_again(self) -> None:
+        self._daily("2026-08-12.md")
+        calls: list[str] = []
+
+        def empty(prompt: str, _stage: Path) -> str | None:
+            calls.append("call")
+            return None
+
+        with mock.patch.object(compile_module, "_run_claude", empty):
+            for _ in range(3):
+                self.assertEqual(compile_module.main([]), 0)
+        self.assertEqual(len(calls), 2)
+
+        self._daily("2026-08-12.md", body="Yeni içerik.\n")
+
+        def writer(_prompt: str, stage: Path) -> str | None:
+            target = stage / "knowledge" / "concepts" / "deneme.md"
+            target.write_text(CONCEPT_TEXT, encoding="utf-8")
+            return None
+
+        with mock.patch.object(compile_module, "_run_claude", writer):
+            self.assertEqual(compile_module.main([]), 0)
+
+        state = self._state()
+        self.assertIn("2026-08-12.md", state["ingested"])
+        # A daily that finally compiled keeps no rejection history.
+        self.assertNotIn("2026-08-12.md", state["parked"])
+        self.assertNotIn("2026-08-12.md", state["rejected"])
+
+
+class StateCompatibilityTests(CompileHarness):
+    def test_a_state_file_without_the_rejection_keys_still_loads(self) -> None:
+        self.state_path.write_text(
+            json.dumps({"ingested": {"eski.md": "abc"}, "runs": []}),
+            encoding="utf-8",
+        )
+
+        state = compile_module.load_state(self.state_path)
+
+        self.assertEqual(state["ingested"], {"eski.md": "abc"})
+        self.assertEqual(state["rejected"], {})
+        self.assertEqual(state["parked"], {})
+
+    def test_wrongly_typed_rejection_keys_are_treated_as_absent(self) -> None:
+        self.state_path.write_text(
+            json.dumps({"ingested": {}, "rejected": [], "parked": "?"}),
+            encoding="utf-8",
+        )
+
+        state = compile_module.load_state(self.state_path)
+
+        self.assertEqual(state["rejected"], {})
+        self.assertEqual(state["parked"], {})
 
 
 class GenuineFailureStopsTests(CompileHarness):
@@ -272,8 +353,53 @@ class RootMapIntegrationTests(CompileHarness):
             vault_root=self.root, state_dir=self.state_dir
         )
 
-    def test_retrieve_rebuild_failure_is_only_a_health_warning(self) -> None:
+    def test_retrieve_rebuild_failure_rolls_back_and_fails_the_run(self) -> None:
+        """The index is rebuilt BEFORE the daily is consumed, not after.
+
+        A promotion the index never saw is invisible to every reader, so a
+        failed rebuild is not a warning about a finished run — it means the
+        run did not finish. The files go back and the daily stays queued.
+        """
         self._daily("2026-08-12.md")
+        before = (self.root / "knowledge" / "index-full.md").read_text(
+            encoding="utf-8"
+        )
+
+        def stub(_prompt: str, stage: Path) -> str | None:
+            full = stage / "knowledge" / "index-full.md"
+            full.write_text(
+                full.read_text(encoding="utf-8") + "<!-- değişiklik -->\n",
+                encoding="utf-8",
+            )
+            (stage / "knowledge" / "concepts" / "deneme.md").write_text(
+                CONCEPT_TEXT, encoding="utf-8"
+            )
+            return None
+
+        self.retrieve_build.side_effect = OSError("sentetik indeks hatası")
+        with mock.patch.object(compile_module, "_run_claude", stub):
+            self.assertEqual(compile_module.main([]), 0)
+
+        state = self._state()
+        self.assertEqual(state["last_status"], "fail:retrieve-rebuild-failed")
+        self.assertEqual(state["ingested"], {})
+        self.assertEqual(state["concepts_manifest"], "")
+        self.assertEqual(
+            (self.root / "knowledge" / "index-full.md").read_text(
+                encoding="utf-8"
+            ),
+            before,
+        )
+        self.assertFalse(
+            (self.root / "knowledge" / "concepts" / "deneme.md").exists()
+        )
+        self.assertEqual(self._health()["error"], "retrieve-rebuild-failed")
+
+    def test_root_map_failure_rolls_back_before_the_index_is_touched(self) -> None:
+        self._daily("2026-08-12.md")
+        before = (self.root / "knowledge" / "index-full.md").read_text(
+            encoding="utf-8"
+        )
 
         def stub(_prompt: str, stage: Path) -> str | None:
             full = stage / "knowledge" / "index-full.md"
@@ -283,14 +409,42 @@ class RootMapIntegrationTests(CompileHarness):
             )
             return None
 
-        self.retrieve_build.side_effect = OSError("sentetik indeks hatası")
+        self.rootmap_regenerate.side_effect = RuntimeError("harita çöktü")
         with mock.patch.object(compile_module, "_run_claude", stub):
             self.assertEqual(compile_module.main([]), 0)
 
-        self.assertEqual(self._state()["last_status"], "ok")
-        health = self._health()
-        self.assertEqual(health["error"], "retrieve-rebuild-failed")
-        self.assertIn("retrieve-rebuild-failed", health["warnings"])
+        self.retrieve_build.assert_not_called()
+        state = self._state()
+        self.assertEqual(state["last_status"], "fail:rootmap-regen-failed")
+        self.assertEqual(state["ingested"], {})
+        self.assertEqual(
+            (self.root / "knowledge" / "index-full.md").read_text(
+                encoding="utf-8"
+            ),
+            before,
+        )
+        self.assertEqual(self._health()["error"], "rootmap-regen-failed")
+
+    def test_a_rolled_back_daily_is_offered_again(self) -> None:
+        self._daily("2026-08-12.md")
+
+        def stub(_prompt: str, stage: Path) -> str | None:
+            (stage / "knowledge" / "concepts" / "deneme.md").write_text(
+                CONCEPT_TEXT, encoding="utf-8"
+            )
+            return None
+
+        self.retrieve_build.side_effect = OSError("sentetik indeks hatası")
+        with mock.patch.object(compile_module, "_run_claude", stub):
+            self.assertEqual(compile_module.main([]), 0)
+        self.retrieve_build.side_effect = None
+        with mock.patch.object(compile_module, "_run_claude", stub):
+            self.assertEqual(compile_module.main([]), 0)
+
+        self.assertIn("2026-08-12.md", self._state()["ingested"])
+        self.assertTrue(
+            (self.root / "knowledge" / "concepts" / "deneme.md").is_file()
+        )
 
 
 if __name__ == "__main__":
