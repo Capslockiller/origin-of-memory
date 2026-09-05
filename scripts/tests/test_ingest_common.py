@@ -53,6 +53,9 @@ SECRET_NEEDLES = (
     "MIIEowIBAAKCAQEA",
 )
 
+FAKE_TCKN = "10000000146"
+FAKE_API_KEY = "FakeArchiveKey123456"
+
 
 def _session(
     turns: list[tuple[str, str]],
@@ -194,6 +197,26 @@ class SummaryContractTests(unittest.TestCase):
         self.assertEqual(result.status, "ok")
         self.assertNotIn(leaked, result.summary)
         self.assertIn("[SIR:github-token]", result.summary)
+
+    def test_entry_gate_redacts_tckn_and_api_key_before_daily_persistence(self) -> None:
+        sensitive = f"TCKN {FAKE_TCKN}; api_key={FAKE_API_KEY}"
+        turns = [("user", sensitive)] + [
+            ("assistant", f"arşiv yanıtı {index}") for index in range(5)
+        ]
+        session = _session(turns)
+        with mock.patch.object(flush, "_run_claude", echo_stub):
+            result = ingest_common.summarize_session(
+                session, self.root, self.state_dir
+            )
+        self.assertEqual(result.status, "ok")
+        daily_name = ingest_common.append_historical(
+            self.root, result.summary, session
+        )
+        written = (self.root / "daily" / daily_name).read_text(encoding="utf-8")
+        self.assertNotIn(FAKE_TCKN, written)
+        self.assertNotIn(FAKE_API_KEY, written)
+        self.assertIn("[PII:tckn]", written)
+        self.assertIn("[SIR:kimlik-atamasi]", written)
 
 
 class HistoricalAppendTests(unittest.TestCase):

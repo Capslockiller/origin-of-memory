@@ -26,10 +26,10 @@ from typing import Any, Callable, Sequence
 from beyin_ortak import write_health
 import compile as compile_module
 import flush
+import giris_kapisi
 import ingest_common
 import nezaket
 import retrieve
-import secret_guard
 
 
 # One fixed marker prefixing the single machine-readable ``--json`` output
@@ -245,10 +245,10 @@ def _spawn_compile(
     return True, returncode, None
 
 
-def _compose_body(text: str, baslik: str) -> tuple[str, str, list[str]]:
-    """Redact, then fold an optional title in — title and text share one gate.
+def _compose_body(text: str, baslik: str) -> tuple[str, str]:
+    """Fold an optional, already-cleaned title into an already-cleaned body.
 
-    Returns ``(body, check_text, hits)``. ``body`` is the markdown-formatted
+    Returns ``(body, check_text)``. ``body`` is the markdown-formatted
     text that actually lands in the daily log (title bolded on its own
     line); ``check_text`` is the same content WITHOUT that ``**`` wrapping,
     which is what the directive-shaped gate must see — ``DIRECTIVE_SHAPED``
@@ -256,21 +256,25 @@ def _compose_body(text: str, baslik: str) -> tuple[str, str, list[str]]:
     directive-shaped title (``**TALİMAT: ...**``) from it entirely.
     """
     if baslik:
-        redacted_baslik, baslik_hits = secret_guard.redact(baslik)
+        body = f"**{baslik}**\n\n{text}"
+        check_text = f"{baslik}\n{text}"
     else:
-        redacted_baslik, baslik_hits = "", []
-    redacted_text, text_hits = secret_guard.redact(text)
-    hits: list[str] = []
-    for name in [*baslik_hits, *text_hits]:
-        if name not in hits:
-            hits.append(name)
-    if baslik:
-        body = f"**{redacted_baslik}**\n\n{redacted_text}"
-        check_text = f"{redacted_baslik}\n{redacted_text}"
-    else:
-        body = redacted_text
-        check_text = redacted_text
-    return body, check_text, hits
+        body = text
+        check_text = text
+    return body, check_text
+
+
+def _secret_classes(warnings: Sequence[str]) -> list[str]:
+    """Keep the existing ``sir_karartildi`` result contract."""
+    classes: list[str] = []
+    marker = "warn:secret-redacted-"
+    for warning in warnings:
+        if not warning.startswith(marker) or ":" not in warning:
+            continue
+        for name in warning.rsplit(":", 1)[1].split(","):
+            if name and name not in classes:
+                classes.append(name)
+    return classes
 
 
 def run(
@@ -295,6 +299,13 @@ def run(
     # inspected the un-normalised original. See docs/kaydet.md.
     text = normalize_text(text)
     baslik = normalize_text((args.baslik or "").strip())
+    text, input_warnings = giris_kapisi.temizle(
+        text, component="kaydet-input", state_dir=state_dir
+    )
+    baslik, title_warnings = giris_kapisi.temizle(
+        baslik, component="kaydet-input", state_dir=state_dir
+    )
+    input_warnings.extend(title_warnings)
 
     if not text.strip():
         write_health(state_dir, BOS_SLUG, component="kaydet", health_name=HEALTH_NAME)
@@ -313,7 +324,11 @@ def run(
     daily_path = vault_root / "daily" / f"{now.strftime('%Y-%m-%d')}.md"
 
     with ingest_common.flush_session_lock(SESSION_LOCK_ID, state_dir):
-        body, check_text, hits = _compose_body(text, baslik)
+        body, check_text = _compose_body(text, baslik)
+        body, output_warnings = giris_kapisi.temizle(
+            body, component="kaydet-output", state_dir=state_dir
+        )
+        hits = _secret_classes([*input_warnings, *output_warnings])
         if hits:
             write_health(
                 state_dir,

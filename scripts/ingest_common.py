@@ -24,8 +24,8 @@ from typing import Any, Iterator, NamedTuple, Sequence
 from beyin_ortak import _atomic_write_json, _lock_exclusive, write_health
 import claude_runner
 import flush
+import giris_kapisi
 import nezaket
-import secret_guard
 
 
 SCRIPT_DIR = flush.SCRIPT_DIR
@@ -386,7 +386,7 @@ def summarize_session(
     model: str = DEFAULT_MODEL,
     min_turns: int = MIN_TURNS,
 ) -> SummaryResult:
-    """Tek boğaz: sır bekçisi girişte ve çıkışta, şema doğrulaması arada."""
+    """Tek boğaz: ortak giriş kapısı iki uçta, şema doğrulaması arada."""
     if session.source == "gemini":
         # Adapter günleri 200k gövde karakterinde böler; flush'ın 15k/30-tur
         # penceresi burada yeniden uygulanırsa günün başı sessizce kaybolur.
@@ -419,21 +419,16 @@ def summarize_session(
     if turn_count < min_turns:
         return SummaryResult("", "bos", "below-minimum-turns")
 
+    transcript, _input_warnings = giris_kapisi.temizle(
+        transcript,
+        component="ingest-input",
+        state_dir=state_dir,
+    )
+
     if flush.DIRECTIVE_SHAPED.search(transcript):
         write_health(
             state_dir,
             "warn:directive-shaped-transcript",
-            warning=True,
-            component="ingest",
-            health_name=HEALTH_NAME,
-        )
-
-    # Sır bekçisi (giriş): kimlik bilgisi kalıpları özetçiye hiç gitmesin.
-    transcript, input_hits = secret_guard.redact(transcript)
-    if input_hits:
-        write_health(
-            state_dir,
-            "warn:secret-redacted-input:" + ",".join(input_hits),
             warning=True,
             component="ingest",
             health_name=HEALTH_NAME,
@@ -471,16 +466,11 @@ def summarize_session(
     if not flush.validate_summary(summary):
         return SummaryResult("", "fail", "summary-schema-invalid")
 
-    # Sır bekçisi (çıkış): özetçi girişte kaçanı aynen aktarmış olabilir.
-    summary, output_hits = secret_guard.redact(summary)
-    if output_hits:
-        write_health(
-            state_dir,
-            "warn:secret-redacted-output:" + ",".join(output_hits),
-            warning=True,
-            component="ingest",
-            health_name=HEALTH_NAME,
-        )
+    summary, _output_warnings = giris_kapisi.temizle(
+        summary,
+        component="ingest-output",
+        state_dir=state_dir,
+    )
     return SummaryResult(summary, "ok", "")
 
 

@@ -25,6 +25,8 @@ MOMENT = dt.datetime(2026, 8, 27, 14, 5, tzinfo=dt.timezone.utc).astimezone()
 DATE_TEXT = MOMENT.strftime("%Y-%m-%d")
 TIME_TEXT = MOMENT.strftime("%H:%M")
 ANCHOR_ID = "kaydet-" + MOMENT.strftime("%Y%m%dT%H%M%S")
+FAKE_TCKN = "10000000146"
+FAKE_API_KEY = "FakeKaydetKey123456"
 
 
 def _args(
@@ -190,6 +192,20 @@ class EmptyAndSizeGateTests(KaydetHarness):
 
 
 class SecretRedactionTests(KaydetHarness):
+    def test_entry_gate_redacts_tckn_and_api_key_before_daily_persistence(self) -> None:
+        args = _args(
+            metin=f"TCKN {FAKE_TCKN}; api_key={FAKE_API_KEY}",
+            vault_root=self.vault,
+            state_dir=self.state_dir,
+        )
+        exit_code, _result = self._no_compile_script_run(args)
+        self.assertEqual(exit_code, 0)
+        written = self._daily().read_text(encoding="utf-8")
+        self.assertNotIn(FAKE_TCKN, written)
+        self.assertNotIn(FAKE_API_KEY, written)
+        self.assertIn("[PII:tckn]", written)
+        self.assertIn("[SIR:kimlik-atamasi]", written)
+
     def test_a_secret_in_the_body_is_redacted_before_it_reaches_daily(self) -> None:
         secret = "AKIA" + "X" * 16
         args = _args(

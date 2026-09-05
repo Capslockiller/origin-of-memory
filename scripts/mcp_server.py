@@ -22,6 +22,7 @@ from typing import Any, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import retrieve  # noqa: E402  — sibling script, stdlib-only
+import giris_kapisi  # noqa: E402  — shared data-only framing
 
 
 SERVER_NAME = "origin-of-memory"
@@ -208,7 +209,12 @@ class MemoryServer:
             f"{len(notes)} note(s) from the memory vault, "
             f"{result.get('total_chars', 0)} characters total."
         )
-        return _text_result(header + "\n\n" + "\n\n---\n\n".join(blocks))
+        return _text_result(
+            giris_kapisi.HOOK_HEADER
+            + header
+            + "\n\n"
+            + "\n\n---\n\n".join(blocks)
+        )
 
     def _tool_memory_root_map(self, _arguments: dict[str, Any]) -> dict[str, Any]:
         if not self.index_path.is_file():

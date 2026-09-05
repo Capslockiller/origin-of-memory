@@ -55,6 +55,7 @@ class CompositionTests(ContextPackHarness):
         block = context_pack.compose_context("müşterek", vault_root=self.root)
 
         self.assertTrue(block.startswith(context_pack.HEADER + "\n\n"))
+        self.assertIn(context_pack.giris_kapisi.HOOK_HEADER.strip(), block)
         self.assertIn("# Hafıza haritası", block)
         self.assertEqual(block.count("### knowledge/concepts/"), 3)
         self.assertNotIn("müşterek not 3", block)
@@ -103,6 +104,15 @@ class CompositionTests(ContextPackHarness):
         self.build()
         block = context_pack.compose_context("eşleşmeyen", vault_root=self.root)
         self.assertIn(context_pack.NO_MATCHES, block)
+
+    def test_returned_note_bodies_are_data_only_framed(self) -> None:
+        self.write_note("bir", "çerçeve aranan not gövdesi")
+        self.build()
+        block = context_pack.compose_context("çerçeve", vault_root=self.root)
+        self.assertLess(
+            block.index(context_pack.giris_kapisi.HOOK_HEADER.strip()),
+            block.index("çerçeve aranan not gövdesi"),
+        )
 
 
 class ClipboardTests(unittest.TestCase):

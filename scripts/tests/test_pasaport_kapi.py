@@ -26,6 +26,8 @@ import retrieve
 
 
 MOMENT = dt.datetime(2026, 9, 2, 10, 0, tzinfo=dt.timezone.utc).astimezone()
+FAKE_TCKN = "10000000146"
+FAKE_API_KEY = "FakePasaportKey123456"
 
 
 def _donus_block(paket_id: str, *bullets: str) -> str:
@@ -280,6 +282,23 @@ class IstekCapEndToEndTests(PasaportKapiHarness):
 
 
 class SecretAndQuarantineTests(PasaportKapiHarness):
+    def test_entry_gate_redacts_tckn_and_api_key_before_pending_persistence(self) -> None:
+        self.register("abc123")
+        result = self.isle(
+            _donus_block(
+                "abc123", f"TCKN {FAKE_TCKN}; api_key={FAKE_API_KEY}"
+            )
+        )
+        self.assertIsNone(result["hata"])
+        pending = self.pending()
+        persisted = (self.state / pasaport_kapi.BEKLEYEN_NAME).read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn(FAKE_TCKN, persisted)
+        self.assertNotIn(FAKE_API_KEY, persisted)
+        self.assertIn("[PII:tckn]", pending["govde"])
+        self.assertIn("[SIR:kimlik-atamasi]", pending["govde"])
+
     def test_secret_in_donus_is_redacted_in_pending_and_warned(self) -> None:
         self.register("abc123")
         secret = "AKIA" + "X" * 16

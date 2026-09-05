@@ -135,6 +135,10 @@ class ModernSessionTests(ServerHarness):
         call = responses[2]["result"]
         self.assertFalse(call["isError"])
         self.assertIn("Kalıcı bellek katmanı", call["content"][0]["text"])
+        self.assertLess(
+            call["content"][0]["text"].index(mcp_server.giris_kapisi.HOOK_HEADER.strip()),
+            call["content"][0]["text"].index("Kalıcı bellek katmanı"),
+        )
 
         uris = [item["uri"] for item in responses[3]["result"]["resources"]]
         self.assertEqual(
