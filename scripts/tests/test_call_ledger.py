@@ -43,6 +43,12 @@ EXPECTED_FIELDS = {
     "output_tokens_est",
     "duration_ms",
     "outcome",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "model_actual",
+    "usage_source",
 }
 
 
@@ -110,8 +116,14 @@ class RecordingTests(LedgerHarness):
         self.assertEqual(record["backend"], "claude")
         self.assertEqual(record["component"], "flush")
         self.assertEqual(record["model_tier"], "haiku")
-        self.assertEqual(record["model_slug"], "haiku")
+        self.assertEqual(record["model_slug"], claude_runner.CLAUDE_MODEL_IDS["haiku"])
         self.assertEqual(record["outcome"], "ok")
+        self.assertEqual(record["usage_source"], "estimate")
+        self.assertIsNone(record["input_tokens"])
+        self.assertIsNone(record["output_tokens"])
+        self.assertIsNone(record["cache_read_tokens"])
+        self.assertIsNone(record["cache_write_tokens"])
+        self.assertEqual(record["model_actual"], "")
         self.assertEqual(record["input_chars"], len(SECRET_PROMPT))
         self.assertEqual(record["output_chars"], len(MODEL_REPLY))
         self.assertGreaterEqual(record["duration_ms"], 0)
@@ -202,6 +214,129 @@ class RecordingTests(LedgerHarness):
             output, error = self._call()
 
         self.assertEqual((output, error), (MODEL_REPLY, None))
+
+
+class RealUsageTests(LedgerHarness):
+    """Real provider usage, captured from the claude CLI's own JSON summary."""
+
+    JSON_REPLY = json.dumps(
+        {
+            "result": MODEL_REPLY,
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 34,
+                "cache_read_input_tokens": 999000,
+                "cache_creation_input_tokens": 500,
+            },
+            "modelUsage": {"claude-haiku-4-5-20251001": {"inputTokens": 12}},
+        }
+    )
+
+    def test_real_usage_is_recorded_when_the_cli_replies_with_json(self) -> None:
+        self._call(reply=_Reply(stdout=self.JSON_REPLY))
+
+        record = self._lines()[0]
+        self.assertEqual(record["usage_source"], "session-log")
+        self.assertEqual(record["input_tokens"], 12)
+        self.assertEqual(record["output_tokens"], 34)
+        self.assertEqual(record["cache_read_tokens"], 999000)
+        self.assertEqual(record["cache_write_tokens"], 500)
+        self.assertEqual(record["model_actual"], "claude-haiku-4-5-20251001")
+        # The text output handed back to the caller is still the plain reply,
+        # not the JSON envelope it arrived in.
+        self.assertEqual(record["output_chars"], len(MODEL_REPLY))
+
+    def test_the_caller_still_gets_the_plain_text_result(self) -> None:
+        output, error = self._call(reply=_Reply(stdout=self.JSON_REPLY))
+        self.assertEqual((output, error), (MODEL_REPLY, None))
+
+    def test_a_non_json_reply_falls_back_to_the_estimate(self) -> None:
+        self._call(reply=_Reply(stdout=MODEL_REPLY))
+
+        record = self._lines()[0]
+        self.assertEqual(record["usage_source"], "estimate")
+        self.assertIsNone(record["input_tokens"])
+        self.assertIsNone(record["output_tokens"])
+        self.assertIsNone(record["cache_read_tokens"])
+        self.assertIsNone(record["cache_write_tokens"])
+        self.assertEqual(record["model_actual"], "")
+
+    def test_json_without_a_usage_block_falls_back_to_the_estimate(self) -> None:
+        self._call(reply=_Reply(stdout=json.dumps({"result": MODEL_REPLY})))
+
+        record = self._lines()[0]
+        self.assertEqual(record["usage_source"], "estimate")
+        self.assertEqual(record["output_chars"], len(MODEL_REPLY))
+
+    def test_a_local_backend_call_never_claims_real_usage(self) -> None:
+        self._call({"BEYIN_MODEL_BACKEND": "antigravity"})
+
+        record = self._lines()[0]
+        self.assertEqual(record["usage_source"], "estimate")
+
+    def test_no_secret_content_leaks_through_the_json_envelope(self) -> None:
+        self._call(reply=_Reply(stdout=self.JSON_REPLY))
+
+        raw = self.ledger.read_text(encoding="utf-8")
+        self.assertNotIn("GIZLI", raw)
+
+
+class ModelIdMappingTests(unittest.TestCase):
+    """Task 4: explicit model ids per tier, not the drifting CLI aliases."""
+
+    def test_the_documented_ids_are_used_by_default(self) -> None:
+        with mock.patch.dict(claude_runner.os.environ, {}, clear=True):
+            self.assertEqual(
+                claude_runner.resolve_claude_model_id("haiku"),
+                "claude-haiku-4-5-20251001",
+            )
+            self.assertEqual(
+                claude_runner.resolve_claude_model_id("sonnet"), "claude-sonnet-5"
+            )
+            self.assertEqual(
+                claude_runner.resolve_claude_model_id("opus"), "claude-opus-5"
+            )
+
+    def test_an_env_override_wins_per_tier(self) -> None:
+        with mock.patch.dict(
+            claude_runner.os.environ,
+            {"BEYIN_CLAUDE_MODEL_HAIKU": "claude-haiku-override"},
+            clear=True,
+        ):
+            self.assertEqual(
+                claude_runner.resolve_claude_model_id("haiku"), "claude-haiku-override"
+            )
+            self.assertEqual(
+                claude_runner.resolve_claude_model_id("sonnet"), "claude-sonnet-5"
+            )
+
+    def test_an_unmapped_tier_passes_through_unchanged(self) -> None:
+        with mock.patch.dict(claude_runner.os.environ, {}, clear=True):
+            self.assertEqual(
+                claude_runner.resolve_claude_model_id("claude-opus-5-custom"),
+                "claude-opus-5-custom",
+            )
+
+    def test_the_claude_backend_argv_carries_the_mapped_id(self) -> None:
+        with mock.patch.dict(
+            claude_runner.os.environ, {}, clear=True
+        ), mock.patch.object(
+            claude_runner.shutil, "which", side_effect=lambda name: f"/bin/{name}"
+        ), mock.patch.object(
+            claude_runner.subprocess, "run", return_value=_Reply()
+        ) as run:
+            claude_runner.run_claude(
+                SECRET_PROMPT,
+                model="haiku",
+                tools="",
+                timeout=240,
+                cwd=Path(tempfile.mkdtemp()),
+                component="flush",
+                state_dir=Path(tempfile.mkdtemp()),
+            )
+        argv = run.call_args[0][0]
+        self.assertIn("claude-haiku-4-5-20251001", argv)
+        self.assertNotIn("haiku", argv)
 
 
 class ContentLeakTests(LedgerHarness):
@@ -406,7 +541,7 @@ class DurumSummaryTests(unittest.TestCase):
     def test_the_json_shape_keeps_its_rows_and_gains_calls(self) -> None:
         self._write([self._record()])
 
-        summary = durum.build_summary(self.state)
+        summary = durum.build_summary(self.state, now=self.now)
 
         self.assertEqual(summary["schema_version"], durum.SCHEMA_VERSION)
         self.assertEqual(len(summary["rows"]), 3)
@@ -416,7 +551,7 @@ class DurumSummaryTests(unittest.TestCase):
         self._write([self._record()])
 
         with mock.patch("builtins.print") as printer:
-            durum._print_table(durum.build_summary(self.state))
+            durum._print_table(durum.build_summary(self.state, now=self.now))
 
         printed = "\n".join(str(call.args[0]) for call in printer.call_args_list if call.args)
         self.assertIn("model calls (last 7 days)", printed)

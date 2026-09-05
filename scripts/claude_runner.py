@@ -10,13 +10,15 @@ Antigravity CLI, a local Ollama server, or an OpenAI-compatible endpoint instead
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
-from typing import Callable
+from typing import Any, Callable
+import uuid
 
 from beyin_ortak import record_call
 import nezaket
@@ -53,7 +55,74 @@ LOCAL_INFERENCE_TIMEOUT = 900
 # Compile is excluded: it already sits at 900 s and never runs on a local backend.
 LOCAL_TIMEOUT_KINDS = ("flush", "ingest")
 
+# The claude CLI's tier aliases have drifted from what they used to resolve
+# to (``--model haiku`` now lands on Sonnet in this CLI build) — an explicit
+# id per tier is the only way to know which model actually ran. Overridable
+# per tier via BEYIN_CLAUDE_MODEL_<TIER> without touching this table.
+CLAUDE_MODEL_ENV_PREFIX = "BEYIN_CLAUDE_MODEL_"
+CLAUDE_MODEL_IDS = {
+    "haiku": "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-5",
+    "opus": "claude-opus-5",
+}
+
+
+def resolve_claude_model_id(
+    tier: str, environment: dict[str, str] | None = None
+) -> str:
+    """The explicit model id the ``claude`` backend sends for ``tier``.
+
+    An unmapped tier (a slug the caller already passes explicitly) is
+    returned unchanged rather than guessed at.
+    """
+    env = os.environ if environment is None else environment
+    override = (env.get(f"{CLAUDE_MODEL_ENV_PREFIX}{tier.upper()}") or "").strip()
+    if override:
+        return override
+    return CLAUDE_MODEL_IDS.get(tier, tier)
+
+
 _LAST_WARNINGS: list[str] = []
+# Real usage for the most recent claude-backend call, filled in by ``_dispatch``
+# and drained into the ledger by ``run_claude``. Empty means "no real usage
+# available this call" — the ledger then records the chars/4 estimate only.
+_LAST_CLAUDE_USAGE: dict[str, Any] = {}
+
+
+def _parse_claude_json_reply(raw: str) -> tuple[str, dict[str, Any]]:
+    """Split a ``claude -p --output-format json`` reply into text and usage.
+
+    The CLI's own JSON summary already aggregates every turn's ``usage``
+    block for the session (see its ``iterations``) and names the model(s)
+    that actually ran in ``modelUsage`` — resolving alias drift (``haiku``
+    silently landing on Sonnet) for free. Anything that does not parse as
+    the expected shape falls back to treating ``raw`` as the plain-text
+    reply this function used to receive directly, with no usage — a CLI
+    quirk must never break the call it is accounting for.
+    """
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw.strip(), {}
+    if not isinstance(parsed, dict):
+        return raw.strip(), {}
+    text = parsed.get("result")
+    text = text.strip() if isinstance(text, str) else raw.strip()
+    usage = parsed.get("usage")
+    if not isinstance(usage, dict):
+        return text, {}
+    model_usage = parsed.get("modelUsage")
+    model_actual = ""
+    if isinstance(model_usage, dict) and model_usage:
+        model_actual = "+".join(sorted(model_usage.keys()))
+    return text, {
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_read_tokens": usage.get("cache_read_input_tokens"),
+        "cache_write_tokens": usage.get("cache_creation_input_tokens"),
+        "model_actual": model_actual,
+        "usage_source": "session-log",
+    }
 
 
 def resolve_timeout(
@@ -200,8 +269,10 @@ def _resolved_slug(backend: str, model: str) -> str:
             return openai_runner.resolve_model(model)[0] or ""
     except Exception:
         return ""
-    # The Claude CLI takes the tier name itself as its `--model` argument.
-    return model
+    # The Claude CLI is given an explicit model id, not the bare tier name —
+    # see CLAUDE_MODEL_IDS. This is the id actually sent, recorded here so a
+    # tier-to-model drift (like `haiku` silently landing on Sonnet) shows up.
+    return resolve_claude_model_id(model)
 
 
 def run_claude(
@@ -226,6 +297,7 @@ def run_claude(
     counts and identifiers are written — see ``beyin_ortak.record_call``.
     """
     _LAST_WARNINGS.clear()
+    _LAST_CLAUDE_USAGE.clear()
     if backend is None:
         backend, warning = resolve_backend()
         if warning:
@@ -256,6 +328,12 @@ def run_claude(
         output_chars=len(output or ""),
         duration_ms=int((time.monotonic() - started) * 1000),
         outcome="ok" if error is None else error,
+        input_tokens=_LAST_CLAUDE_USAGE.get("input_tokens"),
+        output_tokens=_LAST_CLAUDE_USAGE.get("output_tokens"),
+        cache_read_tokens=_LAST_CLAUDE_USAGE.get("cache_read_tokens"),
+        cache_write_tokens=_LAST_CLAUDE_USAGE.get("cache_write_tokens"),
+        model_actual=_LAST_CLAUDE_USAGE.get("model_actual"),
+        usage_source=_LAST_CLAUDE_USAGE.get("usage_source", "estimate"),
     )
     return output, error
 
@@ -331,13 +409,22 @@ def _dispatch(
     if claude is None:
         return None, "claude-cli-missing"
 
+    resolved_model_id = resolve_claude_model_id(model)
+    # --output-format json (in place of the historical "text") is what makes
+    # real usage capture possible: the CLI's own JSON summary already
+    # aggregates every turn's usage for the whole session and names the
+    # model(s) that actually ran, in one place, with nothing to poll or race.
+    # --session-id is passed too, purely for external traceability, even
+    # though nothing here needs to locate a transcript file by it.
     command = [
         claude,
         "-p",
         "--model",
-        model,
+        resolved_model_id,
         "--output-format",
-        "text",
+        "json",
+        "--session-id",
+        str(uuid.uuid4()),
         "--safe-mode",
         "--tools",
         tools,
@@ -371,7 +458,11 @@ def _dispatch(
             return None, "claude-exec-error"
         if result.returncode != 0:
             return None, f"claude-exit-{result.returncode}"
-        return result.stdout.strip(), None
+        text, usage = _parse_claude_json_reply(result.stdout)
+        if usage:
+            _LAST_CLAUDE_USAGE.clear()
+            _LAST_CLAUDE_USAGE.update(usage)
+        return text, None
 
     return run_in_isolated_dir(
         invoke,

@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest import mock
+import uuid
 
 import _helpers  # noqa: F401  (sys.path köprüsü)
 
@@ -108,20 +109,14 @@ class DispatchTests(unittest.TestCase):
         recorder = _Recorder()
         output, error = self._run({}, recorder)
         self.assertEqual((output, error), ("OZET", None))
-        self.assertEqual(
-            recorder.args,
-            [
-                "/bin/claude",
-                "-p",
-                "--model",
-                "haiku",
-                "--output-format",
-                "text",
-                "--safe-mode",
-                "--tools",
-                "",
-            ],
-        )
+        # A fresh --session-id is generated per call, so only its position and
+        # UUID shape are pinned, not its value — see claude_runner.CLAUDE_MODEL_IDS
+        # for why --model now carries an explicit id rather than the bare tier.
+        self.assertEqual(recorder.args[0:5], ["/bin/claude", "-p", "--model", "claude-haiku-4-5-20251001", "--output-format"])
+        self.assertEqual(recorder.args[5], "json")
+        self.assertEqual(recorder.args[6], "--session-id")
+        uuid.UUID(recorder.args[7])
+        self.assertEqual(recorder.args[8:], ["--safe-mode", "--tools", ""])
         self.assertEqual(recorder.kwargs["input"], "PROMPT")
 
     def test_antigravity_backend_argv(self) -> None:

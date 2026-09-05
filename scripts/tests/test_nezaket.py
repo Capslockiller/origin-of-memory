@@ -63,6 +63,20 @@ class DecisionTableTests(unittest.TestCase):
                 "gpu-yuk:",
             ),
             (
+                "gpu-esik-ustu-ama-kendi-ollama-onplan",
+                nezaket.Okuma("ollama.exe", None, 90, None, None),
+                False,
+                False,
+                "kendi-yerel-model",
+            ),
+            (
+                "gpu-esik-ustu-ama-kendi-ollama-ust-surec",
+                nezaket.Okuma(None, "ollama_llama_server.exe", 90, None, None),
+                False,
+                False,
+                "kendi-yerel-model",
+            ),
+            (
                 "gpu-esik-altinda",
                 nezaket.Okuma(None, None, 10, None, None),
                 False,
@@ -131,6 +145,62 @@ class DecisionTableTests(unittest.TestCase):
         sonuc = nezaket.karar(nezaket.Okuma(None, None, None, None, 61.0), izin)
         self.assertFalse(sonuc.mesgul)
         self.assertEqual(sonuc.neden, "bosta")
+
+    def test_own_ollama_gpu_load_is_not_treated_as_gaming(self) -> None:
+        """The system's own local model must never look like a game to nezaket."""
+        okuma = nezaket.Okuma("Ollama.exe", None, 95, None, None)
+        sonuc = nezaket.karar(okuma, self.izin)
+        self.assertFalse(sonuc.mesgul)
+        self.assertEqual(sonuc.neden, "kendi-yerel-model")
+
+    def test_ollama_process_name_matching_is_case_insensitive(self) -> None:
+        okuma = nezaket.Okuma(None, "OLLAMA_LLAMA_SERVER.EXE", 95, None, None)
+        sonuc = nezaket.karar(okuma, self.izin)
+        self.assertFalse(sonuc.mesgul)
+        self.assertEqual(sonuc.neden, "kendi-yerel-model")
+
+    def test_izinli_surec_still_wins_over_the_ollama_exemption(self) -> None:
+        """Explicit configuration always outranks the built-in heuristic."""
+        izin = nezaket.IzinListesi(
+            surecler=frozenset({"ollama.exe"}),
+            ust_surecler=frozenset(),
+            gpu_esik=60,
+            zararsiz_tam_ekran=frozenset(),
+            bosta_serbest_sn=900.0,
+        )
+        sonuc = nezaket.karar(nezaket.Okuma("ollama.exe", None, 90, None, None), izin)
+        self.assertTrue(sonuc.mesgul)
+        self.assertEqual(sonuc.neden, "izinli-surec:ollama.exe")
+
+
+class GpuEsikEnvOverrideTests(unittest.TestCase):
+    def test_default_gpu_esik_is_unchanged_without_the_env_var(self) -> None:
+        with mock.patch.dict(nezaket.os.environ, {}, clear=True):
+            self.assertEqual(nezaket.IzinListesi.varsayilan().gpu_esik, nezaket.DEFAULT_GPU_ESIK)
+
+    def test_env_var_overrides_the_builtin_default(self) -> None:
+        with mock.patch.dict(nezaket.os.environ, {"BEYIN_NEZAKET_GPU_ESIK": "15"}, clear=True):
+            self.assertEqual(nezaket.IzinListesi.varsayilan().gpu_esik, 15)
+
+    def test_env_var_overrides_a_stored_izin_file_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            nezaket.IzinListesi.varsayilan_yaz(state_dir / nezaket.IZIN_NAME)
+            payload = json.loads((state_dir / nezaket.IZIN_NAME).read_text(encoding="utf-8"))
+            payload["gpu_esik"] = 40
+            (state_dir / nezaket.IZIN_NAME).write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+            with mock.patch.dict(
+                nezaket.os.environ, {"BEYIN_NEZAKET_GPU_ESIK": "5"}, clear=True
+            ):
+                self.assertEqual(nezaket.IzinListesi.yukle(state_dir).gpu_esik, 5)
+
+    def test_a_garbage_env_value_is_ignored(self) -> None:
+        with mock.patch.dict(
+            nezaket.os.environ, {"BEYIN_NEZAKET_GPU_ESIK": "not-a-number"}, clear=True
+        ):
+            self.assertEqual(nezaket.IzinListesi.varsayilan().gpu_esik, nezaket.DEFAULT_GPU_ESIK)
 
 
 class IzinListesiTests(unittest.TestCase):
@@ -490,6 +560,77 @@ class VramBosaltTests(unittest.TestCase):
             problems = nezaket.vram_bosalt("http://127.0.0.1:11434")
         self.assertEqual(len(problems), 1)
         self.assertTrue(problems[0].startswith("bosaltma-basarisiz:a:"))
+
+    def test_with_state_dir_only_tracked_models_are_unloaded(self) -> None:
+        """A model the user loaded by hand for their own work is left alone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            nezaket.OllamaYukler(state_dir).kaydet("qwen3:8b")
+
+            ps_body = json.dumps(
+                {"models": [{"name": "llama3-users-own"}, {"name": "qwen3:8b"}]}
+            ).encode("utf-8")
+            responses = [self._Response(ps_body), self._Response(b"{}")]
+
+            def fake_urlopen(request, timeout=None):
+                return responses.pop(0)
+
+            with mock.patch.object(
+                nezaket.urllib.request, "urlopen", side_effect=fake_urlopen
+            ) as opened:
+                problems = nezaket.vram_bosalt(
+                    "http://127.0.0.1:11434", state_dir=state_dir
+                )
+
+        self.assertEqual(problems, [])
+        # One call for /api/ps, exactly one unload — never llama3-users-own.
+        self.assertEqual(opened.call_count, 2)
+        unload_call = opened.call_args_list[1][0][0]
+        self.assertEqual(
+            json.loads(unload_call.data.decode("utf-8")),
+            {"model": "qwen3:8b", "keep_alive": 0},
+        )
+
+    def test_with_state_dir_and_nothing_tracked_unloads_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            ps_body = json.dumps({"models": [{"name": "llama3-users-own"}]}).encode("utf-8")
+
+            with mock.patch.object(
+                nezaket.urllib.request, "urlopen", return_value=self._Response(ps_body)
+            ) as opened:
+                problems = nezaket.vram_bosalt(
+                    "http://127.0.0.1:11434", state_dir=state_dir
+                )
+
+        self.assertEqual(problems, [])
+        opened.assert_called_once()  # only /api/ps — no generate/unload call
+
+
+class OllamaYuklerTests(unittest.TestCase):
+    def test_kaydet_then_yuklenenler_round_trips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            yukler = nezaket.OllamaYukler(Path(tmp))
+            yukler.kaydet("qwen3:8b")
+            yukler.kaydet("llama3")
+            self.assertEqual(yukler.yuklenenler(), {"qwen3:8b", "llama3"})
+
+    def test_kaydet_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            yukler = nezaket.OllamaYukler(Path(tmp))
+            yukler.kaydet("qwen3:8b")
+            yukler.kaydet("qwen3:8b")
+            self.assertEqual(yukler.yuklenenler(), {"qwen3:8b"})
+
+    def test_yuklenenler_on_a_missing_file_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(nezaket.OllamaYukler(Path(tmp)).yuklenenler(), set())
+
+    def test_kaydet_with_empty_model_name_is_a_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            yukler = nezaket.OllamaYukler(Path(tmp))
+            yukler.kaydet("")
+            self.assertEqual(yukler.yuklenenler(), set())
 
 
 class LinuxContractTests(unittest.TestCase):
