@@ -717,7 +717,7 @@ the quarantine count as a single table.
 ### 9.1 `durum.py` — the health summary command
 
 ```powershell
-python scripts/durum.py [--json] [--state-dir <path>]
+python scripts/durum.py [--json] [--state-dir <path>] [--temizle-uyarilar]
 ```
 
 It reads `health.json`, `ingest-health.json`, `compile-state.json` and
@@ -726,6 +726,26 @@ status, last run, last error or skip, quarantine count. **The exit code is alway
 0** — this is a reporting surface, not a gate, and a missing or corrupt state
 file produces `unknown` rows rather than a failure. Like every other entry point
 it returns immediately when `BEYIN_INVOKED_BY` is set.
+
+`health.json["warnings"]` keeps up to 20 historical entries (`write_health()`,
+§9 above) and a healthy run never clears them, so a live alarm and a
+three-week-old one look identical unless something ages them. `durum.py` does
+that ageing itself, without touching the writer: each warning's age is
+computed from its own `ts` when the entry is a `{"message"/"warning"/"text":
+..., "ts": ...}` object, else from the health file's top-level `ts`; an entry
+older than 24 h is flagged `eski` (Turkish "stale") in both the table (an
+`eski` column) and `--json` (`"eski": true`). `now` is injectable everywhere
+this math happens (`summarize_warnings`, `temizle_uyarilar`, and the `now=`
+already on `build_summary`), so tests use fixed clocks instead of the wall
+clock.
+
+`--temizle-uyarilar` rewrites `health.json`, dropping only the warnings aged
+`eski` and keeping every other key byte-shape-compatible with what
+`write_health()` writes (same `json.dumps(..., indent=2)` via
+`beyin_ortak._atomic_write_json`, same temp-file + `os.replace` swap). It is a
+no-op — file untouched, mtime unchanged — when nothing is old or the file is
+absent; it prints a one-line result and exits 0 without printing the rest of
+the report.
 
 Below that table it summarises the last 7 days of `.state/calls.jsonl` (§5.8):
 calls per backend with median and p95 duration, and estimated tokens per
@@ -774,6 +794,10 @@ so treat it as a stable contract:
       "quarantine_count": 1
     }
   ],
+  "warnings": [
+    {"message": "fail:rootmap-regen-failed", "ts": 1756289400,
+     "age_seconds": 3600, "eski": false}
+  ],
   "calls": {
     "window_days": 7,
     "total_calls": 9,
@@ -798,6 +822,9 @@ Shape rules, so a consumer can rely on them:
 
 - `rows` is always present and always holds exactly three rows, in the order
   `flush`, `compile`, `ingest`, whether or not any state file exists.
+- `warnings` is always present, one entry per `health.json["warnings"]` item in
+  order, and empty rather than absent when there are none. `ts`/`age_seconds`
+  are `null` when no timestamp (own or top-level) could be resolved.
 - `calls` is always present. Its `backends` and `components` lists are sorted by
   call count descending, then by name, and are empty when nothing was recorded —
   an empty ledger is not an absent key.

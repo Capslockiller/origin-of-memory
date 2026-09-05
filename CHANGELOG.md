@@ -130,7 +130,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hooks keep per-session counters under `.state/oturum-<session>/` (concurrent sessions no longer
   clobber each other), resolve Python once, and record a failure line to `hook-hatalari.jsonl`
   instead of silently succeeding. Compile-trigger markers expire (`BEYIN_COMPILE_TRIGGER_TTL_MIN`).
-- Not done in this round: `durum.py` warning ageing/`--temizle-uyarilar` (kusur kütüğü #18).
+
+<!-- yazan: claude · sonnet-5 -->
+- **`durum.py` ages health warnings instead of letting old ones look live
+  (kusur kütüğü #18).** `health.json["warnings"]` keeps up to 20 entries and a
+  healthy run never clears them; `durum` now computes each warning's age from
+  its own `ts` when present, else the file's top-level `ts`, and marks
+  anything older than 24 h `eski` in both the table (an `eski` column) and
+  `--json` (`"eski": true`) — the `warnings` list is new in the JSON shape.
+  New `durum.py --temizle-uyarilar` rewrites `health.json` keeping only the
+  non-`eski` warnings, atomically (temp file + `os.replace`, same
+  `beyin_ortak._atomic_write_json` the writer uses) and byte-shape-compatible
+  with every other key; it is a no-op — file untouched — when nothing is
+  stale or the file is absent. `write_health()` itself is unchanged.
 
 ## [0.5.0] - 2026-09-02
 
