@@ -17,6 +17,7 @@ import sys
 from typing import Any, Sequence
 
 import pasaport_defteri
+import giris_kapisi
 import retrieve
 
 
@@ -56,7 +57,7 @@ def compose_context(
     if not 1 <= limit <= 5:
         raise ValueError("note-count-out-of-range")
     root = Path(vault_root)
-    sections = [HEADER]
+    sections = [HEADER, giris_kapisi.HOOK_HEADER.rstrip("\n")]
 
     if include_map:
         index_path = root / "knowledge" / "index.md"
@@ -317,6 +318,11 @@ def compose_pasaport(
     resolved_state = (
         Path(state_dir) if state_dir is not None else root / ".claude" / "scripts" / ".state"
     )
+    question, _input_warnings = giris_kapisi.temizle(
+        question,
+        component="pasaport-input",
+        state_dir=resolved_state,
+    )
     defter = pasaport_defteri.Defter(resolved_state)
     zaman = now or dt.datetime.now().astimezone()
     ts = zaman.isoformat(timespec="seconds")
@@ -373,7 +379,13 @@ def compose_pasaport(
     birlesik_manifest = dict(onceki_manifest)
     birlesik_manifest.update(yeni_manifest_ekle)
 
-    paket = "\n\n".join([header, body_content, _manifest_satiri(birlesik_manifest), footer]) + "\n"
+    framed_body = giris_kapisi.HOOK_HEADER.rstrip("\n") + "\n\n" + body_content
+    paket = "\n\n".join([header, framed_body, _manifest_satiri(birlesik_manifest), footer]) + "\n"
+    paket, _output_warnings = giris_kapisi.temizle(
+        paket,
+        component="pasaport-output",
+        state_dir=resolved_state,
+    )
 
     defter.paket_kaydet(
         resolved_id,

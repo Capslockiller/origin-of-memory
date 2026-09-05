@@ -27,10 +27,10 @@ from typing import Any, Sequence
 
 from beyin_ortak import _atomic_write_json, write_health
 import flush
+import giris_kapisi
 import kaydet
 import pasaport_defteri
 import retrieve
-import secret_guard
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -329,7 +329,7 @@ def _manifest_dedup(
 
 
 def _istek_maddeler(body: str) -> tuple[list[str], bool]:
-    """One item per line, bullets stripped, secrets redacted defensively,
+    """One item per line from an already-cleaned body, bullets stripped,
     capped to :func:`resolve_istek_max_madde` items of at most
     :data:`ISTEK_MADDE_MAX_UZUNLUK` characters each — an ODENA-ISTEK block is
     otherwise unbounded web-model output landing straight in the ledger,
@@ -347,11 +347,10 @@ def _istek_maddeler(body: str) -> tuple[list[str], bool]:
     kirpildi = len(candidates) > max_madde
     items: list[str] = []
     for raw in candidates[:max_madde]:
-        redacted, _hits = secret_guard.redact(raw)
-        if len(redacted) > ISTEK_MADDE_MAX_UZUNLUK:
-            redacted = redacted[: ISTEK_MADDE_MAX_UZUNLUK - 1].rstrip() + ISTEK_KESILDI_ISARETI
+        if len(raw) > ISTEK_MADDE_MAX_UZUNLUK:
+            raw = raw[: ISTEK_MADDE_MAX_UZUNLUK - 1].rstrip() + ISTEK_KESILDI_ISARETI
             kirpildi = True
-        items.append(redacted)
+        items.append(raw)
     return items, kirpildi
 
 
@@ -406,7 +405,12 @@ def _karantina_yaz(state_dir: Path, content: str, now: dt.datetime) -> Path:
 
 
 def kapilar(
-    ayristirma: Ayristirma, state_dir: Path, vault_root: Path, now: dt.datetime
+    ayristirma: Ayristirma,
+    state_dir: Path,
+    vault_root: Path,
+    now: dt.datetime,
+    *,
+    giris_uyarilari: Sequence[str] = (),
 ) -> Sonuc:
     """The gate pipeline. Never raises: every failure is a slug on ``Sonuc``.
 
@@ -425,7 +429,12 @@ def kapilar(
     vault_root = Path(vault_root)
     defter = pasaport_defteri.Defter(state_dir)
     ts = now.isoformat(timespec="seconds")
-    uyarilar: list[str] = []
+    uyarilar = list(giris_uyarilari)
+    for warning in giris_uyarilari:
+        if warning.startswith("warn:secret-redacted-input:"):
+            uyarilar.append(
+                "secret-redacted-pasaport:" + warning.rsplit(":", 1)[1]
+            )
 
     paket_id = ayristirma.id
     if paket_id is None:
@@ -437,7 +446,13 @@ def kapilar(
 
     istek_maddeleri: list[str] = []
     if ayristirma.istek_body:
-        istek_maddeleri, istek_kirpildi = _istek_maddeler(ayristirma.istek_body)
+        istek_body, istek_warnings = giris_kapisi.temizle(
+            ayristirma.istek_body,
+            component="pasaport-input",
+            state_dir=state_dir,
+        )
+        uyarilar.extend(warning for warning in istek_warnings if warning not in uyarilar)
+        istek_maddeleri, istek_kirpildi = _istek_maddeler(istek_body)
         if istek_maddeleri:
             defter.istek_kaydet(paket_id, istek_maddeleri, ts=ts)
         if istek_kirpildi:
@@ -446,7 +461,18 @@ def kapilar(
     if not ayristirma.donus_body:
         return Sonuc(hata=None, id=paket_id, uyarilar=uyarilar, istek_maddeleri=istek_maddeleri)
 
-    donus_body = ayristirma.donus_body
+    donus_body, donus_warnings = giris_kapisi.temizle(
+        ayristirma.donus_body,
+        component="pasaport-input",
+        state_dir=state_dir,
+    )
+    for warning in donus_warnings:
+        if warning not in uyarilar:
+            uyarilar.append(warning)
+        if warning.startswith("warn:secret-redacted-input:"):
+            legacy_warning = "secret-redacted-pasaport:" + warning.rsplit(":", 1)[1]
+            if legacy_warning not in uyarilar:
+                uyarilar.append(legacy_warning)
     max_karakter = resolve_max_donus()
     if len(donus_body) > max_karakter:
         defter.donus_kaydet(
@@ -456,17 +482,13 @@ def kapilar(
             hata=COK_UZUN_SLUG, id=paket_id, uyarilar=uyarilar, istek_maddeleri=istek_maddeleri
         )
 
-    redacted_body, hits = secret_guard.redact(donus_body)
-    if hits:
-        uyarilar.append("secret-redacted-pasaport:" + ",".join(hits))
-
-    directive_match = flush.DIRECTIVE_SHAPED.search(redacted_body)
+    directive_match = flush.DIRECTIVE_SHAPED.search(donus_body)
     if directive_match is not None:
-        karantina_dosyasi = _karantina_yaz(state_dir, redacted_body, now)
+        karantina_dosyasi = _karantina_yaz(state_dir, donus_body, now)
         defter.donus_kaydet(
             paket_id,
             ts=ts,
-            karakter=len(redacted_body),
+            karakter=len(donus_body),
             durum="karantina",
             neden=KARANTINA_SLUG,
         )
@@ -478,7 +500,7 @@ def kapilar(
             karantina_dosyasi=karantina_dosyasi.as_posix(),
         )
 
-    units = _split_units(redacted_body)
+    units = _split_units(donus_body)
     surviving, dropped, manifest_warnings = _manifest_dedup(
         units, paket_id, defter, vault_root
     )
@@ -499,7 +521,7 @@ def kapilar(
 
     if not surviving:
         defter.donus_kaydet(
-            paket_id, ts=ts, karakter=len(redacted_body), durum="red", neden=BOS_SLUG
+            paket_id, ts=ts, karakter=len(donus_body), durum="red", neden=BOS_SLUG
         )
         return Sonuc(
             hata=BOS_SLUG,
@@ -589,13 +611,25 @@ def isle_metin(
         )
         return {"hata": GIRDI_COK_UZUN_SLUG, "id": None, "bekleyen": False}
 
+    text, giris_uyarilari = giris_kapisi.temizle(
+        text,
+        component="pasaport-input",
+        state_dir=state_dir,
+    )
+
     try:
         ayristirma = ayristir(text)
     except AyristirmaHata as exc:
         write_health(state_dir, exc.slug, component="pasaport", health_name=HEALTH_NAME)
         return {"hata": exc.slug, "id": None, "bekleyen": False}
 
-    sonuc = kapilar(ayristirma, state_dir, vault_root, now)
+    sonuc = kapilar(
+        ayristirma,
+        state_dir,
+        vault_root,
+        now,
+        giris_uyarilari=giris_uyarilari,
+    )
 
     if sonuc.hata is not None:
         write_health(state_dir, sonuc.hata, component="pasaport", health_name=HEALTH_NAME)
@@ -674,6 +708,11 @@ def uygula(
     paket_id = str(pending.get("id"))
     n = int(pending.get("n") or 1)
     body = str(pending.get("govde") or "")
+    body, _output_warnings = giris_kapisi.temizle(
+        body,
+        component="pasaport-output",
+        state_dir=state_dir,
+    )
     ts = now.isoformat(timespec="seconds")
     anchor = retrieve.format_session_anchor(f"pasaport-{paket_id}-{n}", ts, source="pasaport")
 
