@@ -1,14 +1,24 @@
 # v2 session-start: v1 injection (Last-Session + Threads + reflection debt)
 # plus Kurallar, son Journal girdisi, knowledge index ve gunun daily kuyrugu.
+# yazan: codex · model: gpt-5.6-sol
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 if ($env:BEYIN_INVOKED_BY) { exit 0 }
+$stdin = [Console]::In.ReadToEnd()
+$hook = $null
+if ($stdin) { try { $hook = $stdin | ConvertFrom-Json } catch {} }
+$sid = if ($hook) { "$($hook.session_id)" } else { '' }
+if (($sid -notmatch '^[A-Za-z0-9_.-]{1,128}$') -or ($sid -eq '.') -or ($sid -eq '..')) { $sid = '' }
 $vault = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $memDir = (Get-ChildItem -Path $vault -Directory -Filter '*850-Companion' | Select-Object -First 1).FullName
 $state = Join-Path $PSScriptRoot '.state'
 New-Item -ItemType Directory -Force -Path $state | Out-Null
-Set-Content -Path (Join-Path $state 'session_start_time') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Encoding Ascii
-Set-Content -Path (Join-Path $state 'prompt_count') -Value '0' -Encoding Ascii
+if ($sid) {
+  $sessionState = Join-Path $state ("oturum-{0}" -f $sid)
+  New-Item -ItemType Directory -Force -Path $sessionState | Out-Null
+  Set-Content -Path (Join-Path $sessionState 'session_start_time') -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Encoding Ascii
+  Set-Content -Path (Join-Path $sessionState 'prompt_count') -Value '0' -Encoding Ascii
+}
 
 $lastSession = ''
 if ($memDir) {

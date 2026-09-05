@@ -1,9 +1,17 @@
 if ($env:BEYIN_INVOKED_BY) { exit 0 }
+# yazan: codex · model: gpt-5.6-sol
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$stdin = [Console]::In.ReadToEnd()
+if (-not $stdin) { exit 0 }
+try { $hook = $stdin | ConvertFrom-Json } catch { exit 0 }
+$sid = "$($hook.session_id)"
+if (($sid -notmatch '^[A-Za-z0-9_.-]{1,128}$') -or ($sid -eq '.') -or ($sid -eq '..')) { exit 0 }
 $state = Join-Path $PSScriptRoot '.state'
 New-Item -ItemType Directory -Force -Path $state | Out-Null
-$f = Join-Path $state 'prompt_count'
+$sessionState = Join-Path $state ("oturum-{0}" -f $sid)
+New-Item -ItemType Directory -Force -Path $sessionState | Out-Null
+$f = Join-Path $sessionState 'prompt_count'
 $count = 0
 if (Test-Path $f) { $count = ((Get-Content $f | Select-Object -First 1) -as [int]); if (-not $count) { $count = 0 } }
 $count++
