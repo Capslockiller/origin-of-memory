@@ -46,6 +46,13 @@ STATE_DIR = SCRIPT_DIR / ".state"
 # acceptEdits. Vault-root dot-dir keeps data on the same disk and out of Obsidian.
 STAGE_ROOT = VAULT_ROOT / ".stage"
 DEFAULT_MAX_CALLS = 3
+# Rejected output does not consume its daily: the same file is re-presented on
+# the next compile until it is either clean or parked. The bound stops a daily
+# the model can never satisfy from calling the model every night forever.
+MAX_REJECT_ATTEMPTS = 3
+# An empty answer is cheaper to retry but even less likely to change on the
+# third look, so it parks one attempt sooner.
+MAX_NO_CHANGE_ATTEMPTS = 2
 DEFAULT_REGISTRY_RECENT = 50
 DEFAULT_REGISTRY_MAX_ROWS = 400
 DEFAULT_COMPILE_LOCK_TTL_MIN = 120
@@ -148,6 +155,13 @@ def _default_state() -> dict[str, Any]:
         "runs": [],
         "concepts_manifest": "",
         "quarantined": {},
+        # Dailies whose run produced nothing promotable, keyed by file name.
+        # They are neither ingested nor forgotten: each is re-presented until
+        # it succeeds or its attempt bound moves it into ``parked``.
+        "rejected": {},
+        # Dailies that exhausted their attempts. Still not ingested — the
+        # digest is remembered only so the queue stops re-calling the model.
+        "parked": {},
     }
 
 
@@ -174,6 +188,12 @@ def load_state(path: Path) -> dict[str, Any]:
     normalized["cursor"] = cursor
     normalized["runs"] = runs[-20:]
     normalized["quarantined"] = quarantined
+    # State files written before the rejection ledger existed simply lack these
+    # keys; _default_state() supplies them, and a wrong-typed value is treated
+    # as absent rather than crashing a run over bookkeeping.
+    for key in ("rejected", "parked"):
+        value = state.get(key, {})
+        normalized[key] = value if isinstance(value, dict) else {}
     return normalized
 
 
@@ -243,10 +263,21 @@ def _daily_sort_key(path: Path) -> tuple[dt.date, str]:
     return parsed, path.name
 
 
+def _is_parked(parked: dict[str, Any], name: str, digest: str) -> bool:
+    """True while this exact daily content is parked after failed attempts.
+
+    Parked is keyed by content: editing the daily produces a new digest, which
+    is a fresh chance rather than a permanently blacklisted file name.
+    """
+    entry = parked.get(name)
+    return isinstance(entry, dict) and entry.get("digest") == digest
+
+
 def changed_daily_logs(
     vault_root: Path,
     ingested: dict[str, str],
     quarantined: dict[str, Any] | None = None,
+    parked: dict[str, Any] | None = None,
 ) -> list[tuple[Path, str]]:
     daily_dir = vault_root / "daily"
     if not daily_dir.exists():
@@ -261,12 +292,17 @@ def changed_daily_logs(
         raise PolicyError("daily-directory-escape")
     changed = []
     quarantined = quarantined or {}
+    parked = parked or {}
     for path in sorted(daily_dir.glob("*.md"), key=_daily_sort_key):
         file_stat = path.lstat()
         if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
             raise PolicyError(f"unsafe-daily-source:{path.name}")
         digest = _sha256(path)
-        if ingested.get(path.name) != digest and digest not in quarantined:
+        if (
+            ingested.get(path.name) != digest
+            and digest not in quarantined
+            and not _is_parked(parked, path.name, digest)
+        ):
             changed.append((path, digest))
     return changed
 
@@ -849,6 +885,24 @@ def _is_concept_note(relative: str) -> bool:
     )
 
 
+def _is_direct_concept_note(relative: str) -> bool:
+    """A note the rest of the pipeline can actually see.
+
+    ``retrieve.build_index``, ``rootmap.load_concepts`` and the manifest all use
+    the non-recursive ``knowledge/concepts/*.md`` glob, so a note written into a
+    subdirectory is promoted into invisibility: never indexed, never mapped,
+    never retrieved. Only a note directly under ``knowledge/concepts/`` counts.
+    """
+    path = Path(relative)
+    parts = path.parts
+    return (
+        path.suffix == ".md"
+        and len(parts) == 3
+        and parts[0] == "knowledge"
+        and parts[1] == "concepts"
+    )
+
+
 def _append_source_anchors(text: str, anchors: Sequence[str]) -> str:
     """Append missing provenance anchors to the note's ``## Kaynaklar`` section."""
     missing = [anchor for anchor in anchors if anchor not in text]
@@ -1000,6 +1054,10 @@ def _validate_live_destination(
 ) -> Path:
     if not _is_allowed_output_file(relative):
         raise PolicyError(f"forbidden-promotion:{relative}")
+    # Belt and braces: the schema gate already refuses nested notes with
+    # `nested-path`, so reaching here means a caller skipped that gate.
+    if _is_concept_note(relative) and not _is_direct_concept_note(relative):
+        raise PolicyError(f"forbidden-promotion:{relative}")
     destination = vault_root / relative
     knowledge_root = (vault_root / "knowledge").resolve(strict=True)
 
@@ -1031,28 +1089,57 @@ def _validate_live_destination(
     return destination
 
 
-def _atomic_copy(source: Path, destination: Path) -> None:
-    existing_mode = 0o644
-    if destination.exists():
-        existing_mode = stat.S_IMODE(destination.stat().st_mode)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
-    )
-    temporary = Path(temporary_name)
+class Promotion(NamedTuple):
+    """The undo record of one two-phase publication.
+
+    ``entries`` pairs every destination written with the backup taken before it
+    was overwritten (``None`` when the file was created by this run). The
+    backups survive until the run is finalised, so a failure discovered AFTER
+    the renames — a root map or index rebuild that will not come back up — can
+    still put the vault exactly where it was.
+    """
+
+    run_id: str
+    entries: tuple[tuple[Path, Path | None], ...]
+
+
+def _new_run_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _unlink_quietly(path: Path) -> None:
     try:
-        with os.fdopen(descriptor, "wb") as target, source.open("rb") as source_file:
-            shutil.copyfileobj(source_file, target)
-            target.flush()
-            os.fsync(target.fileno())
-        temporary.chmod(existing_mode)
-        os.replace(temporary, destination)
-    finally:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _stage_write(source: Path, temporary: Path, mode: int) -> None:
+    """Copy ``source`` to ``temporary`` durably; the rename comes later."""
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(descriptor, "wb") as target, source.open("rb") as source_file:
+        shutil.copyfileobj(source_file, target)
+        target.flush()
+        os.fsync(target.fileno())
+    try:
+        os.chmod(temporary, mode)
+    except OSError:
+        pass
+
+
+def _undo_renames(renamed: Sequence[tuple[Path, Path | None]]) -> list[str]:
+    """Put every already-renamed destination back; return what could not be."""
+    failures: list[str] = []
+    for destination, backup in reversed(list(renamed)):
         try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+            if backup is None:
+                if destination.exists():
+                    destination.unlink()
+            else:
+                os.replace(backup, destination)
+        except OSError:
+            failures.append(destination.name)
+    return failures
 
 
 def _promote_changes(
@@ -1060,8 +1147,19 @@ def _promote_changes(
     vault_root: Path,
     changed_files: list[str],
     live_baseline: dict[str, str | None],
-) -> None:
-    destinations = []
+    run_id: str | None = None,
+) -> Promotion:
+    """Publish every file or none of them.
+
+    Phase one validates each destination, copies the live file aside as
+    ``<dest>.bak-<run id>`` and writes the new content to ``<dest>.tmp-<run
+    id>``; nothing visible has changed yet. Phase two renames the temporaries
+    into place. A failure in either phase restores what was already renamed,
+    removes the temporaries and re-raises, so the vault is never left holding
+    half of a compile.
+    """
+    run_id = run_id or _new_run_id()
+    plans: list[tuple[Path, Path]] = []
     for relative in changed_files:
         if relative not in live_baseline:
             live_baseline[relative] = None
@@ -1070,9 +1168,61 @@ def _promote_changes(
             relative,
             live_baseline[relative],
         )
-        destinations.append((stage / relative, destination))
-    for source, destination in destinations:
-        _atomic_copy(source, destination)
+        plans.append((stage / relative, destination))
+
+    entries: list[tuple[Path, Path | None]] = []
+    temporaries: list[Path] = []
+    renamed: list[tuple[Path, Path | None]] = []
+    try:
+        for source, destination in plans:
+            mode = 0o644
+            backup: Path | None = None
+            if destination.exists():
+                mode = stat.S_IMODE(destination.stat().st_mode)
+                backup = destination.with_name(f"{destination.name}.bak-{run_id}")
+                shutil.copy2(destination, backup)
+            entries.append((destination, backup))
+            temporary = destination.with_name(f"{destination.name}.tmp-{run_id}")
+            _stage_write(source, temporary, mode)
+            temporaries.append(temporary)
+        for index, (destination, backup) in enumerate(entries):
+            os.replace(temporaries[index], destination)
+            renamed.append((destination, backup))
+    except BaseException:
+        _undo_renames(renamed)
+        for temporary in temporaries:
+            _unlink_quietly(temporary)
+        for _destination, backup in entries:
+            if backup is not None:
+                _unlink_quietly(backup)
+        raise
+    return Promotion(run_id, tuple(entries))
+
+
+def _finalize_promotion(promotion: Promotion | None) -> None:
+    """Drop the undo record: the run is committed."""
+    if promotion is None:
+        return
+    for _destination, backup in promotion.entries:
+        if backup is not None:
+            _unlink_quietly(backup)
+
+
+def _rollback_promotion(promotion: Promotion | None, state_dir: Path) -> bool:
+    """Undo a committed promotion; report, never raise, on a partial undo."""
+    if promotion is None:
+        return True
+    failures = _undo_renames(promotion.entries)
+    for _destination, backup in promotion.entries:
+        if backup is not None:
+            _unlink_quietly(backup)
+    if failures:
+        write_health(
+            state_dir,
+            f"promotion-rollback-failed:{failures[0]}",
+            warning=True,
+        )
+    return not failures
 
 
 def _run_model_text(prompt: str) -> tuple[str | None, str | None]:
@@ -1203,13 +1353,21 @@ def _run_claude(prompt: str, stage: Path) -> str | None:
     return error
 
 
+class CompileOutcome(NamedTuple):
+    """What the caller needs beyond the run's reason string."""
+
+    promotion: Promotion | None = None
+    # Machine-readable slugs for the rejection ledger, e.g. ("nested-path",).
+    reasons: tuple[str, ...] = ()
+
+
 def _compile_one(
     vault_root: Path,
     state_dir: Path,
     daily_path: Path,
     expected_digest: str,
     timestamp: str,
-) -> tuple[str | None, str]:
+) -> tuple[str | None, str, CompileOutcome]:
     stage: Path | None = None
     try:
         stage, live_baseline = _prepare_stage(
@@ -1219,7 +1377,7 @@ def _compile_one(
         )
         staged_daily = stage / "daily" / daily_path.name
         if _sha256(staged_daily) != expected_digest:
-            return "source-changed", "source-changed-before-call"
+            return "source-changed", "source-changed-before-call", CompileOutcome()
         before = _manifest(stage)
         earlier_anchors = snapshot_source_anchors(stage)
         root_map_text = (stage / "knowledge" / "index.md").read_text(
@@ -1258,7 +1416,7 @@ def _compile_one(
                 source_path=daily_path,
             )
             write_health(state_dir, "quarantine:directive-shaped")
-            return "input-quarantine", destination.as_posix()
+            return "input-quarantine", destination.as_posix(), CompileOutcome()
         prompt = build_compile_prompt(
             root_map_text,
             registry_text,
@@ -1280,9 +1438,9 @@ def _compile_one(
         else:
             error = _run_claude(prompt, stage)
         if error is not None:
-            return error, error
+            return error, error, CompileOutcome()
         if _sha256(daily_path) != expected_digest:
-            return "source-changed", "source-changed-after-call"
+            return "source-changed", "source-changed-after-call", CompileOutcome()
         after = _manifest(stage)
         changed_files = _validate_manifest_diff(before, after)
         # Model bütün notu yeniden yazsa bile daha önceki kaynak izlerini
@@ -1329,17 +1487,30 @@ def _compile_one(
         # index-full.md ve log.md kavram şemasına tabi değildir.
         promoted_files = []
         schema_rejected = []
+        schema_reasons: list[str] = []
         for relative in safe_files:
             if not _is_concept_note(relative):
                 promoted_files.append(relative)
                 continue
             output = (stage / relative).read_text(encoding="utf-8")
+            # A note under knowledge/concepts/<sub>/ would be promoted into a
+            # place nothing reads. That is a schema failure, not a policy
+            # crash: the note is held with the rest of the run's output.
+            if not _is_direct_concept_note(relative):
+                problems = [f"nested-path:{relative}"]
+                _quarantine_schema(vault_root, relative, output, problems)
+                schema_rejected.append(relative)
+                if "nested-path" not in schema_reasons:
+                    schema_reasons.append("nested-path")
+                continue
             problems = sema.validate_concept(output, Path(relative))
             if not problems:
                 promoted_files.append(relative)
                 continue
             _quarantine_schema(vault_root, relative, output, problems)
             schema_rejected.append(relative)
+            if "schema-invalid" not in schema_reasons:
+                schema_reasons.append("schema-invalid")
         schema_detail = ""
         if schema_rejected:
             schema_detail = "schema-invalid:" + ",".join(schema_rejected)
@@ -1350,18 +1521,35 @@ def _compile_one(
                 state_dir, schema_detail, warning=bool(quarantined_outputs)
             )
 
-        _promote_changes(stage, vault_root, promoted_files, live_baseline)
-        if quarantined_outputs:
-            return "output-quarantine", ",".join(quarantined_outputs)
-        if schema_rejected:
-            return "schema-invalid", schema_detail
-        return None, ""
+        # All or nothing per daily. A rejected sibling means this compile of
+        # this daily produced an incomplete picture: promoting the clean half
+        # while the daily is left unconsumed would publish the same partial
+        # notes again on the retry, and promoting it while consuming the daily
+        # (the old behaviour) destroyed the only source the held notes had.
+        if quarantined_outputs or schema_rejected:
+            reasons: list[str] = []
+            if quarantined_outputs:
+                reasons.append("directive-shaped")
+            reasons.extend(schema_reasons)
+            outcome = CompileOutcome(reasons=tuple(reasons))
+            if quarantined_outputs:
+                return (
+                    "output-quarantine",
+                    ",".join(quarantined_outputs),
+                    outcome,
+                )
+            return "schema-invalid", schema_detail, outcome
+
+        promotion = _promote_changes(
+            stage, vault_root, promoted_files, live_baseline
+        )
+        return None, "", CompileOutcome(promotion=promotion)
     except NoChangesError as exc:
-        return "no-changes", str(exc)
+        return "no-changes", str(exc), CompileOutcome(reasons=("no-changes",))
     except PolicyError as exc:
-        return "policy", str(exc)
+        return "policy", str(exc), CompileOutcome()
     except (OSError, UnicodeError) as exc:
-        return "stage-error", exc.__class__.__name__
+        return "stage-error", exc.__class__.__name__, CompileOutcome()
     finally:
         if stage is not None:
             try:
@@ -1380,6 +1568,61 @@ def _append_run(
         {"ts": timestamp, "daily_file": daily_name, "status": status}
     )
     state["runs"] = state["runs"][-20:]
+
+
+def _forget_rejection(state: dict[str, Any], daily_name: str) -> None:
+    """A daily that finally compiled clean carries no rejection history."""
+    for key in ("rejected", "parked"):
+        bucket = state.get(key)
+        if isinstance(bucket, dict):
+            bucket.pop(daily_name, None)
+
+
+def _reject_daily(
+    state: dict[str, Any],
+    daily_name: str,
+    digest: str,
+    reasons: Sequence[str],
+    timestamp: str,
+) -> tuple[bool, dict[str, Any]]:
+    """Record a run that promoted nothing; return ``(parked, entry)``.
+
+    The daily is NOT marked ingested either way. While the attempt count is
+    under the bound the file stays in ``rejected`` and is re-presented on the
+    next compile; at the bound it moves to ``parked`` so the queue stops
+    spending model calls on it, and the reason is surfaced in health.
+    """
+    slugs = tuple(reasons) or ("unknown",)
+    rejected = state.setdefault("rejected", {})
+    if not isinstance(rejected, dict):
+        rejected = state["rejected"] = {}
+    previous = rejected.get(daily_name)
+    attempts = 1
+    if isinstance(previous, dict) and previous.get("digest") == digest:
+        try:
+            attempts = int(previous.get("attempts", 0)) + 1
+        except (TypeError, ValueError):
+            attempts = 1
+    limit = (
+        MAX_NO_CHANGE_ATTEMPTS
+        if set(slugs) == {"no-changes"}
+        else MAX_REJECT_ATTEMPTS
+    )
+    entry = {
+        "digest": digest,
+        "reasons": list(slugs),
+        "ts": timestamp,
+        "attempts": attempts,
+    }
+    if attempts >= limit:
+        rejected.pop(daily_name, None)
+        parked = state.setdefault("parked", {})
+        if not isinstance(parked, dict):
+            parked = state["parked"] = {}
+        parked[daily_name] = {**entry, "reason": slugs[0]}
+        return True, entry
+    rejected[daily_name] = entry
+    return False, entry
 
 
 def _release_trigger_claim(claim: Path | None) -> None:
@@ -1579,6 +1822,7 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             VAULT_ROOT,
             state["ingested"],
             state.get("quarantined", {}),
+            state.get("parked", {}),
         )
     except (OSError, ValueError, PolicyError) as exc:
         _record_failure(
@@ -1611,7 +1855,7 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
     schema_error = ""
     for daily_path, digest in selected:
         timestamp = _iso_now()
-        reason, detail = _compile_one(
+        reason, detail, outcome = _compile_one(
             VAULT_ROOT,
             STATE_DIR,
             daily_path,
@@ -1650,27 +1894,100 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
             )
             return 0
 
-        # "no-changes" hata değil, iyi huylu son durum: günlükten çıkarılacak
-        # kalıcı bilgi yok. Digest'i yazıp kuyruğu durdurmadan sıradakine
-        # geçilir; aksi halde aynı dosya her koşuda yeniden model çağırır.
-        if reason == "no-changes":
-            status = "ok:no-changes"
-        elif reason == "output-quarantine":
-            status = "ok:output-quarantined"
-            quarantine_seen = True
-        elif reason == "schema-invalid":
-            # Not a failed run: the daily was compiled, its clean siblings were
-            # promoted, and only the note that missed the schema was held back.
-            # Failing here instead would re-queue the same daily every night.
-            status = "ok:schema-invalid"
-            schema_error = detail
-        else:
-            status = "ok"
+        # Nothing was promoted from this daily: the model wrote no allowed file
+        # ("no-changes"), or a produced note failed the directive or schema
+        # gate and the whole run was refused. The daily is NOT consumed — it is
+        # booked in the rejection ledger and offered again next compile until
+        # its attempt bound parks it.
+        if reason is not None:
+            parked, entry = _reject_daily(
+                state,
+                daily_path.name,
+                digest,
+                outcome.reasons,
+                timestamp,
+            )
+            if reason == "output-quarantine":
+                quarantine_seen = True
+            elif reason == "schema-invalid":
+                schema_error = detail
+            if parked:
+                status = f"parked:{entry['reasons'][0]}"
+                write_health(STATE_DIR, status, warning=True)
+            elif reason == "no-changes":
+                status = "ok:no-changes"
+            elif reason == "output-quarantine":
+                status = "ok:output-quarantined"
+            else:
+                status = "ok:schema-invalid"
+            state["last_run"] = timestamp
+            state["last_status"] = "ok"
+            _append_run(state, timestamp, daily_path.name, status)
+            try:
+                _save_state(state_path, state)
+            except OSError:
+                write_health(STATE_DIR, "state-write-failed")
+                _release_trigger_claim(trigger_claim)
+                return 0
+            # An empty answer is not an error; a stale error flag would
+            # otherwise outlive the crash that set it.
+            if not parked and not quarantine_seen and not schema_error:
+                write_health(STATE_DIR, "")
+            continue
+
+        # From here the promotion is on disk but not yet committed: the map and
+        # the index are rebuilt FIRST, and a failure in either rolls the files
+        # back and fails the run. Marking the daily ingested before that would
+        # consume the source of notes no reader can find.
+        promotion = outcome.promotion
+        rebuild_error = ""
+        try:
+            rootmap.regenerate(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
+        except Exception:
+            rebuild_error = "rootmap-regen-failed"
+        manifest = ""
+        index_skipped = False
+        if not rebuild_error:
+            # Rebuilding FTS5 means re-reading and re-tokenizing every concept
+            # note.  When this daily produced no concept change there is
+            # nothing for it to discover, so the manifest decides instead of
+            # the clock.
+            try:
+                manifest = concepts_manifest_hash(VAULT_ROOT)
+            except OSError:
+                manifest = ""
+            if manifest and manifest == state.get("concepts_manifest", ""):
+                index_skipped = True
+                write_health_skip(
+                    STATE_DIR, "skip:index-rebuild:concepts-unchanged"
+                )
+            else:
+                try:
+                    retrieve.build_index(
+                        vault_root=VAULT_ROOT, state_dir=STATE_DIR
+                    )
+                except Exception:
+                    rebuild_error = "retrieve-rebuild-failed"
+        if rebuild_error:
+            _rollback_promotion(promotion, STATE_DIR)
+            _record_failure(
+                state_path,
+                state,
+                daily_path.name,
+                rebuild_error,
+                rebuild_error,
+                trigger_claim,
+            )
+            return 0
+        _finalize_promotion(promotion)
+        if manifest and not index_skipped:
+            state["concepts_manifest"] = manifest
         state["ingested"][daily_path.name] = digest
+        _forget_rejection(state, daily_path.name)
         state["cursor"] = daily_path.name
         state["last_run"] = timestamp
         state["last_status"] = "ok"
-        _append_run(state, timestamp, daily_path.name, status)
+        _append_run(state, timestamp, daily_path.name, "ok")
         try:
             _save_state(state_path, state)
         except OSError:
@@ -1682,12 +1999,6 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
         # convention: empty error string = healthy).
         if not quarantine_seen and not schema_error:
             write_health(STATE_DIR, "")
-        try:
-            import rootmap
-
-            rootmap.regenerate(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
-        except Exception:
-            write_health(STATE_DIR, "rootmap-regen-failed", warning=True)
         # A fresh map only helps agents that can reach it. Mirroring it into the
         # context files other harnesses already load is what makes the memory
         # visible to them without a per-message prompt hook.
@@ -1698,28 +2009,6 @@ def _run_locked(args: argparse.Namespace, trigger_claim: Path | None) -> int:
                 context_bridge.refresh(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
         except Exception:
             write_health(STATE_DIR, "context-bridge-failed", warning=True)
-        # Rebuilding FTS5 means re-reading and re-tokenizing every concept
-        # note.  When this daily produced no concept change there is nothing
-        # for it to discover, so the manifest decides instead of the clock.
-        try:
-            manifest = concepts_manifest_hash(VAULT_ROOT)
-        except OSError:
-            manifest = ""
-        if manifest and manifest == state.get("concepts_manifest", ""):
-            write_health_skip(STATE_DIR, "skip:index-rebuild:concepts-unchanged")
-            continue
-        try:
-            retrieve.build_index(vault_root=VAULT_ROOT, state_dir=STATE_DIR)
-        except Exception:
-            write_health(STATE_DIR, "retrieve-rebuild-failed", warning=True)
-            continue
-        state["concepts_manifest"] = manifest
-        try:
-            _save_state(state_path, state)
-        except OSError:
-            write_health(STATE_DIR, "state-write-failed")
-            _release_trigger_claim(trigger_claim)
-            return 0
     if quarantine_seen:
         write_health(STATE_DIR, "quarantine:directive-shaped")
     elif schema_error:

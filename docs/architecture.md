@@ -331,49 +331,99 @@ After the model returns, nothing is trusted:
    change, any new directory outside `knowledge/concepts/**`, and any changed file
    that is not `knowledge/index-full.md`, `knowledge/log.md`, or a `.md` under
    `knowledge/concepts/`. No changed file at all raises `NoChangesError`, which is
-   benign — the daily log is marked ingested and the queue moves on.
+   not a failure but is **not** a consumed daily either — see §5.4.
 3. `DIRECTIVE_SHAPED` runs over every staged file that would be promoted. A hit
-   means that file is **not** promoted and its content is quarantined; its clean
-   siblings in the same run still promote. See
+   means that file is quarantined and the **whole run is refused**: nothing from
+   this daily is promoted. See
    [SECURITY.md](../SECURITY.md#quarantine--the-compilers-three-directive-shaped-gates)
    for all three gates and the manual release path.
 4. `secret_guard.scan()` runs over the output. A hit raises `PolicyError` and
    fails the whole run — a secret is never a per-file problem.
 5. `sema.validate_concept()` runs over every staged **concept note** (not
-   `index-full.md`, not `log.md`). A note that misses the frontmatter schema is
-   not promoted; it goes to `.stage/karantina/sema/` with a sidecar naming the
-   problems, health records `schema-invalid:<file>`, and its clean siblings
-   still promote. See §5.7.
+   `index-full.md`, not `log.md`). A note that misses the frontmatter schema goes
+   to `.stage/karantina/sema/` with a sidecar naming the problems, and health
+   records `schema-invalid:<file>`. A note written under a subdirectory
+   (`knowledge/concepts/<sub>/x.md`) is refused the same way with the single
+   problem `nested-path:<file>`: every reader — `retrieve.build_index()`,
+   `rootmap.load_concepts()`, `concepts_manifest_hash()` — uses the
+   non-recursive `concepts/*.md` glob, so promoting it would publish the note
+   into invisibility. Either rejection refuses the whole run. See §5.7.
 6. `_validate_live_destination()` re-checks each promoted path against the
-   allow-list, resolves it, and confirms it lands inside `knowledge/`.
-7. Each file is written with `_atomic_copy()`; the recorded live baseline digest
-   is used to detect that the live file changed underneath the run.
+   allow-list, resolves it, confirms it lands inside `knowledge/` and refuses a
+   nested concept path a second time.
+7. Publication is **all or nothing**. `_promote_changes()` is two-phase: it first
+   copies every live target aside as `<dest>.bak-<run id>` and writes the new
+   content next to it as `<dest>.tmp-<run id>`, then renames the temporaries into
+   place in a second loop. A failure in either phase restores the destinations it
+   had already renamed from their backups, deletes the temporaries and re-raises,
+   so a half-published compile never reaches the vault. The backups outlive the
+   rename loop: `_finalize_promotion()` drops them only once the run is
+   committed, which is what lets §5.5 undo a promotion after the fact. The
+   recorded live baseline digest still detects a live file that changed
+   underneath the run.
 
 The staging tree is removed afterwards, including on failure —
 `.stage/karantina/` is not part of it and survives.
 
+Rejection is per daily, not per file. A run that produces one held note and two
+clean siblings promotes nothing: the clean siblings are a partial reading of a
+source the compiler is about to read again, and the daily that produced the held
+note is exactly what a retry needs. Promoting the clean half **and** consuming
+the daily — the behaviour before this layer — destroyed the only source the held
+note could have been rebuilt from.
+
 ### 5.4 Run bookkeeping
 
 `compile-state.json` holds `ingested` (daily filename → SHA-256), `cursor`,
-`last_run`, `last_status`, a run history, and `quarantined` (content SHA-256 →
-`{source_file, quarantined_at, quarantine_file}`). Corrupt state is quarantined
-rather than overwritten. At most `DEFAULT_MAX_CALLS = 3` daily logs are processed
-per run. A successful run writes an **empty** health error, clearing any stale
-failure flag — otherwise the health check keeps reporting a crash that was fixed
-days ago.
+`last_run`, `last_status`, a run history, `quarantined` (content SHA-256 →
+`{source_file, quarantined_at, quarantine_file}`), and the rejection ledger
+`rejected` / `parked` (both daily filename → `{digest, reasons, ts, attempts}`,
+`parked` additionally carrying `reason`). Older state files predate the last two
+keys; `load_state()` fills them in from `_default_state()` and treats a
+wrong-typed value as absent, so no state file needs migrating. Corrupt state is
+quarantined rather than overwritten. At most `DEFAULT_MAX_CALLS = 3` daily logs
+are processed per run. A successful run writes an **empty** health error,
+clearing any stale failure flag — otherwise the health check keeps reporting a
+crash that was fixed days ago.
 
-`changed_daily_logs()` skips a file whose digest is in `quarantined`, so a held
-daily is not retried every night. Keying on content rather than filename is what
-makes an edited file eligible again with no separate release step.
+**A daily is marked `ingested` only when the run promoted every note it
+produced.** Any other ending — a quarantined output, a schema or `nested-path`
+rejection, or an empty answer — records the daily in `rejected` with its reason
+slugs and an attempt count, and re-presents it on the next compile. The run
+itself is still `ok` (`ok:no-changes`, `ok:output-quarantined`,
+`ok:schema-invalid`); it is the daily, not the run, that is unfinished. At
+`MAX_REJECT_ATTEMPTS = 3` attempts on the same digest — `MAX_NO_CHANGE_ATTEMPTS
+= 2` for an empty answer, which is even less likely to change on a third look —
+the entry moves to `parked` with run status and health **warning**
+`parked:<reason>`. Parked is not ingested: the daily is simply no longer worth a
+model call. Editing it produces a new digest and a fresh chance.
+
+`changed_daily_logs()` skips a file whose digest is in `quarantined` or matches a
+`parked` entry, so a held daily is not retried every night. Keying on content
+rather than filename is what makes an edited file eligible again with no separate
+release step.
 
 ### 5.5 Post-compile regeneration
 
-After each successful daily log, in order:
+These run **before** the daily is marked ingested, on the promoted files, in
+order:
 
-1. `rootmap.regenerate()` — see below. A failure is recorded as a health *warning*
-   and does not abort the compile.
-2. `retrieve.build_index()` — rebuilds the FTS5 database. Same warning-only
-   handling.
+1. `rootmap.regenerate()` — see below.
+2. `retrieve.build_index()` — rebuilds the FTS5 database, unless
+   `concepts_manifest_hash()` shows the concept set is unchanged, in which case
+   the rebuild is skipped loudly (`skip:index-rebuild:concepts-unchanged`).
+
+A failure in either is **not** a warning about a finished run: the run did not
+finish. `_rollback_promotion()` puts every promoted file back from the backups
+§5.3 kept, `_record_failure()` records `fail:rootmap-regen-failed` or
+`fail:retrieve-rebuild-failed`, and the daily stays queued. A promotion the index
+never saw is invisible to every reader, so consuming its source first is how a
+run could silently lose knowledge. `rootmap.regenerate()` publishes its own
+output the same two-phase way (`_publish()`): the root map and the hubs it
+promises land together or not at all.
+
+`context_bridge.refresh()` runs after the state write and stays warning-only —
+it is a mirror of the map, not the map.
 
 ### 5.6 The machine-identified compile lock
 

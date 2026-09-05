@@ -245,7 +245,13 @@ class PromotionGateTests(SchemaGateHarness):
         self.assertNotIn("created:", held)
         self.assertFalse((self.concepts / "bozuk.md").exists())
 
-    def test_one_bad_file_does_not_block_its_two_siblings(self) -> None:
+    def test_one_bad_file_holds_back_its_two_siblings(self) -> None:
+        """One rejected note refuses the whole run for that daily.
+
+        The siblings are not wrong, but they are a partial reading of a source
+        the compiler is about to re-read: publishing them now and again on the
+        retry is how duplicate half-notes were born.
+        """
         self._run(
             {
                 "bir.md": VALID,
@@ -254,8 +260,8 @@ class PromotionGateTests(SchemaGateHarness):
             }
         )
 
-        self.assertTrue((self.concepts / "bir.md").is_file())
-        self.assertTrue((self.concepts / "iki.md").is_file())
+        self.assertFalse((self.concepts / "bir.md").exists())
+        self.assertFalse((self.concepts / "iki.md").exists())
         self.assertFalse((self.concepts / "bozuk.md").exists())
         self.assertEqual(len(self._sema_quarantine()), 1)
 
@@ -270,12 +276,70 @@ class PromotionGateTests(SchemaGateHarness):
         )
         self.assertEqual(sidecar["problems"], ["body-empty:govdesiz.md"])
 
-    def test_the_daily_is_still_marked_ingested(self) -> None:
-        """A held note must not re-queue the same daily every night."""
+    def test_the_daily_is_not_consumed_by_a_held_note(self) -> None:
+        """The source of a held note must survive the run that held it."""
         self._run({"bozuk.md": without("tags")})
 
-        self.assertIn("2026-08-26.md", self._state()["ingested"])
-        self.assertEqual(self._state()["last_status"], "ok")
+        state = self._state()
+        self.assertNotIn("2026-08-26.md", state["ingested"])
+        self.assertEqual(
+            state["rejected"]["2026-08-26.md"]["reasons"], ["schema-invalid"]
+        )
+        self.assertEqual(state["rejected"]["2026-08-26.md"]["attempts"], 1)
+        self.assertEqual(state["last_status"], "ok")
+        self.assertEqual(state["runs"][-1]["status"], "ok:schema-invalid")
+
+    def test_the_daily_is_parked_after_three_failed_attempts(self) -> None:
+        """Re-presenting is bounded: an unsatisfiable daily stops costing calls."""
+        self._daily()
+        writer = self._writer({"bozuk.md": without("tags")})
+        runner = mock.Mock(side_effect=writer)
+        with mock.patch.object(compile_module, "_run_claude", runner):
+            for _ in range(compile_module.MAX_REJECT_ATTEMPTS + 2):
+                self.assertEqual(compile_module.main([]), 0)
+
+        self.assertEqual(runner.call_count, compile_module.MAX_REJECT_ATTEMPTS)
+        state = self._state()
+        self.assertNotIn("2026-08-26.md", state["ingested"])
+        self.assertEqual(state["parked"]["2026-08-26.md"]["reason"], "schema-invalid")
+        self.assertEqual(state["runs"][-1]["status"], "parked:schema-invalid")
+
+    def test_a_note_written_into_a_subdirectory_is_refused(self) -> None:
+        """`knowledge/concepts/<sub>/x.md` is promotion into invisibility.
+
+        Every reader — retrieve's index, the root map, the manifest — uses the
+        non-recursive `concepts/*.md` glob, so a nested note would be published
+        where nothing can ever find it.
+        """
+        def stub(_prompt: str, stage: Path) -> str | None:
+            nested = stage / "knowledge" / "concepts" / "alt"
+            nested.mkdir()
+            (nested / "derin.md").write_text(VALID, encoding="utf-8")
+            return None
+
+        self._daily()
+        with mock.patch.object(compile_module, "_run_claude", stub):
+            self.assertEqual(compile_module.main([]), 0)
+
+        self.assertFalse((self.concepts / "alt" / "derin.md").exists())
+        held = self._sema_quarantine()
+        self.assertEqual(len(held), 1)
+        sidecar = json.loads(held[0].with_suffix(".json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            sidecar["problems"], ["nested-path:knowledge/concepts/alt/derin.md"]
+        )
+        state = self._state()
+        self.assertNotIn("2026-08-26.md", state["ingested"])
+        self.assertEqual(
+            state["rejected"]["2026-08-26.md"]["reasons"], ["nested-path"]
+        )
+
+    def test_a_nested_note_can_never_be_promoted_directly(self) -> None:
+        """Defence in depth: the promotion path refuses it too."""
+        with self.assertRaises(compile_module.PolicyError):
+            compile_module._validate_live_destination(
+                self.root, "knowledge/concepts/alt/derin.md", None
+            )
 
     def test_the_index_is_not_subject_to_the_concept_schema(self) -> None:
         def stub(_prompt: str, stage: Path) -> str | None:
