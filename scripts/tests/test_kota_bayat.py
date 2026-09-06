@@ -497,5 +497,169 @@ class KalanYuzdeTests(unittest.TestCase):
         self.assertEqual(kota_hiz.kisa_metin(d), " [? bayat 2158dk]")
 
 
+class CodexOlayGunluguTests(unittest.TestCase):
+    """Codex rollout gözlemi reset'e kadar geçerlidir (2026-09-07 düzeltmesi).
+
+    Kusur: 6 Eylül 00:58'de satır `Codex 5s %83 [? bayat 124dk] … bant:
+    bilinmiyor (codex-5s bayat)` bastı. Rollout mtime'ı yalnız Codex KOŞTUKÇA
+    ilerler; 124 dakikadır Codex çalışmadıysa kullanım da değişmemiştir, yani
+    %83 hâlâ doğrudur. Yaş kuralı yalnız YOKLANAN kaynağa (OAuth) aittir.
+    """
+
+    def _ornek(self, resets_at: int, used: float = 83.0) -> dict:
+        """Ölçüm ufkunun (5s penceresi → 25 dk) içinde tek örnek."""
+        return {"ts": SIMDI - 20 * 60, "id": "codex-5s", "used": used,
+                "resets_at": int(resets_at), "gozlem": int(SIMDI - 124 * 60)}
+
+    def _codex(self, resets_at: int, yas_dk: int | None, esik: int | None = None,
+               ornekler: list | None = None) -> dict:
+        return kota_hiz.degerlendir(
+            "codex-5s", 83.0, resets_at, 5 * SAAT,
+            ornekler=ornekler if ornekler is not None else [],
+            simdi=SIMDI, gozlem_yas_dk=yas_dk,
+            bayat_esik=esik, bayat_kurali=kota_hiz.KURAL_RESET,
+        )
+
+    def test_eski_gozlem_reset_gelecekteyse_bayat_degil(self) -> None:
+        d = self._codex(int(SIMDI + 86 * 60), 180)  # 3 saatlik gözlem, reset 1,4 saat sonra
+
+        self.assertFalse(d["bayat"])
+        self.assertNotEqual(d["bant"], kota_hiz.BANT_BILINMIYOR)
+        self.assertEqual(d["used"], 83.0)
+        self.assertNotIn("bayat", kota_hiz.kisa_metin(d))
+
+    def test_etkinlik_yokken_yanma_sifir_ve_kalan_gorunur(self) -> None:
+        """Etkinlik yoksa yanma = 0 DOĞRUDUR; okuyucu kalanı görsün (A-borç 5)."""
+        reset = int(SIMDI + 86 * 60)
+        d = self._codex(reset, 180, ornekler=[self._ornek(reset)])
+
+        self.assertEqual(d["yanma"], 0.0)
+        self.assertEqual(d["R"], 0.0)
+        self.assertFalse(d["tahmin"])
+        self.assertEqual(kota_hiz.kisa_metin(d), " [R 0,0 · serbest · kalan %17]")
+
+    def test_sessiz_gunlukte_geriye_bakan_yedek_kullanilmaz(self) -> None:
+        """Ufukta yeni rollout yok → yanma 0; used÷elapsed yedeği %83'ü "kapalı"
+        gösteriyordu (6 Eylül 00:58). Sessizlik, sıfır etkinliğin kanıtıdır."""
+        d = self._codex(int(SIMDI + 86 * 60), 124, ornekler=[])  # ufuk 25 dk < 124 dk
+
+        self.assertEqual(d["yanma"], 0.0)
+        self.assertFalse(d["tahmin"])
+        self.assertEqual(d["bant"], "serbest")
+        self.assertEqual(kota_hiz.kisa_metin(d), " [R 0,0 · serbest · kalan %17]")
+
+    def test_taze_gozlemde_yedek_tahmin_hala_calisir(self) -> None:
+        """Gözlem ufkun içindeyse (Codex az önce koştu) yedek tahmin korunur."""
+        d = self._codex(int(SIMDI + 86 * 60), 5, ornekler=[])
+
+        self.assertTrue(d["tahmin"])
+        self.assertIsNotNone(d["R"])
+
+    def test_reset_gecmisse_ve_yeni_rollout_yoksa_bilinmiyor(self) -> None:
+        # gözlem reset'ten ESKİ → pencere döndü, değer eski pencereye ait.
+        d = self._codex(int(SIMDI - 30 * 60), 180)
+
+        self.assertEqual(d["bant"], kota_hiz.BANT_BILINMIYOR)
+        self.assertNotEqual(d["bant"], "serbest")
+        self.assertEqual(d["not"], "reset geçti, gözlem doğrulanmadı")
+
+    def test_reset_gecmis_ama_gozlem_reset_sonrasiysa_serbest(self) -> None:
+        d = self._codex(int(SIMDI - 60 * 60), 30)  # reset 1 saat önce, gözlem 30 dk önce
+
+        self.assertEqual(d["bant"], "serbest")
+        self.assertEqual(d["not"], "reset geçti")
+
+    def test_kacis_kapagi_yas_kuralini_geri_acar(self) -> None:
+        import os
+
+        self.assertEqual(kota_hiz.codex_bayat_esik_dk(), 0)  # varsayılan: kapalı
+        os.environ["BEYIN_KOTA_CODEX_BAYAT_DK"] = "60"
+        try:
+            self.assertEqual(kota_hiz.codex_bayat_esik_dk(), 60)
+            d = kota_hiz.degerlendir(
+                "codex-5s", 83.0, int(SIMDI + 86 * 60), 5 * SAAT,
+                ornekler=[], simdi=SIMDI, gozlem_yas_dk=180,
+                bayat_kurali=kota_hiz.KURAL_RESET,
+            )
+        finally:
+            del os.environ["BEYIN_KOTA_CODEX_BAYAT_DK"]
+
+        self.assertTrue(d["bayat"])
+        self.assertEqual(d["bant"], kota_hiz.BANT_BILINMIYOR)
+
+    def test_oauth_kurali_ayni_veride_bayat_demeye_devam_eder(self) -> None:
+        """Aynı yaş, yoklanan kaynakta hâlâ bayat — kural KAYNAĞA göre ayrışır."""
+        d = kota_hiz.degerlendir(
+            "claude-5s", 83.0, int(SIMDI + 86 * 60), 5 * SAAT,
+            ornekler=[], simdi=SIMDI, gozlem_yas_dk=180,
+        )
+
+        self.assertTrue(d["bayat"])
+        self.assertEqual(d["bant"], kota_hiz.BANT_BILINMIYOR)
+
+    def test_pencereler_kaynak_kuralini_tasir(self) -> None:
+        codex = {
+            "primary": {"used_percent": 83.0, "resets_at": int(SIMDI + 86 * 60),
+                        "window_minutes": 300},
+            "secondary": {"used_percent": 27.0, "resets_at": int(SIMDI + 5 * 86400),
+                          "window_minutes": 10080},
+            "_gozlem": int(SIMDI - 124 * 60),
+        }
+        resmi = {
+            "five_hour": {"used_percentage": 36.0, "resets_at": int(SIMDI + 2 * SAAT)},
+            "seven_day": {"used_percentage": 7.0, "resets_at": int(SIMDI + 6 * 86400)},
+            "_kaynak": "oauth",
+            "_gozlem": int(SIMDI - 2158 * 60),
+        }
+
+        kural = {p["id"]: p["bayat_kurali"] for p in kota.pencereler(codex, resmi, simdi=SIMDI)}
+
+        self.assertEqual(kural["codex-5s"], kota_hiz.KURAL_RESET)
+        self.assertEqual(kural["codex-hafta"], kota_hiz.KURAL_RESET)
+        self.assertEqual(kural["claude-5s"], kota_hiz.KURAL_YAS)
+        self.assertEqual(kural["claude-hafta"], kota_hiz.KURAL_YAS)
+
+    def test_canli_satir_codex_bayat_demez(self) -> None:
+        """6 Eylül 00:58 verisi: Codex ölçülür, yalnız OAuth bayat kalır."""
+        codex = {
+            "primary": {"used_percent": 83.0, "resets_at": int(SIMDI + 86 * 60),
+                        "window_minutes": 300},
+            "secondary": {"used_percent": 27.0, "resets_at": int(SIMDI + 5 * 86400),
+                          "window_minutes": 10080},
+            "_gozlem": int(SIMDI - 124 * 60),
+        }
+        resmi = {
+            "five_hour": {"used_percentage": 36.0, "resets_at": int(SIMDI + 2 * SAAT)},
+            "seven_day": {"used_percentage": 7.0, "resets_at": int(SIMDI + 6 * 86400)},
+            "_kaynak": "oauth",
+            "_yas_dk": 2158,
+            "_bayat": True,
+            "_gozlem": int(SIMDI - 2158 * 60),
+            "_oauth_hata": "jeton-suresi-doldu",
+            "_oauth_http": 401,
+        }
+        ornekler = [self._ornek(codex["primary"]["resets_at"]),
+                    {"ts": SIMDI - 20 * 60, "id": "codex-hafta", "used": 27.0,
+                     "resets_at": codex["secondary"]["resets_at"],
+                     "gozlem": int(SIMDI - 124 * 60)}]
+        hiz = {
+            p["id"]: kota_hiz.degerlendir(
+                p["id"], p["used"], p["resets_at"], p["pencere_sn"],
+                ornekler=ornekler, simdi=SIMDI, gozlem_yas_dk=p["gozlem_yas_dk"],
+                bayat_kurali=p["bayat_kurali"],
+            )
+            for p in kota.pencereler(codex, resmi, simdi=SIMDI)
+        }
+
+        satir = kota.tek_satir(codex, {"5s": {}, "7g": {}}, resmi, hiz)
+
+        self.assertIn("Codex 5s %83 [R 0,0 · serbest · kalan %17]", satir)
+        self.assertIn("hafta %27 [R 0,0 · serbest]", satir)
+        self.assertNotIn("codex-5s bayat", satir)
+        self.assertIn("Claude 5s %36 [? bayat 2158dk]", satir)
+        self.assertIn("[oauth 2158dk bayat · 401]", satir)
+        self.assertIn("bant: bilinmiyor (claude-5s bayat)", satir)
+
+
 if __name__ == "__main__":
     unittest.main()

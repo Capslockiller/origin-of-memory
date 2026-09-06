@@ -105,6 +105,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 <!-- yazan: claude · opus-5 -->
+- **A Codex quota reading is not stale just because Codex has been idle.**
+  (2026-09-07, follow-up to Astra A8.) The staleness rule introduced yesterday
+  applied one age threshold (`BEYIN_KOTA_BAYAT_DK`, 120 min) to every source,
+  but the two sources are different animals. Claude's percentages come from a
+  *polled* OAuth cache that is expected to refresh every 300 s — if it stops
+  refreshing, the value may be frozen and its age is genuine staleness. Codex's
+  percentages come from the newest `rollout-*.jsonl` file's mtime, an *event
+  log*: it only advances when Codex actually runs, so two idle hours mean "no
+  new events", not "unknown usage" — the last observation is still true until
+  the window's `resets_at`. Live at 00:58 the line therefore read
+  `Codex 5s %83 [? bayat 124dk] … hafta %27 [? bayat 124dk] … bant: bilinmiyor
+  (codex-5s bayat)` while %83 was perfectly correct. `kota_hiz.degerlendir`
+  gains a `bayat_kurali` argument with two values: `KURAL_YAS` (default, polled
+  cache — unchanged behaviour) and `KURAL_RESET` (event log — age never marks
+  the observation stale; it is valid until `resets_at`, and once the reset has
+  passed the window is `bilinmiyor` unless a rollout observation newer than the
+  reset exists — no guessing). `kota.pencereler` tags the `codex-*` windows with
+  `KURAL_RESET` and the `claude-*` windows with `KURAL_YAS`. The same silence
+  also disarmed the backward-looking burn-rate fallback: when an event-log
+  source has produced nothing within the measurement horizon (5 h window →
+  25 min), burn is now `0.0` rather than `used ÷ elapsed`, which had been
+  projecting the start-of-window burst onto the present and reporting a
+  two-and-a-half-hours-of-headroom `%83` as `kapalı`. An escape hatch,
+  `BEYIN_KOTA_CODEX_BAYAT_DK` (default `0` = off), restores age-based staleness
+  for Codex for anyone who wants it. With tonight's live data the line now reads
+  `Codex 5s %83 [R 0,0 · serbest · kalan %17] (reset 7 Eyl Pzt 02:24) · hafta
+  %27 [R 2,1 · kapalı · biter 09.09 13:37] | Claude 5s %36 [? bayat 2191dk] …
+  [oauth 2191dk bayat · 401] | bant: kapalı (codex-hafta)` — the OAuth staleness
+  is untouched, and the governing band comes from a measured window instead of
+  an unknown one. `test_kota_bayat.py` gains ten cases (old observation with a
+  future reset, silent log → burn 0, fresh observation keeps the estimate,
+  reset passed without a newer rollout → `bilinmiyor`, reset passed with one →
+  `serbest`, the escape hatch, the unchanged OAuth rule on identical data, the
+  per-source tags in `pencereler`, and the full live line).
+
+<!-- yazan: claude · opus-5 -->
 - **Four mechanism debts: maintenance rotated a file nobody writes, the flush
   hook left no trace of being entered, retrieval had a second gateless door,
   and the OAuth cache went stale for 36 hours without saying why.** (Astra

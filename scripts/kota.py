@@ -35,6 +35,12 @@ zaman damgasını (`gozlem`) da taşır — OAuth önbelleğinin yazılma anı, 
 rollout dosyasının mtime'ı. Gözlem `BEYIN_KOTA_BAYAT_DK` dakikadan (varsayılan
 120) eskiyse o pencerenin bantı `bilinmiyor` olur ve satırda `[? bayat 2050dk]`
 görünür; `bilinmiyor` asla "serbest" diye okunmaz. Ayrıntı: kota_hiz docstring'i.
+Bu yaş kuralı YALNIZ yoklanan kaynağa (Claude/OAuth önbelleği) işler. Codex'in
+kaynağı rollout dosyasının mtime'ıdır ve yalnız Codex koştukça ilerler: Codex
+çalışmadıysa kullanım da değişmez, gözlem bayat değildir. Codex pencereleri
+`kota_hiz.KURAL_RESET` ile değerlendirilir — gözlem `resets_at`'e kadar
+geçerlidir, reset geçtikten sonra yeni rollout yoksa `bilinmiyor` olur.
+Kaçış kapağı: `BEYIN_KOTA_CODEX_BAYAT_DK` (varsayılan 0 = kapalı).
 
 Kullanım:  python kota.py            # tek satır (SessionStart enjeksiyonu için)
            python kota.py --detay    # çok satırlı döküm
@@ -495,7 +501,10 @@ def pencereler(codex: dict | None, resmi: dict | None, simdi: float | None = Non
             liste.append({"id": pid, "used": blok.get("used_percent"), "resets_at": blok.get("resets_at"),
                           "pencere_sn": int(blok.get("window_minutes") or vars_dk) * 60,
                           "gozlem": codex_gozlem,
-                          "gozlem_yas_dk": _yas_dk(codex_gozlem, simdi)})
+                          "gozlem_yas_dk": _yas_dk(codex_gozlem, simdi),
+                          # Rollout mtime'ı yalnız Codex koştukça ilerler; yaş
+                          # bayatlık ölçüsü değil, gözlem reset'e kadar geçerli.
+                          "bayat_kurali": kota_hiz.KURAL_RESET})
     if resmi:
         gozlem = resmi.get("_gozlem")
         yas = _yas_dk(gozlem, simdi)
@@ -503,16 +512,21 @@ def pencereler(codex: dict | None, resmi: dict | None, simdi: float | None = Non
             yas = resmi["_yas_dk"]
         bes = resmi.get("five_hour") or {}
         hafta = resmi.get("seven_day") or {}
+        # OAuth önbelleği YOKLANIR (300 sn taban): tazelenmiyorsa değer donmuş
+        # olabilir, yaş gerçek bir bayatlıktır → yaş kuralı.
         liste.append({"id": "claude-5s", "used": bes.get("used_percentage"),
                       "resets_at": bes.get("resets_at"), "pencere_sn": SAAT_5,
-                      "gozlem": gozlem, "gozlem_yas_dk": yas})
+                      "gozlem": gozlem, "gozlem_yas_dk": yas,
+                      "bayat_kurali": kota_hiz.KURAL_YAS})
         liste.append({"id": "claude-hafta", "used": hafta.get("used_percentage"),
                       "resets_at": hafta.get("resets_at"), "pencere_sn": GUN_7,
-                      "gozlem": gozlem, "gozlem_yas_dk": yas})
+                      "gozlem": gozlem, "gozlem_yas_dk": yas,
+                      "bayat_kurali": kota_hiz.KURAL_YAS})
         for k in resmi.get("_kapsamli") or []:
             liste.append({"id": "claude-" + str(k.get("ad") or "?").lower(),
                           "used": k.get("used_percentage"), "resets_at": k.get("resets_at"),
-                          "pencere_sn": GUN_7, "gozlem": gozlem, "gozlem_yas_dk": yas})
+                          "pencere_sn": GUN_7, "gozlem": gozlem, "gozlem_yas_dk": yas,
+                          "bayat_kurali": kota_hiz.KURAL_YAS})
     return liste
 
 
@@ -527,7 +541,8 @@ def hizlar(codex: dict | None, resmi: dict | None, kaydet: bool = True) -> dict[
     sonuc = {}
     for p in liste:
         d = kota_hiz.degerlendir(p["id"], p["used"], p["resets_at"], p["pencere_sn"], ornekler,
-                                 gozlem_yas_dk=p.get("gozlem_yas_dk"))
+                                 gozlem_yas_dk=p.get("gozlem_yas_dk"),
+                                 bayat_kurali=p.get("bayat_kurali", kota_hiz.KURAL_YAS))
         if d:
             sonuc[p["id"]] = d
     if kaydet:
