@@ -96,13 +96,12 @@ $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Tara' -f $KancaYol
 $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments `
   -WorkingDirectory (Split-Path -Parent $KancaYolu)
 
-# Next full hour, then every 8 hours forever. A repetition duration of
-# [TimeSpan]::Zero means "indefinitely" on Windows.
+# Next full hour, then every 8 hours forever. No -RepetitionDuration:
+# PS 5.1 on Win 11 rejects a zero duration (PT0S); omitting it means indefinitely.
 $now = Get-Date
 $start = $now.Date.AddHours($now.Hour + 1)
 $trigger = New-ScheduledTaskTrigger -Once -At $start `
-  -RepetitionInterval ([TimeSpan]::FromHours(8)) `
-  -RepetitionDuration ([TimeSpan]::Zero)
+  -RepetitionInterval ([TimeSpan]::FromHours(8))
 
 # Logged-on only: the sweep needs the user's Ollama and CLI. Interactive means
 # no stored password and no service-session surprises.
