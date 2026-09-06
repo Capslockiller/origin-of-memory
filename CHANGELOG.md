@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-07
+
 ### Added
 
 <!-- yazan: claude · opus-5 -->
@@ -159,10 +161,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reported 30 while sending 23. The caps themselves are unchanged, but
   `BEYIN_FLUSH_MAX_TURNS` and `BEYIN_FLUSH_MAX_CHARS` now override them
   (`BEYIN_FLUSH_CHUNK_CHARS` keeps precedence over the latter for existing
-  installs). Known follow-up outside this lane: `ingest_common.summarize_session`
-  compares `min_turns` against `format_turns`' second value, so the honest count
-  can now send an over-long two-turn session down the `bos` path — that check
-  should read `len(session.turns)` instead (`test_ingest_gemini.py`
+  installs). The honest count exposed one follow-up, fixed in this release
+  (a94fdf8): `ingest_common.summarize_session` compared `min_turns` against
+  `format_turns`' second value, so an over-long two-turn session went down the
+  `bos` path; the gate now reads `len(session.turns)`. Model input is
+  unchanged (`test_ingest_gemini.py`
   `test_gemini_local_summary_defaults_to_24k` and
   `..._uses_backend_aware_bound`).
 
@@ -188,6 +191,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / `claude-sonnet-5` / `claude-opus-5`), overridable per tier via
   `BEYIN_CLAUDE_MODEL_<TIER>`, and the ledger's `model_slug` records the id
   actually sent.
+
+<!-- yazan: claude · fable-5.1 (Faz 0 onarım, şerit D/E) -->
+- `scripts/giris_kapisi.py`: one privacy gate (unicode → secret → PII) shared by ingest, kaydet and
+  pasaport on both input and output; MCP search results and context-pack output carry the
+  data-only header. Previously only live flush applied all three guards.
+- `scripts/bakim.py`: bounded-state maintenance (retrieve-session ledgers >7 d, orphan tmp files,
+  zero-byte lock carriers, `enjeksiyon.jsonl` rotation, stale per-session hook dirs); dry-run by
+  default, `--uygula` to act.
+- Hooks keep per-session counters under `.state/oturum-<session>/` (concurrent sessions no longer
+  clobber each other), resolve Python once, and record a failure line to `hook-hatalari.jsonl`
+  instead of silently succeeding. Compile-trigger markers expire (`BEYIN_COMPILE_TRIGGER_TTL_MIN`).
+
+<!-- yazan: claude · sonnet-5 -->
+- **`durum.py` ages health warnings instead of letting old ones look live
+  (kusur kütüğü #18).** `health.json["warnings"]` keeps up to 20 entries and a
+  healthy run never clears them; `durum` now computes each warning's age from
+  its own `ts` when present, else the file's top-level `ts`, and marks
+  anything older than 24 h `eski` in both the table (an `eski` column) and
+  `--json` (`"eski": true`) — the `warnings` list is new in the JSON shape.
+  New `durum.py --temizle-uyarilar` rewrites `health.json` keeping only the
+  non-`eski` warnings, atomically (temp file + `os.replace`, same
+  `beyin_ortak._atomic_write_json` the writer uses) and byte-shape-compatible
+  with every other key; it is a no-op — file untouched — when nothing is
+  stale or the file is absent. `write_health()` itself is unchanged.
 
 ### Fixed
 
@@ -241,7 +268,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`{ts, hook, reason, pid}`) before it reads stdin, so "the hook never fired"
   can finally be told apart from "the hook fired but Python never started" —
   the question session 54's lost 19-hour transcript could not answer.
-  `session-start.ps1` should get the same one-liner (not changed here).
+  `session-start.ps1` carries the same one-liner as of 37a8cb5, so both hook
+  entry points leave a trace.
   `memory-retrieve.ps1` is now a thin compatibility shim that pipes stdin to
   `retrieve.py hook` and returns its stdout and exit code: it had kept its own
   skip logic and no relevance gate while the live registration calls
@@ -381,20 +409,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now a named `BM25_WEIGHTS` constant. Query-time only; no index rebuild
   needed, no `SCHEMA_VERSION` bump.
 
-### Removed
-
-<!-- yazan: claude · fable-5.1 -->
-- **The `rrf` retrieval mode is gone.** Measured against `bm25` on the
-  LoCoMo benchmark (hit@5 0.55 vs 0.13) and on every one of 11 public BEIR
-  datasets, `rrf` scored significantly worse throughout and collapsed on
-  dated, mixed-recency corpora. Deleted: `MODE_RRF`, `_fused_search`,
-  `rrf_fuse`, `tag_overlap`/`indexed_tag_overlap`, the recency-channel and
-  legacy-multiplier machinery, the `BEYIN_RETRIEVAL`/`BEYIN_RRF_K`/
-  `BEYIN_RRF_RECENCY_CHANNEL_WEIGHT`/`BEYIN_RRF_LEGACY_MULTIPLIER`/
-  `BEYIN_RECENCY_HALFLIFE_DAYS` environment variables, `resolve_mode`, and
-  the `--retrieval` CLI flag. `search()` and `hook_result()` keep accepting
-  a `mode` keyword as a no-op for source compatibility with existing
-  callers; every call now ranks by BM25 only.
 <!-- yazan: claude · sonnet -->
 - **`durum`'s call summary no longer breaks on a real-clock rollover.**
   `build_summary()`/`_print_table()` now accept a `now` for the "last 7 days"
@@ -454,31 +468,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   promoted into invisibility. It is now held with the schema-gate reason
   `nested-path`, and the promotion path refuses it a second time.
 
-### Added
+### Removed
 
-<!-- yazan: claude · fable-5.1 (Faz 0 onarım, şerit D/E) -->
-- `scripts/giris_kapisi.py`: one privacy gate (unicode → secret → PII) shared by ingest, kaydet and
-  pasaport on both input and output; MCP search results and context-pack output carry the
-  data-only header. Previously only live flush applied all three guards.
-- `scripts/bakim.py`: bounded-state maintenance (retrieve-session ledgers >7 d, orphan tmp files,
-  zero-byte lock carriers, `enjeksiyon.jsonl` rotation, stale per-session hook dirs); dry-run by
-  default, `--uygula` to act.
-- Hooks keep per-session counters under `.state/oturum-<session>/` (concurrent sessions no longer
-  clobber each other), resolve Python once, and record a failure line to `hook-hatalari.jsonl`
-  instead of silently succeeding. Compile-trigger markers expire (`BEYIN_COMPILE_TRIGGER_TTL_MIN`).
-
-<!-- yazan: claude · sonnet-5 -->
-- **`durum.py` ages health warnings instead of letting old ones look live
-  (kusur kütüğü #18).** `health.json["warnings"]` keeps up to 20 entries and a
-  healthy run never clears them; `durum` now computes each warning's age from
-  its own `ts` when present, else the file's top-level `ts`, and marks
-  anything older than 24 h `eski` in both the table (an `eski` column) and
-  `--json` (`"eski": true`) — the `warnings` list is new in the JSON shape.
-  New `durum.py --temizle-uyarilar` rewrites `health.json` keeping only the
-  non-`eski` warnings, atomically (temp file + `os.replace`, same
-  `beyin_ortak._atomic_write_json` the writer uses) and byte-shape-compatible
-  with every other key; it is a no-op — file untouched — when nothing is
-  stale or the file is absent. `write_health()` itself is unchanged.
+<!-- yazan: claude · fable-5.1 -->
+- **The `rrf` retrieval mode is gone.** Measured against `bm25` on the
+  LoCoMo benchmark (hit@5 0.55 vs 0.13) and on every one of 11 public BEIR
+  datasets, `rrf` scored significantly worse throughout and collapsed on
+  dated, mixed-recency corpora. Deleted: `MODE_RRF`, `_fused_search`,
+  `rrf_fuse`, `tag_overlap`/`indexed_tag_overlap`, the recency-channel and
+  legacy-multiplier machinery, the `BEYIN_RETRIEVAL`/`BEYIN_RRF_K`/
+  `BEYIN_RRF_RECENCY_CHANNEL_WEIGHT`/`BEYIN_RRF_LEGACY_MULTIPLIER`/
+  `BEYIN_RECENCY_HALFLIFE_DAYS` environment variables, `resolve_mode`, and
+  the `--retrieval` CLI flag. `search()` and `hook_result()` keep accepting
+  a `mode` keyword as a no-op for source compatibility with existing
+  callers; every call now ranks by BM25 only.
 
 ### Documentation
 
