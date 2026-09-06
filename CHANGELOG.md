@@ -35,6 +35,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 <!-- yazan: claude · opus-5 -->
+- **The memory hook injected personal notes into internal `claude -p` calls,
+  and into most prompts that did not want them (Astra A3/A4).** The live
+  UserPromptSubmit hook calls `retrieve.py hook` directly, but the
+  `BEYIN_INVOKED_BY` recursion guard existed only in the retired
+  `hooks/memory-retrieve.ps1` wrapper — so every child the compiler, flush or
+  the benchmark harness spawned got concept notes pushed into it. `hook` now
+  exits 0 with no output whenever `BEYIN_INVOKED_BY` is set (`skip:internal`).
+  Beyond that, query tokens are OR-joined with `min_score=0`, so retrieval fired
+  on nearly every prompt: measured against the live 527-note index, 30/30 probe
+  prompts injected, "bugün nasılsın, biraz sohbet edelim" pulling a Star Citizen
+  note and "bu kodu sadeleştir ve hatayı düzelt" an ÖSYM code-risk note. The
+  hook entry point now applies a relevance gate before it injects: an intent
+  skip for pure code/tool commands (`prompt_hafiza_ister`: a fenced code block,
+  or a first content word naming a tool or an edit), and a requirement that at
+  least `GATE_MIN_TOKEN_OVERLAP` (2) distinct content words of the prompt appear
+  in a candidate note's own `title`/`aliases`/`tags` — the body is excluded,
+  because "mentions the word" is not "is about it". A note may still be admitted
+  on score alone above `BEYIN_RETRIEVE_STRICT_SCORE` (default 25.0, above the
+  strongest junk hit measured), and `BEYIN_RETRIEVE_MIN_SCORE` adds a floor
+  (default 0.0: the two score distributions overlap almost completely — 11.4–37.7
+  for memory-worthy hits versus 6.0–20.9 for junk — so no binding default exists,
+  and BM25 magnitudes scale with corpus size). Re-measured on the same 30
+  prompts: 13/15 memory-worthy inject, 0/15 non-memory inject, and the notes
+  chosen for the memory-worthy ones are visibly better because the gate filters
+  candidates rather than only the top hit. The gate is **opt-in**
+  (`hook_result(require_overlap=True)`), so `context_pack` and the MCP
+  `memory_search` tool — which are handed an explicit question — keep the raw
+  ranking. `hook_result()` now also returns a `reason`, and every hook decision
+  (`skip:internal`, `skip:short`, `skip:slash`, `skip:intent`, `skip:score`,
+  `skip:token-overlap`, `inject`) is appended to the session ledger's bounded
+  `decisions` list.
+- **A note shown once was suppressed for the rest of the session regardless of
+  what was asked next.** The dedup ledger keyed on the note name alone, so a
+  later, materially different question got lower-ranked filler instead of the
+  right note. The key is now `"<query signature>:<note>"`, where the signature
+  is a hash of the prompt's sorted folded token set: repeating the same question
+  is still suppressed, a different one is not. PreCompact clearing (deleting the
+  ledger file) and the 7-day rotation are unchanged; ledgers written before this
+  change hold bare names, which simply never match a new key, so the worst an
+  upgrade costs is one re-show.
+
 - **The spend ledger counted every response two or three times.** Claude Code
   transcripts re-emit the same assistant message on streaming updates, retries
   and compaction rewrites, and every copy carries its own `usage` block;

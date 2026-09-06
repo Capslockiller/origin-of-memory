@@ -301,11 +301,15 @@ class HookOutputTests(RetrieveHarness):
 
         names = [first["notes"][0]["name"], second["notes"][0]["name"]]
         self.assertEqual(set(names), {"bir", "iki"})
-        self.assertEqual(third, {"notes": [], "total_chars": 0})
+        self.assertEqual(third["notes"], [])
+        self.assertEqual(third["total_chars"], 0)
         ledger = self.state / "retrieve-session-session-1.json"
+        # A3/A4: the ledger key is "<query signature>:<note>", not a bare note
+        # name, so the same note can come back for a different question.
+        signature = retrieve.query_signature("ortak")
         self.assertEqual(
             set(json.loads(ledger.read_text(encoding="utf-8"))["returned"]),
-            {"bir", "iki"},
+            {f"{signature}:bir", f"{signature}:iki"},
         )
 
     def test_per_note_and_overall_caps_are_enforced(self) -> None:
@@ -348,7 +352,9 @@ class QueryBoundaryTests(RetrieveHarness):
             "eşleşme", min_score=1_000_000.0, db_path=self.db
         )
 
-        self.assertEqual(result, {"notes": [], "total_chars": 0})
+        self.assertEqual(result["notes"], [])
+        self.assertEqual(result["total_chars"], 0)
+        self.assertEqual(result["reason"], retrieve.REASON_SCORE)
 
 
 class HookStdinTests(RetrieveHarness):
