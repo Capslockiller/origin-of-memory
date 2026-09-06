@@ -522,10 +522,12 @@ def _run_claude(
     timeout: int | None = None,
     *,
     component: str = "flush",
+    purpose: str = "capture",
 ) -> tuple[str | None, str | None]:
     # ``component`` is keyword-only and labels the call in `.state/calls.jsonl`.
     # The ingest family borrows this runner for the default model, and a
-    # borrowed runner must not file its calls under flush's name.
+    # borrowed runner must not file its calls under flush's name — nor under
+    # flush's ``purpose``, which is why that travels with it.
     if timeout is None:
         timeout, _warning = claude_runner.resolve_timeout("flush")
     return claude_runner.run_claude(
@@ -536,6 +538,7 @@ def _run_claude(
         vault_root=vault_root,
         temporary_prefix="beyin-flush-",
         component=component,
+        purpose=purpose,
         state_dir=STATE_DIR,
     )
 
@@ -1003,7 +1006,7 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
             )
 
         summary, error = _run_claude(
-            build_flush_prompt(transcript), VAULT_ROOT, timeout
+            build_flush_prompt(transcript), VAULT_ROOT, timeout, purpose="capture"
         )
         for backend_warning in claude_runner.last_warnings():
             write_health(

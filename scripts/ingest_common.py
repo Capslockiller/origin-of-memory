@@ -245,6 +245,8 @@ def _run_claude_with_model(
     vault_root: Path,
     model: str,
     timeout: int | None = None,
+    *,
+    purpose: str = "ingest",
 ) -> tuple[str | None, str | None]:
     """Run Claude with a selectable model through the shared hardened runner."""
     if timeout is None:
@@ -257,6 +259,7 @@ def _run_claude_with_model(
         vault_root=vault_root,
         temporary_prefix="beyin-ingest-",
         component="ingest",
+        purpose=purpose,
         state_dir=STATE_DIR,
     )
 
@@ -363,6 +366,8 @@ def _run_claude(
     vault_root: Path,
     model: str = DEFAULT_MODEL,
     timeout: int | None = None,
+    *,
+    purpose: str = "ingest",
 ) -> tuple[str | None, str | None]:
     # The codex branches resolve their own timeout: they are not a
     # BEYIN_MODEL_BACKEND target, so the local-inference bump must not reach them.
@@ -375,8 +380,12 @@ def _run_claude(
     if model == DEFAULT_MODEL:
         # flush's runner is reused for the default model, but the bound that
         # applies here is the ingest one — and so is the accounting label.
-        return flush._run_claude(prompt, vault_root, timeout, component="ingest")
-    return _run_claude_with_model(prompt, vault_root, model, timeout)
+        return flush._run_claude(
+            prompt, vault_root, timeout, component="ingest", purpose=purpose
+        )
+    return _run_claude_with_model(
+        prompt, vault_root, model, timeout, purpose=purpose
+    )
 
 
 def summarize_session(
@@ -452,6 +461,7 @@ def summarize_session(
         vault_root,
         model,
         timeout,
+        purpose="ingest",
     )
     for backend_warning in claude_runner.last_warnings():
         write_health(

@@ -1247,6 +1247,7 @@ def _run_model_text(prompt: str) -> tuple[str | None, str | None]:
         timeout=timeout,
         backend=backend,
         component="compile",
+        purpose="concept",
         state_dir=STATE_DIR,
     )
 
@@ -1348,6 +1349,9 @@ def _run_claude(prompt: str, stage: Path) -> str | None:
         allowed_tools="Read,Write,Edit,Glob,Grep",
         backend=backend,
         component="compile",
+        # compile only ever writes concept notes; there is no other reason for
+        # it to call a model, so the purpose is fixed rather than threaded.
+        purpose="concept",
         state_dir=STATE_DIR,
     )
     return error

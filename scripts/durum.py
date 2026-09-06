@@ -233,6 +233,19 @@ def _read_calls(path: Path, cutoff: dt.datetime) -> list[dict[str, Any]]:
     return records
 
 
+def _empty_budget() -> dict[str, int]:
+    """One budget row: calls, the estimate pair, and the measured/unmeasured split."""
+    return {
+        "calls": 0,
+        "input_tokens_est": 0,
+        "output_tokens_est": 0,
+        "real_usage_calls": 0,
+        "unknown_usage_calls": 0,
+        "output_tokens_real": 0,
+        "cache_read_tokens_real": 0,
+    }
+
+
 def _number(record: dict[str, Any], key: str) -> int:
     value = record.get(key)
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
@@ -253,11 +266,18 @@ def summarize_calls(
 
     backend_durations: dict[str, list[float]] = {}
     component_totals: dict[str, dict[str, int]] = {}
+    purpose_totals: dict[str, dict[str, int]] = {}
+    group_totals: dict[str, dict[str, int]] = {}
     ok_calls = 0
     real_usage_calls = 0
+    unknown_usage_calls = 0
     for record in records:
         backend = str(record.get("backend", "unknown")) or "unknown"
         component = str(record.get("component", "unknown")) or "unknown"
+        # A line written before the field existed is `work` by absence, which
+        # is exactly what `normalize_purpose` says — no guessing here either.
+        purpose, _missing = beyin_ortak.normalize_purpose(record.get("purpose"))
+        group = beyin_ortak.purpose_group(purpose)
         backend_durations.setdefault(backend, []).append(
             float(_number(record, "duration_ms"))
         )
@@ -268,22 +288,44 @@ def summarize_calls(
                 "input_tokens_est": 0,
                 "output_tokens_est": 0,
                 "real_usage_calls": 0,
+                "unknown_usage_calls": 0,
                 "input_tokens_real": 0,
                 "output_tokens_real": 0,
                 "cache_read_tokens_real": 0,
                 "cache_write_tokens_real": 0,
             },
         )
+        budgets = [
+            purpose_totals.setdefault(purpose, _empty_budget()),
+            group_totals.setdefault(group, _empty_budget()),
+        ]
         totals["calls"] += 1
         totals["input_tokens_est"] += _number(record, "input_tokens_est")
         totals["output_tokens_est"] += _number(record, "output_tokens_est")
-        if record.get("usage_source") == "session-log":
+        for budget in budgets:
+            budget["calls"] += 1
+            budget["input_tokens_est"] += _number(record, "input_tokens_est")
+            budget["output_tokens_est"] += _number(record, "output_tokens_est")
+        if record.get("usage_source") == beyin_ortak.USAGE_SESSION_LOG:
             totals["real_usage_calls"] += 1
             real_usage_calls += 1
             totals["input_tokens_real"] += _number(record, "input_tokens")
             totals["output_tokens_real"] += _number(record, "output_tokens")
             totals["cache_read_tokens_real"] += _number(record, "cache_read_tokens")
             totals["cache_write_tokens_real"] += _number(record, "cache_write_tokens")
+            for budget in budgets:
+                budget["real_usage_calls"] += 1
+                budget["output_tokens_real"] += _number(record, "output_tokens")
+                budget["cache_read_tokens_real"] += _number(
+                    record, "cache_read_tokens"
+                )
+        else:
+            # Counted, never estimated into the real totals: an unmeasured call
+            # is a hole in the measurement and the report has to show the hole.
+            totals["unknown_usage_calls"] += 1
+            unknown_usage_calls += 1
+            for budget in budgets:
+                budget["unknown_usage_calls"] += 1
         if record.get("outcome") == "ok":
             ok_calls += 1
 
@@ -304,14 +346,28 @@ def summarize_calls(
             component_totals.items(), key=lambda item: (-item[1]["calls"], item[0])
         )
     ]
+    purposes = [
+        {"purpose": purpose, **totals}
+        for purpose, totals in sorted(
+            purpose_totals.items(), key=lambda item: (-item[1]["calls"], item[0])
+        )
+    ]
+    groups = [
+        {"group": group, **group_totals[group]}
+        for group in beyin_ortak.GROUP_ORDER
+        if group in group_totals
+    ]
     return {
         "window_days": CALLS_WINDOW_DAYS,
         "total_calls": len(records),
         "ok_calls": ok_calls,
         "failed_calls": len(records) - ok_calls,
         "real_usage_calls": real_usage_calls,
+        "unknown_usage_calls": unknown_usage_calls,
         "backends": backends,
         "components": components,
+        "purposes": purposes,
+        "purpose_groups": groups,
     }
 
 
@@ -475,13 +531,46 @@ def _print_calls(calls: dict[str, Any]) -> None:
             for entry in calls["components"]
         ],
     )
-    if calls.get("real_usage_calls"):
+    groups = calls.get("purpose_groups") or []
+    if groups:
+        print()
+        # The two budgets Astra B2 asked for: what the memory costs to keep,
+        # what building it costs, and what the work it serves costs.
+        print("bütçe (amaç grubuna göre):")
+        print()
+        _print_grid(
+            (
+                "grup",
+                "calls",
+                "out tokens (est)",
+                "out tokens",
+                "cache read",
+                "unknown",
+            ),
+            [
+                (
+                    str(entry["group"]),
+                    str(entry["calls"]),
+                    str(entry["output_tokens_est"]),
+                    str(entry["output_tokens_real"]),
+                    str(entry["cache_read_tokens_real"]),
+                    f"{entry['unknown_usage_calls']} calls",
+                )
+                for entry in groups
+            ],
+        )
+    if calls.get("real_usage_calls") or calls.get("unknown_usage_calls"):
         print()
         print(
             f"real usage (provider-reported, {calls['real_usage_calls']} of "
-            f"{calls['total_calls']} calls):"
+            f"{calls['total_calls']} calls; "
+            f"{calls.get('unknown_usage_calls', 0)} unknown):"
         )
         print()
+        # Every component appears, measured or not. A component with no
+        # provider figures used to vanish from this table, which read as "it
+        # cost nothing" when it meant "nobody counted" — the `unknown` column
+        # is the difference, and no estimate is ever summed into these totals.
         _print_grid(
             (
                 "component",
@@ -490,6 +579,7 @@ def _print_calls(calls: dict[str, Any]) -> None:
                 "out tokens",
                 "cache read",
                 "cache write",
+                "unknown",
             ),
             [
                 (
@@ -499,9 +589,9 @@ def _print_calls(calls: dict[str, Any]) -> None:
                     str(entry["output_tokens_real"]),
                     str(entry["cache_read_tokens_real"]),
                     str(entry["cache_write_tokens_real"]),
+                    f"{entry.get('unknown_usage_calls', 0)} calls",
                 )
                 for entry in calls["components"]
-                if entry["real_usage_calls"]
             ],
         )
 
@@ -587,6 +677,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if os.environ.get("BEYIN_INVOKED_BY"):
         return 0
     try:
+        # The budget table added Turkish headings to what used to be an
+        # ASCII-only report; a legacy Windows console codepage would mangle or
+        # raise on them. Same guard harcama_defteri already carries.
+        import sys
+
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
         args = _parse_args(argv)
         if args.temizle_uyarilar:
             result = temizle_uyarilar(args.state_dir)

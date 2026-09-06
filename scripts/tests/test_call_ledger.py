@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -35,6 +36,7 @@ EXPECTED_FIELDS = {
     "ts",
     "backend",
     "component",
+    "purpose",
     "model_tier",
     "model_slug",
     "input_chars",
@@ -91,6 +93,7 @@ class LedgerHarness(unittest.TestCase):
                 timeout=240,
                 cwd=self.root,
                 component=kwargs.pop("component", "flush"),
+                purpose=kwargs.pop("purpose", "capture"),
                 state_dir=self.state,
                 **kwargs,
             )
@@ -118,7 +121,8 @@ class RecordingTests(LedgerHarness):
         self.assertEqual(record["model_tier"], "haiku")
         self.assertEqual(record["model_slug"], claude_runner.CLAUDE_MODEL_IDS["haiku"])
         self.assertEqual(record["outcome"], "ok")
-        self.assertEqual(record["usage_source"], "estimate")
+        self.assertEqual(record["usage_source"], "unknown")
+        self.assertEqual(record["purpose"], "capture")
         self.assertIsNone(record["input_tokens"])
         self.assertIsNone(record["output_tokens"])
         self.assertIsNone(record["cache_read_tokens"])
@@ -250,29 +254,29 @@ class RealUsageTests(LedgerHarness):
         output, error = self._call(reply=_Reply(stdout=self.JSON_REPLY))
         self.assertEqual((output, error), (MODEL_REPLY, None))
 
-    def test_a_non_json_reply_falls_back_to_the_estimate(self) -> None:
+    def test_a_non_json_reply_records_unknown_not_an_estimate(self) -> None:
         self._call(reply=_Reply(stdout=MODEL_REPLY))
 
         record = self._lines()[0]
-        self.assertEqual(record["usage_source"], "estimate")
+        self.assertEqual(record["usage_source"], "unknown")
         self.assertIsNone(record["input_tokens"])
         self.assertIsNone(record["output_tokens"])
         self.assertIsNone(record["cache_read_tokens"])
         self.assertIsNone(record["cache_write_tokens"])
         self.assertEqual(record["model_actual"], "")
 
-    def test_json_without_a_usage_block_falls_back_to_the_estimate(self) -> None:
+    def test_json_without_a_usage_block_records_unknown(self) -> None:
         self._call(reply=_Reply(stdout=json.dumps({"result": MODEL_REPLY})))
 
         record = self._lines()[0]
-        self.assertEqual(record["usage_source"], "estimate")
+        self.assertEqual(record["usage_source"], "unknown")
         self.assertEqual(record["output_chars"], len(MODEL_REPLY))
 
     def test_a_local_backend_call_never_claims_real_usage(self) -> None:
         self._call({"BEYIN_MODEL_BACKEND": "antigravity"})
 
         record = self._lines()[0]
-        self.assertEqual(record["usage_source"], "estimate")
+        self.assertEqual(record["usage_source"], "unknown")
 
     def test_no_secret_content_leaks_through_the_json_envelope(self) -> None:
         self._call(reply=_Reply(stdout=self.JSON_REPLY))
@@ -437,8 +441,8 @@ class RotationTests(LedgerHarness):
         self.assertEqual(beyin_ortak.CALLS_LEDGER_MAX_BYTES, 5 * 1024 * 1024)
 
 
-class DurumSummaryTests(unittest.TestCase):
-    """The summary numbers must match a ledger you can read by hand."""
+class _SummaryHarness(unittest.TestCase):
+    """A hand-written ledger and the two ways of reading it back."""
 
     def setUp(self) -> None:
         self._temporary = tempfile.TemporaryDirectory()
@@ -466,12 +470,17 @@ class DurumSummaryTests(unittest.TestCase):
             "output_tokens_est": 50,
             "duration_ms": 1000,
             "outcome": "ok",
+            "purpose": "capture",
         }
         record.update(overrides)
         return record
 
     def _summary(self) -> dict:
         return durum.summarize_calls(self.state, now=self.now)
+
+
+class DurumSummaryTests(_SummaryHarness):
+    """The summary numbers must match a ledger you can read by hand."""
 
     def test_an_absent_ledger_summarises_to_zero(self) -> None:
         summary = self._summary()
@@ -571,6 +580,270 @@ class DurumSummaryTests(unittest.TestCase):
 
         with mock.patch.dict("os.environ", {"BEYIN_INVOKED_BY": ""}):
             self.assertEqual(durum.main(["--state-dir", str(self.state)]), 0)
+
+
+class PurposeVocabularyTests(LedgerHarness):
+    """Astra B2: every call says *why*, and an unsaid why is loud, not fatal."""
+
+    def test_the_purpose_reaches_the_line(self) -> None:
+        self._call(purpose="concept")
+
+        self.assertEqual(self._lines()[0]["purpose"], "concept")
+
+    def test_the_vocabulary_is_closed_and_grouped(self) -> None:
+        self.assertEqual(
+            set(beyin_ortak.PURPOSES), set(beyin_ortak.PURPOSE_GROUPS)
+        )
+        groups = {
+            beyin_ortak.purpose_group(purpose)
+            for purpose in beyin_ortak.PURPOSES
+        }
+        self.assertEqual(
+            groups,
+            {
+                beyin_ortak.GROUP_BAKIM,
+                beyin_ortak.GROUP_GELISTIRME,
+                beyin_ortak.GROUP_IS,
+            },
+        )
+        self.assertEqual(
+            beyin_ortak.purpose_group("capture"), beyin_ortak.GROUP_BAKIM
+        )
+        self.assertEqual(
+            beyin_ortak.purpose_group("benchmark"), beyin_ortak.GROUP_GELISTIRME
+        )
+        self.assertEqual(
+            beyin_ortak.purpose_group("hand-memory"), beyin_ortak.GROUP_IS
+        )
+
+    def test_an_unknown_purpose_never_raises(self) -> None:
+        """A ledger that can raise is a hook that can fail. It must not."""
+        beyin_ortak.record_call(
+            self.state,
+            backend="claude",
+            model_tier="haiku",
+            model_slug="haiku",
+            component="flush",
+            input_chars=4,
+            output_chars=4,
+            duration_ms=1,
+            outcome="ok",
+            purpose="uydurma-amac",
+        )
+
+        self.assertEqual(self._lines()[0]["purpose"], "work")
+
+    def test_a_missing_purpose_logs_work_and_a_health_warning(self) -> None:
+        beyin_ortak.record_call(
+            self.state,
+            backend="claude",
+            model_tier="haiku",
+            model_slug="haiku",
+            component="compile",
+            input_chars=4,
+            output_chars=4,
+            duration_ms=1,
+            outcome="ok",
+        )
+
+        self.assertEqual(self._lines()[0]["purpose"], "work")
+        health = json.loads((self.state / "health.json").read_text(encoding="utf-8"))
+        self.assertIn("warn:call-purpose-missing:compile", health["warnings"])
+
+    def test_a_known_purpose_raises_no_warning_at_all(self) -> None:
+        self._call(purpose="capture")
+
+        self.assertFalse((self.state / "health.json").exists())
+
+
+class RepositoryCallSiteTests(unittest.TestCase):
+    """Grep the repository: no production call site may omit ``purpose``.
+
+    The ``work`` fallback exists so a hook can never fail — not so this
+    repository can shrug. Anything that reaches the ledger from here says why
+    it ran, and this test is the thing that keeps saying so.
+
+    Only the two ledger boundaries are scanned — ``record_call`` and the
+    runner's ``run_claude``. A module-private ``_run_claude`` wrapper is not a
+    boundary: whatever it does, it has to come through one of these two to be
+    recorded at all, so guarding the wrappers would only add ceremony.
+    """
+
+    REPO = Path(__file__).resolve().parents[2]
+    PATTERN = re.compile(r"(?<![\w_])(?:run_claude|record_call)\s*\(")
+
+    def _call_text(self, source: str, start: int) -> str:
+        """The parenthesised argument list beginning at ``start``."""
+        index = source.index("(", start)
+        depth = 0
+        for position in range(index, len(source)):
+            character = source[position]
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth == 0:
+                    return source[index : position + 1]
+        return source[index:]
+
+    def test_every_call_site_passes_an_explicit_purpose(self) -> None:
+        offenders = []
+        scanned = 0
+        for path in sorted(self.REPO.rglob("*.py")):
+            parts = path.parts
+            if "tests" in parts or ".git" in parts or "node_modules" in parts:
+                continue
+            source = path.read_text(encoding="utf-8", errors="replace")
+            for match in self.PATTERN.finditer(source):
+                line_start = source.rfind("\n", 0, match.start()) + 1
+                if source[line_start:].lstrip().startswith("def "):
+                    continue  # a definition, not a call
+                scanned += 1
+                if "purpose=" not in self._call_text(source, match.start()):
+                    line = source.count("\n", 0, match.start()) + 1
+                    offenders.append(f"{path.relative_to(self.REPO)}:{line}")
+        self.assertEqual(offenders, [], f"purpose= missing at: {offenders}")
+        # A silent zero would make this test pass by finding nothing at all.
+        self.assertGreaterEqual(scanned, 6)
+
+
+class UnknownUsageTests(LedgerHarness):
+    """``unknown`` means nobody counted — and then nothing may look counted."""
+
+    def test_the_estimate_can_never_sit_in_a_real_field(self) -> None:
+        beyin_ortak.record_call(
+            self.state,
+            backend="claude",
+            model_tier="haiku",
+            model_slug="haiku",
+            component="flush",
+            input_chars=4000,
+            output_chars=800,
+            duration_ms=1,
+            outcome="ok",
+            purpose="capture",
+            # A caller trying to pass the estimate off as a measurement.
+            input_tokens=1000,
+            output_tokens=200,
+            cache_read_tokens=5,
+            cache_write_tokens=6,
+            usage_source="estimate",
+        )
+
+        record = self._lines()[0]
+        self.assertEqual(record["usage_source"], "unknown")
+        self.assertIsNone(record["input_tokens"])
+        self.assertIsNone(record["output_tokens"])
+        self.assertIsNone(record["cache_read_tokens"])
+        self.assertIsNone(record["cache_write_tokens"])
+        # The estimate survives, under the name that admits what it is.
+        self.assertEqual(record["input_tokens_est"], 1000)
+        self.assertEqual(record["output_tokens_est"], 200)
+
+    def test_an_empty_usage_source_reads_as_unknown(self) -> None:
+        beyin_ortak.record_call(
+            self.state,
+            backend="ollama",
+            model_tier="local",
+            model_slug="local",
+            component="flush",
+            input_chars=4,
+            output_chars=4,
+            duration_ms=1,
+            outcome="ok",
+            purpose="capture",
+            usage_source="",
+        )
+
+        self.assertEqual(self._lines()[0]["usage_source"], "unknown")
+
+
+class PurposeBudgetTests(_SummaryHarness):
+    """``durum`` splits the bill three ways and shows the holes in it."""
+
+    def test_an_old_line_without_a_purpose_counts_as_work(self) -> None:
+        record = self._record()
+        record.pop("purpose")
+        self._write([record])
+
+        summary = self._summary()
+
+        self.assertEqual(summary["purposes"][0]["purpose"], "work")
+        self.assertEqual(summary["purpose_groups"][0]["group"], "iş")
+
+    def test_the_three_budgets_add_up_to_every_call(self) -> None:
+        self._write(
+            [
+                self._record(purpose="capture", output_tokens_est=10),
+                self._record(purpose="concept", component="compile"),
+                self._record(purpose="ingest", component="ingest"),
+                self._record(purpose="benchmark", component="compile"),
+                self._record(purpose="work", component="kule"),
+                self._record(purpose="hand-memory", component="kule"),
+            ]
+        )
+
+        summary = self._summary()
+        groups = {row["group"]: row["calls"] for row in summary["purpose_groups"]}
+
+        self.assertEqual(groups, {"bakım": 3, "geliştirme": 1, "iş": 2})
+        self.assertEqual(sum(groups.values()), summary["total_calls"])
+        # The order is the reporting order, not whatever the dict happened to do.
+        self.assertEqual(
+            [row["group"] for row in summary["purpose_groups"]],
+            ["bakım", "geliştirme", "iş"],
+        )
+
+    def test_unmeasured_calls_are_counted_never_estimated_into_the_total(self) -> None:
+        self._write(
+            [
+                self._record(
+                    purpose="capture",
+                    usage_source="session-log",
+                    output_tokens=70,
+                    cache_read_tokens=900,
+                ),
+                self._record(purpose="capture", usage_source="unknown"),
+                self._record(purpose="capture", usage_source="unknown"),
+            ]
+        )
+
+        summary = self._summary()
+        flush_row = summary["components"][0]
+
+        self.assertEqual(flush_row["real_usage_calls"], 1)
+        self.assertEqual(flush_row["unknown_usage_calls"], 2)
+        self.assertEqual(summary["unknown_usage_calls"], 2)
+        # Only the measured call's figures are in the real totals.
+        self.assertEqual(flush_row["output_tokens_real"], 70)
+        self.assertEqual(flush_row["cache_read_tokens_real"], 900)
+        # ...while the estimate table still counts all three.
+        self.assertEqual(flush_row["output_tokens_est"], 150)
+
+    def test_a_component_with_no_measurement_is_shown_not_omitted(self) -> None:
+        self._write(
+            [
+                self._record(
+                    purpose="capture",
+                    usage_source="session-log",
+                    output_tokens=70,
+                ),
+                self._record(purpose="concept", component="compile"),
+            ]
+        )
+
+        with mock.patch("builtins.print") as printer:
+            durum._print_table(durum.build_summary(self.state, now=self.now))
+
+        printed = "\n".join(
+            str(call.args[0]) for call in printer.call_args_list if call.args
+        )
+        self.assertIn("bütçe (amaç grubuna göre)", printed)
+        self.assertIn("1 unknown", printed)
+        # compile has zero provider figures and must still appear, labelled.
+        real_table = printed.split("real usage")[1]
+        self.assertIn("compile", real_table)
+        self.assertIn("1 calls", real_table)
 
 
 if __name__ == "__main__":

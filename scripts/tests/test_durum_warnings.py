@@ -428,5 +428,64 @@ class BekleyenKaynakTests(unittest.TestCase):
         self.assertIn("bekleyen kaynak: none pending", printed)
 
 
+class PurposeMissingWarningTests(unittest.TestCase):
+    """A call site that forgets *why* is loud in ``durum``, and only loud.
+
+    ``record_call`` refuses to raise — it runs inside every hook — so the only
+    way an unlabelled call can be noticed at all is this warning. If it stopped
+    surfacing, the ``work`` fallback would quietly become the answer.
+    """
+
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.state = Path(self._temporary.name) / ".state"
+        self.state.mkdir(parents=True)
+        self.now = dt.datetime(2026, 9, 5, 12, 0).astimezone()
+
+    def _record(self, **kwargs) -> None:
+        import beyin_ortak
+
+        beyin_ortak.record_call(
+            self.state,
+            backend="claude",
+            model_tier="haiku",
+            model_slug="haiku",
+            component=kwargs.pop("component", "flush"),
+            input_chars=8,
+            output_chars=8,
+            duration_ms=1,
+            outcome="ok",
+            **kwargs,
+        )
+
+    def test_the_warning_surfaces_in_the_summary_and_counts_as_real(self) -> None:
+        self._record(component="ingest")
+
+        summary = durum.build_summary(self.state, now=self.now)
+        messages = [row["message"] for row in summary["warnings"]]
+
+        self.assertIn("warn:call-purpose-missing:ingest", messages)
+        self.assertEqual(durum._warning_count(summary["warnings"]), 1)
+
+    def test_it_is_recorded_once_per_component_not_once_per_call(self) -> None:
+        for _ in range(3):
+            self._record(component="flush")
+        self._record(component="compile")
+
+        health = json.loads((self.state / "health.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            sorted(health["warnings"]),
+            ["warn:call-purpose-missing:compile", "warn:call-purpose-missing:flush"],
+        )
+
+    def test_a_labelled_call_writes_no_health_file_at_all(self) -> None:
+        self._record(purpose="capture")
+        self._record(purpose="concept", component="compile")
+
+        self.assertFalse((self.state / "health.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

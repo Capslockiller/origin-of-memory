@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: claude · opus-5 -->
+- **Every model call now says why it ran, and an estimate can no longer sit in
+  a field that promises a measurement (Astra B2).** Three changes, one point:
+  make the cost of keeping the memory separable from the cost of the work the
+  memory is for. (1) `record_call` takes a `purpose` from a closed vocabulary —
+  `capture` (flush), `extract` (reserved, for the future fact extractor),
+  `concept` (compile), `retrieve` (reserved — retrieval makes no model call
+  today; `retrieve.py` contains no runner import at all), `ingest`,
+  `benchmark`, `hand-memory` (reserved) and `work` — written to
+  `.state/calls.jsonl` as a new `purpose` field. Every call site in this
+  repository passes one explicitly (`flush`→`capture`, `compile`→`concept`,
+  `ingest_*`→`ingest`, `kule`→`work`) and a repo-wide grep test in
+  `test_call_ledger.py` fails if a new `record_call(`/`run_claude(` site omits
+  it. An absent or unrecognised value is **not** an exception: `record_call`
+  runs inside every hook, so it writes `work` and raises
+  `warn:call-purpose-missing:<component>` in the component's health file
+  instead. Ledger lines written before this field existed read as `work` by
+  absence, not by claim. (2) `usage_source` no longer has an `estimate` value.
+  It is `session-log` when the provider reported real usage and `unknown`
+  otherwise — and on `unknown`, `record_call` now *forces* the four real token
+  fields to `null` rather than trusting the caller, so a chars÷4 figure can
+  never reach `input_tokens`. The estimate keeps its own honest pair,
+  `*_tokens_est`. (3) `durum.py` gains a `bütçe (amaç grubuna göre)` table
+  splitting the window three ways — `bakım` (capture+extract+concept+retrieve+
+  ingest), `geliştirme` (benchmark), `iş` (work+hand-memory) — and its
+  real-usage table now lists **every** component with an `unknown: N calls`
+  column. Previously a component with no provider figures vanished from that
+  table, which reads as "it cost nothing" when it means "nobody counted";
+  no estimate is ever summed into the real totals. `harcama_defteri.py --ozet`
+  prints the same three budgets, but it reads raw transcripts rather than
+  `calls.jsonl`, so there is no `purpose` tag there and classification falls
+  back to the session's `cwd`: under `origin-of-memory` (which contains
+  `tools/benchmark`) → `geliştirme`; a runner-opened working directory
+  (`beyin-flush-*`, `beyin-ingest-*`, `beyin-codex-*`, … or a `compile-stage`
+  directory) → `bakım`; any other known cwd → `iş`; and an unreadable cwd is
+  labelled `sınıflandırılamadı` rather than guessed. `BEYIN_INVOKED_BY` was
+  measured and rejected as a marker: `claude_runner` does pass it to the child
+  process, but it appears in no transcript field, and the `--session-id` it
+  passes is a bare random UUID with no prefix — the working directory is the
+  only thing that survives into the record. Defter version 2→3 (the group
+  breakdown is derived, so an existing ledger rebuilds itself once).
+  `hand-memory` cannot be separated from `work` by any signal in the data, and
+  is left grouped with it — the same limit the auditor hit.
 - **The secret guard now catches credentials that only their label gives away
   (Astra A10).** `secret_guard` gains a single context-sensitive rule,
   `contextual-code`: a label (`kod`/`kodu`/`giriş kodu`/`erişim kodu`/

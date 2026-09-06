@@ -20,6 +20,7 @@ import time
 from typing import Any, Callable
 import uuid
 
+import beyin_ortak
 from beyin_ortak import record_call
 import nezaket
 
@@ -288,6 +289,7 @@ def run_claude(
     allowed_tools: str | None = None,
     backend: str | None = None,
     component: str = "unknown",
+    purpose: str = "",
     state_dir: Path | None = None,
 ) -> tuple[str | None, str | None]:
     """Run the selected backend, and account for the call in ``.state/calls.jsonl``.
@@ -295,6 +297,11 @@ def run_claude(
     Accounting sits here because this is the single choke point every model call
     already passes through, so no caller can opt out of being measured. Only
     counts and identifiers are written — see ``beyin_ortak.record_call``.
+
+    ``purpose`` says why the call was made (``capture``, ``concept``, ``ingest``,
+    ``benchmark``, ``work``, …). Every caller in this repository passes one
+    explicitly — a repo-wide grep test enforces that — so the ``work`` fallback
+    in ``record_call`` only ever catches a caller from outside it.
     """
     _LAST_WARNINGS.clear()
     _LAST_CLAUDE_USAGE.clear()
@@ -328,12 +335,15 @@ def run_claude(
         output_chars=len(output or ""),
         duration_ms=int((time.monotonic() - started) * 1000),
         outcome="ok" if error is None else error,
+        purpose=purpose,
         input_tokens=_LAST_CLAUDE_USAGE.get("input_tokens"),
         output_tokens=_LAST_CLAUDE_USAGE.get("output_tokens"),
         cache_read_tokens=_LAST_CLAUDE_USAGE.get("cache_read_tokens"),
         cache_write_tokens=_LAST_CLAUDE_USAGE.get("cache_write_tokens"),
         model_actual=_LAST_CLAUDE_USAGE.get("model_actual"),
-        usage_source=_LAST_CLAUDE_USAGE.get("usage_source", "estimate"),
+        usage_source=_LAST_CLAUDE_USAGE.get(
+            "usage_source", beyin_ortak.USAGE_UNKNOWN
+        ),
     )
     return output, error
 

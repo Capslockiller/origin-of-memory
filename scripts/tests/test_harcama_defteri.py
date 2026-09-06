@@ -51,9 +51,11 @@ def _claude_satiri(
     model: str = "claude-opus-5",
     istek_kimligi: str = "req_1",
     uuid: str | None = None,
+    cwd: str | None = None,
 ) -> dict:
     return {
         "type": "assistant",
+        "cwd": cwd or "C:\\Users\\musta\\Somewhere",
         "uuid": uuid or f"uuid-{mesaj_kimligi}-{ts}",
         "requestId": istek_kimligi,
         "timestamp": ts,
@@ -356,3 +358,161 @@ def test_ozet_biciminde_degisiklik_yok(defter_ortami, capsys):
     assert "önbellek okuma 340k / yazma 9k" in cikti
     assert "opus: 12k" in cikti
     assert "En pahalı 5 oturum/görev:" in cikti
+
+
+# --- Astra B2: bakım / geliştirme / iş bütçesi ------------------------------
+
+
+def test_sinif_depo_altini_gelistirmeye_yazar():
+    assert (
+        harcama_defteri._sinif(r"E:\OdenaWorks\10-Aktif\origin-of-memory", None)
+        == harcama_defteri.GRUP_GELISTIRME
+    )
+    # tools/benchmark depo altındadır; ayrı bir kural gerekmez
+    assert (
+        harcama_defteri._sinif(
+            r"E:\OdenaWorks\10-Aktif\origin-of-memory\tools\benchmark", None
+        )
+        == harcama_defteri.GRUP_GELISTIRME
+    )
+    # benchmark'ın sahne dizini de — çalıştırıcı işareti taşısa bile — geliştirme
+    assert (
+        harcama_defteri._sinif(
+            None,
+            "E--OdenaWorks-10-Aktif-origin-of-memory-tools-benchmark"
+            "--e2e-vaults-conv-26--stage-compile-stage-1jcxl1c8",
+        )
+        == harcama_defteri.GRUP_GELISTIRME
+    )
+
+
+def test_sinif_calistirici_izini_bakima_yazar():
+    for yol in (
+        r"C:\Users\musta\AppData\Local\Temp\beyin-flush-0dm4fa4g",
+        r"C:\Users\musta\AppData\Local\Temp\beyin-ingest-01n386vr",
+        r"C:\Users\musta\AppData\Local\Temp\beyin-codex-abc",
+        r"E:\OdenaOS\.stage\compile-stage-9kruwqop",
+    ):
+        assert harcama_defteri._sinif(yol, None) == harcama_defteri.GRUP_BAKIM
+
+
+def test_sinif_kalan_calisma_dizinini_ise_ve_bosu_bilinmiyora_yazar():
+    assert harcama_defteri._sinif(r"D:\Epic\Mice360", None) == harcama_defteri.GRUP_IS
+    assert harcama_defteri._sinif(None, None) == harcama_defteri.GRUP_BILINMIYOR
+    assert harcama_defteri._sinif("   ", "") == harcama_defteri.GRUP_BILINMIYOR
+
+
+def test_gruplar_cwd_ve_calistirici_izinden_kurulur(defter_ortami):
+    projeler, codex = defter_ortami
+    ts = "2026-09-03T10:00:00.000Z"
+    gun = _gun_yerel(ts)
+    # (a) cwd depo altında → geliştirme
+    _helpers.write_jsonl(
+        projeler / "E--OdenaWorks-10-Aktif-origin-of-memory" / "dev.jsonl",
+        [
+            _claude_satiri(
+                "msg_dev",
+                ts,
+                cikti=1_000,
+                cache_okuma=10_000,
+                cwd=r"E:\OdenaWorks\10-Aktif\origin-of-memory",
+            )
+        ],
+    )
+    # (b) çalıştırıcının açtığı geçici dizin → bakım
+    _helpers.write_jsonl(
+        projeler / "C--Users-musta-AppData-Local-Temp-beyin-flush-xy" / "f.jsonl",
+        [
+            _claude_satiri(
+                "msg_flush",
+                ts,
+                cikti=200,
+                cache_okuma=3_000,
+                cwd=r"C:\Users\musta\AppData\Local\Temp\beyin-flush-xy",
+            )
+        ],
+    )
+    # (c) başka bir yerdeki normal oturum → iş
+    _helpers.write_jsonl(
+        projeler / "D--Epic-Mice360" / "is.jsonl",
+        [
+            _claude_satiri(
+                "msg_is", ts, cikti=5_000, cache_okuma=40_000, cwd=r"D:\Epic\Mice360"
+            )
+        ],
+    )
+    harcama_defteri.topla()
+    defter = _oku()
+
+    gruplar = defter["gruplar"][gun]
+    assert gruplar[harcama_defteri.GRUP_GELISTIRME]["cikti"] == 1_000
+    assert gruplar[harcama_defteri.GRUP_BAKIM]["cikti"] == 200
+    assert gruplar[harcama_defteri.GRUP_IS]["cikti"] == 5_000
+    assert harcama_defteri.GRUP_BILINMIYOR not in gruplar
+    # grup toplamı model kırılımının toplamına eşit olmalı — hiçbir çağrı kaybolmaz
+    assert sum(h["cikti"] for h in gruplar.values()) == sum(
+        h["cikti"] for h in defter["gunluk"][gun].values()
+    )
+    assert defter["oturumlar"]["dev"]["grup"] == harcama_defteri.GRUP_GELISTIRME
+
+
+def test_cwd_okunamayan_oturum_tahmin_edilmez_bilinmiyor_olur(defter_ortami):
+    projeler, _ = defter_ortami
+    ts = "2026-09-03T10:00:00.000Z"
+    satir = _claude_satiri("msg_x", ts, cikti=700)
+    satir.pop("cwd")
+    _helpers.write_jsonl(projeler / "p" / "o.jsonl", [satir])
+    harcama_defteri.topla()
+    defter = _oku()
+    # cwd okunamadı: alan gerçekten boş kaydedilmiş olmalı, uydurulmuş değil
+    assert next(iter(defter["dosyalar"].values()))["cwd"] is None
+    # proje dizini adı da bilgi taşımadığında (tek yedek o) grup bilinmiyordur;
+    # Windows " " adlı dizin açamadığı için yedeği burada elle boşaltıyoruz
+    for kayit in defter["dosyalar"].values():
+        kayit["proje"] = ""
+    harcama_defteri._turet(defter)
+
+    gruplar = defter["gruplar"][_gun_yerel(ts)]
+    assert harcama_defteri.GRUP_BILINMIYOR in gruplar
+    assert gruplar[harcama_defteri.GRUP_BILINMIYOR]["cikti"] == 700
+
+
+def test_codex_oturumu_session_meta_cwdsinden_siniflanir(defter_ortami):
+    _projeler, codex = defter_ortami
+    ts = "2026-09-03T10:00:00.000Z"
+    meta = {
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": {"cwd": r"E:\OdenaWorks\10-Aktif\origin-of-memory"},
+    }
+    _helpers.write_jsonl(
+        codex / "rollout-x.jsonl", [meta, _codex_satiri(ts, 100, 900, 50)]
+    )
+    harcama_defteri.topla()
+    defter = _oku()
+
+    gruplar = defter["gruplar"][_gun_yerel(ts)]
+    assert gruplar[harcama_defteri.GRUP_GELISTIRME]["cikti"] == 900
+
+
+def test_ozet_butce_tablosunu_basar(defter_ortami, capsys):
+    projeler, _ = defter_ortami
+    ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    _helpers.write_jsonl(
+        projeler / "p" / "o.jsonl",
+        [
+            _claude_satiri(
+                "msg_A",
+                ts,
+                cikti=12_000,
+                cache_okuma=340_000,
+                cwd=r"C:\Users\musta\AppData\Local\Temp\beyin-flush-zz",
+            )
+        ],
+    )
+    harcama_defteri.topla()
+    harcama_defteri.ozet(2)
+    cikti = capsys.readouterr().out
+    assert "Bütçe (2 gün, amaç grubuna göre)" in cikti
+    assert "bakım" in cikti
+    assert "sınıflandırılamadı" in cikti  # yokluğu da açıkça söylenir

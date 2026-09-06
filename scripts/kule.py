@@ -1099,6 +1099,8 @@ def _run_job(
                 model_tier=str(job.get("model", "")),
                 model_slug=str(job.get("model", "")),
                 component="kule",
+                # A tower job is whatever Master queued: work, not upkeep.
+                purpose="work",
                 input_chars=int(job.get("prompt_karakter", 0)),
                 output_chars=output_chars,
                 duration_ms=int(sure_sn * 1000),
