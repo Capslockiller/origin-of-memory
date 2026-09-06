@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+<!-- yazan: claude · opus-5 -->
+- **Flush now has a delivery contract: a ledger, a turn cursor, and honest
+  counts (Astra A5).** Every flush attempt — successes included — appends one
+  line to the new bounded `.state/flush-teslimat.jsonl`
+  (`ts`, `session_id`, `reason`, `transcript`, `turns_seen`, `turns_sent`,
+  `chars_sent`, `chunks`, `ok`; counts only, never transcript text; rotates to
+  `.1` past 2 MB). A transcript that is missing or unreadable, a session with no
+  usable turns, a summary the model refused or mis-shaped, and a `FLUSH_BOS`
+  verdict each also raise a `health.json` warning carrying its reason code
+  (`flush:missing-transcript`, `flush:unreadable-transcript`, `flush:no-turns`,
+  `flush:rejected`, `flush:bos`, `flush:append-failed`). The hook still exits 0
+  in every case — this buys visibility, not failure. Previously a missing
+  transcript returned 0 with no state, no health entry and no trace at all, so
+  health could never learn that a session had *not* been captured; the live
+  vault's state directory holds 127 per-session flush locks against 14 result
+  files, and the 2026-09-04 benchmark session left no record of any kind.
+  The 60-second duplicate guard is replaced by a per-session turn cursor
+  (`last_turn_index` in the existing flush state JSON): a flush summarises only
+  the turns after the cursor, reports `flush:no-new-turns` and calls no model
+  when there are none, and advances the cursor *only* after the daily append
+  lands — so a crash mid-flush costs a repeat, never a gap. The old guard let
+  the same unchanged transcript be summarised twice 33 minutes apart
+  (`daily/2026-09-04.md`, 14:27 and 15:24, both 9,862 model-input chars).
+  `format_turns` now returns the number of turns that survived *both* caps
+  instead of the pre-character-cap figure — in the audit's 100×1,000-char case
+  it reported 30 while sending 23. The caps themselves are unchanged, but
+  `BEYIN_FLUSH_MAX_TURNS` and `BEYIN_FLUSH_MAX_CHARS` now override them
+  (`BEYIN_FLUSH_CHUNK_CHARS` keeps precedence over the latter for existing
+  installs). Known follow-up outside this lane: `ingest_common.summarize_session`
+  compares `min_turns` against `format_turns`' second value, so the honest count
+  can now send an over-long two-turn session down the `bos` path — that check
+  should read `len(session.turns)` instead (`test_ingest_gemini.py`
+  `test_gemini_local_summary_defaults_to_24k` and
+  `..._uses_backend_aware_bound`).
+
 <!-- yazan: claude · sonnet -->
 - **The call ledger records real Claude usage, not just the chars/4 estimate.**
   `claude_runner.py`'s claude backend now runs `claude -p --output-format json`

@@ -14,7 +14,7 @@ import stat
 import subprocess
 import sys
 import time
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from beyin_ortak import (
     _atomic_write_json,
@@ -37,12 +37,42 @@ MAX_TURNS = 30
 MAX_TRANSCRIPT_CHARS = 15_000
 LOCAL_MAX_TRANSCRIPT_CHARS = 24_000
 FLUSH_CHUNK_ENV = "BEYIN_FLUSH_CHUNK_CHARS"
+FLUSH_MAX_CHARS_ENV = "BEYIN_FLUSH_MAX_CHARS"
+FLUSH_MAX_TURNS_ENV = "BEYIN_FLUSH_MAX_TURNS"
 STALE_HOOK_INPUT_SECONDS = 3_600
 STALE_FLUSH_STATE_SECONDS = 7 * 24 * 60 * 60
 COMPILE_MIN_INTERVAL_ENV = "BEYIN_COMPILE_MIN_INTERVAL_HOURS"
 DEFAULT_COMPILE_MIN_INTERVAL_HOURS = 20.0
 COMPILE_TRIGGER_TTL_ENV = "BEYIN_COMPILE_TRIGGER_TTL_MIN"
 DEFAULT_COMPILE_TRIGGER_TTL_MINUTES = 180.0
+
+# Teslimat defteri (A5): her flush denemesi — başarı dahil — buraya bir satır
+# bırakır. `health.json` yalnız son durumu taşır; defter ise "bu oturum hiç
+# yakalanmadı" sorusunu geçmişe dönük cevaplayabilen tek kayıttır.
+DELIVERY_LEDGER_NAME = "flush-teslimat.jsonl"
+DELIVERY_LEDGER_MAX_BYTES = 2 * 1024 * 1024
+
+REASON_OK = "flush:ok"
+REASON_MISSING_TRANSCRIPT = "flush:missing-transcript"
+REASON_UNREADABLE_TRANSCRIPT = "flush:unreadable-transcript"
+REASON_NO_TURNS = "flush:no-turns"
+REASON_NO_NEW_TURNS = "flush:no-new-turns"
+REASON_REJECTED = "flush:rejected"
+REASON_BOS = "flush:bos"
+REASON_APPEND_FAILED = "flush:append-failed"
+
+# Sessiz kalması yasak olanlar: bunlar `health.json`'a da uyarı düşer.
+# `flush:ok` ve `flush:no-new-turns` normal akıştır — yalnız deftere yazılır.
+WARNING_REASONS = frozenset(
+    {
+        REASON_MISSING_TRANSCRIPT,
+        REASON_UNREADABLE_TRANSCRIPT,
+        REASON_NO_TURNS,
+        REASON_REJECTED,
+        REASON_BOS,
+        REASON_APPEND_FAILED,
+    }
+)
 
 # yazan: codex · model: gpt-5.6-sol
 
@@ -174,29 +204,56 @@ def read_transcript(path: Path) -> list[tuple[str, str]]:
     return turns
 
 
+def _turn_line(role: str, text: str) -> str:
+    return f"**{'User' if role == 'user' else 'Assistant'}:** {text}"
+
+
 def format_turns(
     turns: Sequence[tuple[str, str]],
     max_turns: int = MAX_TURNS,
     max_chars: int = MAX_TRANSCRIPT_CHARS,
 ) -> tuple[str, int]:
-    """Keep the newest complete turns and snap a character cut to a turn."""
+    """Keep the newest complete turns and snap a character cut to a turn.
+
+    The second element is the number of turns that actually survived **both**
+    caps. It used to report ``len(selected)`` — the count before the character
+    cap — so a run that sent 23 turns still claimed 30 and every downstream
+    minimum-turn check was made against a number the model never saw (A5).
+    """
     selected = list(turns[-max_turns:])
-    rendered = "\n".join(
-        f"**{'User' if role == 'user' else 'Assistant'}:** {text}"
-        for role, text in selected
-    )
+    lines = [_turn_line(role, text) for role, text in selected]
+    rendered = "\n".join(lines)
     if len(rendered) <= max_chars:
         return rendered, len(selected)
 
-    tentative_start = len(rendered) - max_chars
-    boundary = rendered.find("\n**", tentative_start)
-    if boundary != -1:
-        rendered = rendered[boundary + 1 :]
-    else:
-        role, text = selected[-1]
-        prefix = f"**{'User' if role == 'user' else 'Assistant'}:** "
-        rendered = prefix + text[-max(0, max_chars - len(prefix)) :]
-    return rendered, len(selected)
+    # Drop the oldest whole turns until the render fits; this picks the same
+    # cut as the old boundary search, but now the count follows the cut.
+    for start in range(1, len(lines)):
+        candidate = "\n".join(lines[start:])
+        if len(candidate) <= max_chars:
+            return candidate, len(lines) - start
+
+    # One turn on its own is over the cap: keep its tail, and say so honestly.
+    role, text = selected[-1]
+    prefix = f"**{'User' if role == 'user' else 'Assistant'}:** "
+    return prefix + text[-max(0, max_chars - len(prefix)) :], 1
+
+
+def resolve_flush_max_turns(
+    environment: dict[str, str] | None = None,
+) -> tuple[int, str | None]:
+    """``BEYIN_FLUSH_MAX_TURNS`` override; junk keeps the shipped default."""
+    env = os.environ if environment is None else environment
+    if FLUSH_MAX_TURNS_ENV not in env:
+        return MAX_TURNS, None
+    raw = env.get(FLUSH_MAX_TURNS_ENV) or ""
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value > 0:
+        return value, None
+    return MAX_TURNS, f"warn:flush-max-turns-invalid:{raw}"
 
 
 def resolve_flush_chunk_chars(
@@ -205,15 +262,24 @@ def resolve_flush_chunk_chars(
     """Resolve one flush run's transcript bound and optional health warning."""
     env = os.environ if environment is None else environment
     warning = None
-    if FLUSH_CHUNK_ENV in env:
-        raw = env.get(FLUSH_CHUNK_ENV) or ""
+    # ``BEYIN_FLUSH_MAX_CHARS`` is the name that pairs with
+    # ``BEYIN_FLUSH_MAX_TURNS``; the older ``BEYIN_FLUSH_CHUNK_CHARS`` keeps
+    # precedence so existing installs are not re-tuned behind the owner's back.
+    for name, label in (
+        (FLUSH_CHUNK_ENV, "flush-chunk-invalid"),
+        (FLUSH_MAX_CHARS_ENV, "flush-max-chars-invalid"),
+    ):
+        if name not in env:
+            continue
+        raw = env.get(name) or ""
         try:
             value = int(raw)
         except ValueError:
             value = 0
         if value > 0:
-            return value, None
-        warning = f"warn:flush-chunk-invalid:{raw}"
+            return value, warning
+        if warning is None:
+            warning = f"warn:{label}:{raw}"
 
     backend, _warning = claude_runner.resolve_backend(env)
     if backend in (
@@ -271,26 +337,112 @@ def _load_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _is_recent_duplicate(
+def _rotate_delivery_ledger(path: Path, max_bytes: int) -> None:
+    try:
+        if path.exists() and path.stat().st_size > max_bytes:
+            backup = path.with_name(path.name + ".1")
+            try:
+                backup.unlink()
+            except FileNotFoundError:
+                pass
+            path.replace(backup)
+    except OSError:
+        pass
+
+
+def record_delivery(
     state_dir: Path,
+    *,
     session_id: str,
-    now_epoch: float,
-) -> bool:
-    session_state_path = _session_state_path(state_dir, session_id)
-    state_path = (
-        session_state_path
-        if session_state_path.exists()
-        else state_dir / "last-flush.json"
+    reason: str,
+    transcript: Path | str,
+    turns_seen: int = 0,
+    turns_sent: int = 0,
+    chars_sent: int = 0,
+    chunks: int = 0,
+    ok: bool = False,
+    when: dt.datetime | None = None,
+    ledger_name: str = DELIVERY_LEDGER_NAME,
+    max_bytes: int = DELIVERY_LEDGER_MAX_BYTES,
+) -> None:
+    """Append one delivery line for a flush attempt: counts, never content.
+
+    Like ``record_call``, the signature is the guarantee — this function is
+    handed a path and four integers, so no transcript text can reach the file.
+    Bookkeeping must never break the flush it books, so every failure here is
+    swallowed the way ``write_health`` swallows its own.
+    """
+    try:
+        moment = when or dt.datetime.now().astimezone()
+        record = {
+            "ts": moment.isoformat(timespec="seconds"),
+            "session_id": str(session_id),
+            "reason": str(reason),
+            "transcript": str(transcript),
+            "turns_seen": int(turns_seen),
+            "turns_sent": int(turns_sent),
+            "chars_sent": int(chars_sent),
+            "chunks": int(chunks),
+            "ok": bool(ok),
+        }
+        state_dir = Path(state_dir)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = state_dir / ledger_name
+        _rotate_delivery_ledger(path, max_bytes)
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def _note_delivery(
+    state_dir: Path,
+    *,
+    session_id: str,
+    reason: str,
+    transcript: Path | str,
+    turns_seen: int = 0,
+    turns_sent: int = 0,
+    chars_sent: int = 0,
+    chunks: int = 0,
+    ok: bool = False,
+    when: dt.datetime | None = None,
+) -> None:
+    """Ledger line for every attempt, plus a health warning for the bad ones."""
+    record_delivery(
+        state_dir,
+        session_id=session_id,
+        reason=reason,
+        transcript=transcript,
+        turns_seen=turns_seen,
+        turns_sent=turns_sent,
+        chars_sent=chars_sent,
+        chunks=chunks,
+        ok=ok,
+        when=when,
     )
-    state = _load_json_object(state_path, {})
+    if reason in WARNING_REASONS:
+        write_health(state_dir, reason, warning=True, component="flush")
+
+
+def _read_turn_cursor(state_dir: Path, session_id: str) -> int:
+    """How many transcript turns this session has already had summarised.
+
+    The cursor replaces the old 60-second duplicate guard: two flushes 33
+    minutes apart on the same unchanged transcript used to sail past that guard
+    and summarise the identical tail twice (`daily/2026-09-04.md`, 14:27 and
+    15:24, both 9,862 model-input chars).
+    """
+    try:
+        state = _load_json_object(_session_state_path(state_dir, session_id), {})
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 0
     if state.get("session_id") != session_id:
-        return False
-    if state.get("status", "ok") != "ok":
-        return False
-    timestamp = state.get("ts")
-    if not isinstance(timestamp, (int, float)):
-        return False
-    return abs(now_epoch - float(timestamp)) < 60
+        return 0
+    value = state.get("last_turn_index")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 def _write_flush_state(
@@ -299,6 +451,8 @@ def _write_flush_state(
     now_epoch: float,
     status: str,
     detail: str = "",
+    *,
+    turn_cursor: int | None = None,
 ) -> None:
     payload = {
         "session_id": session_id,
@@ -310,6 +464,12 @@ def _write_flush_state(
         # than threading the value through every caller.
         "timeout": claude_runner.resolve_timeout("flush")[0],
     }
+    # A state write that says nothing about the cursor must not erase it.
+    payload["last_turn_index"] = (
+        _read_turn_cursor(state_dir, session_id)
+        if turn_cursor is None
+        else max(0, int(turn_cursor))
+    )
     if detail:
         payload["detail"] = detail
     _atomic_write_json(_session_state_path(state_dir, session_id), payload)
@@ -689,13 +849,17 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
     lock_path = _session_lock_path(STATE_DIR, session_id)
     with lock_path.open("a+", encoding="utf-8") as lock_file:
         _lock_exclusive(lock_file, blocking=True)
-        if _is_recent_duplicate(STATE_DIR, session_id, now_epoch):
-            return 0
 
         chunk_chars, chunk_warning = resolve_flush_chunk_chars()
         if chunk_warning:
             write_health(
                 STATE_DIR, chunk_warning, warning=True, component="flush"
+            )
+
+        max_turns, turns_warning = resolve_flush_max_turns()
+        if turns_warning:
+            write_health(
+                STATE_DIR, turns_warning, warning=True, component="flush"
             )
 
         timeout, timeout_warning = claude_runner.resolve_timeout("flush")
@@ -704,11 +868,60 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 STATE_DIR, timeout_warning, warning=True, component="flush"
             )
 
+        def note(**fields: Any) -> None:
+            _note_delivery(
+                STATE_DIR,
+                session_id=session_id,
+                transcript=transcript_path,
+                when=event_time,
+                **fields,
+            )
+
+        # A transcript we cannot read is the one case the hook used to swallow
+        # whole: `return 0`, no state, no health, no trace. Health never learned
+        # that a session had not been captured (A5).
         try:
             turns = read_transcript(transcript_path)
         except FileNotFoundError:
+            note(reason=REASON_MISSING_TRANSCRIPT)
             return 0
-        transcript, turn_count = format_turns(turns, max_chars=chunk_chars)
+        except OSError:
+            note(reason=REASON_UNREADABLE_TRANSCRIPT)
+            return 0
+
+        turns_seen = len(turns)
+        cursor = _read_turn_cursor(STATE_DIR, session_id)
+        if cursor > turns_seen:
+            # The transcript shrank (rotated or replaced): resend rather than
+            # trust a cursor that no longer indexes anything.
+            cursor = 0
+        pending = list(turns[cursor:])
+        if not turns_seen:
+            _write_flush_state(
+                STATE_DIR,
+                session_id,
+                now_epoch,
+                "ok",
+                _flush_state_detail("below-minimum-turns", chunk_chars),
+                turn_cursor=cursor,
+            )
+            note(reason=REASON_NO_TURNS, turns_seen=turns_seen)
+            return 0
+        if not pending:
+            _write_flush_state(
+                STATE_DIR,
+                session_id,
+                now_epoch,
+                "ok",
+                _flush_state_detail("no-new-turns", chunk_chars),
+                turn_cursor=cursor,
+            )
+            note(reason=REASON_NO_NEW_TURNS, turns_seen=turns_seen)
+            return 0
+
+        transcript, turn_count = format_turns(
+            pending, max_turns=max_turns, max_chars=chunk_chars
+        )
         minimum_turns = 5 if args.reason == "precompact" else 1
         if turn_count < minimum_turns:
             _write_flush_state(
@@ -717,6 +930,13 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 now_epoch,
                 "ok",
                 _flush_state_detail("below-minimum-turns", chunk_chars),
+                turn_cursor=cursor,
+            )
+            note(
+                reason=REASON_NO_TURNS,
+                turns_seen=turns_seen,
+                turns_sent=turn_count,
+                chars_sent=len(transcript),
             )
             return 0
 
@@ -726,6 +946,7 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
             now_epoch,
             "inflight",
             _flush_state_detail("", chunk_chars),
+            turn_cursor=cursor,
         )
         # Unicode kapısı (giriş): görünmez karakter hileleri DIRECTIVE_SHAPED
         # denetiminden ÖNCE temizlenir ki satır-başı çapası atlatılamasın.
@@ -767,6 +988,20 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 component="flush",
             )
 
+        chars_sent = len(transcript)
+
+        def rejected(error: str) -> None:
+            _record_flush_failure(
+                STATE_DIR, session_id, now_epoch, error, chunk_chars
+            )
+            note(
+                reason=REASON_REJECTED,
+                turns_seen=turns_seen,
+                turns_sent=turn_count,
+                chars_sent=chars_sent,
+                chunks=1,
+            )
+
         summary, error = _run_claude(
             build_flush_prompt(transcript), VAULT_ROOT, timeout
         )
@@ -775,40 +1010,33 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 STATE_DIR, backend_warning, warning=True, component="flush"
             )
         if error is not None:
-            _record_flush_failure(
-                STATE_DIR,
-                session_id,
-                now_epoch,
-                error,
-                chunk_chars,
-            )
+            rejected(error)
             return 0
         if not summary:
-            _record_flush_failure(
-                STATE_DIR,
-                session_id,
-                now_epoch,
-                "summary-empty",
-                chunk_chars,
-            )
+            rejected("summary-empty")
             return 0
         if summary == "FLUSH_BOS":
+            # The cursor deliberately stays put: an empty verdict is not proof
+            # that these turns are worthless forever, and losing them is worse
+            # than re-offering them alongside whatever comes next.
             _write_flush_state(
                 STATE_DIR,
                 session_id,
                 now_epoch,
                 "ok",
                 _flush_state_detail("flush-bos", chunk_chars),
+                turn_cursor=cursor,
+            )
+            note(
+                reason=REASON_BOS,
+                turns_seen=turns_seen,
+                turns_sent=turn_count,
+                chars_sent=chars_sent,
+                chunks=1,
             )
             return 0
         if not validate_summary(summary):
-            _record_flush_failure(
-                STATE_DIR,
-                session_id,
-                now_epoch,
-                "summary-schema-invalid",
-                chunk_chars,
-            )
+            rejected("summary-schema-invalid")
             return 0
 
         # Sır bekçisi (çıkış): özetçi girişte kaçanı aynen aktarmış olabilir.
@@ -849,12 +1077,16 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 event_time,
                 anchor=session_anchor(session_id, event_time),
             )
+            # Cursor advances only here, after the daily append has landed. A
+            # crash between the model call and this line costs a repeat, not a
+            # gap — the same turns are simply offered again next time.
             _write_flush_state(
                 STATE_DIR,
                 session_id,
                 now_epoch,
                 "ok",
                 _flush_state_detail("appended", chunk_chars),
+                turn_cursor=turns_seen,
             )
         except OSError:
             _record_flush_failure(
@@ -864,7 +1096,23 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 "daily-append-failed",
                 chunk_chars,
             )
+            note(
+                reason=REASON_APPEND_FAILED,
+                turns_seen=turns_seen,
+                turns_sent=turn_count,
+                chars_sent=chars_sent,
+                chunks=1,
+            )
             return 0
+
+        note(
+            reason=REASON_OK,
+            turns_seen=turns_seen,
+            turns_sent=turn_count,
+            chars_sent=chars_sent,
+            chunks=1,
+            ok=True,
+        )
 
         try:
             maybe_trigger_compile(VAULT_ROOT, event_time)

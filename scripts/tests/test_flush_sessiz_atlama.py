@@ -1,5 +1,5 @@
 # yazan: codex · model: gpt-5.6-sol
-"""Eksik transkript sessiz atlanır; gerçek girdi hataları raporlanır."""
+"""Eksik transkript görünür olur (çıkış 0); girdi hataları raporlanır."""
 
 from __future__ import annotations
 
@@ -55,17 +55,39 @@ class MissingTranscriptTests(unittest.TestCase):
         ):
             return flush.main(["--hook-input", str(hook_input)])
 
-    def test_missing_transcript_exits_cleanly_without_changing_health(self) -> None:
+    def test_missing_transcript_is_visible_but_still_exits_zero(self) -> None:
+        """A5: the hook still succeeds, but the miss is no longer invisible.
+
+        This test used to pin the opposite contract — health untouched — which
+        is how session 54 (2026-09-04) could fail to reach the daily log with
+        nothing anywhere saying so.
+        """
         health_path = self.state_dir / "health.json"
-        original_health = '{"error":"","sentinel":"keep"}\n'
-        health_path.write_text(original_health, encoding="utf-8")
-        hook_input = self._hook_input(
-            "missing-transcript",
-            self.root / "does-not-exist.jsonl",
+        health_path.write_text(
+            '{"error":"","sentinel":"keep"}\n', encoding="utf-8"
         )
+        missing = self.root / "does-not-exist.jsonl"
+        hook_input = self._hook_input("missing-transcript", missing)
 
         self.assertEqual(self._run(hook_input), 0)
-        self.assertEqual(health_path.read_text(encoding="utf-8"), original_health)
+
+        health = json.loads(health_path.read_text(encoding="utf-8"))
+        self.assertEqual(health["component"], "flush")
+        self.assertEqual(health["error"], flush.REASON_MISSING_TRANSCRIPT)
+        self.assertIn(flush.REASON_MISSING_TRANSCRIPT, health["warnings"])
+        self.assertEqual(health["sentinel"], "keep")
+
+        ledger = self.state_dir / flush.DELIVERY_LEDGER_NAME
+        lines = [
+            json.loads(line)
+            for line in ledger.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["reason"], flush.REASON_MISSING_TRANSCRIPT)
+        self.assertEqual(lines[0]["session_id"], "missing-transcript")
+        self.assertEqual(lines[0]["transcript"], str(missing))
+        self.assertFalse(lines[0]["ok"])
 
     def test_corrupt_existing_transcript_still_writes_input_error(self) -> None:
         transcript_path = self.root / "corrupt.jsonl"
