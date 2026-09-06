@@ -416,7 +416,11 @@ def summarize_session(
         )
     else:
         transcript, turn_count = flush.format_turns(session.turns)
-    if turn_count < min_turns:
+    # Astra A5 takibi (2026-09-06): format_turns artik durust sayiyor (karakter
+    # tavanindan sag cikan tur sayisi). Alt sinir kapisi oturumun GERCEK tur
+    # sayisina bakmali; aksi halde iki uzun turluk bir oturum tavana takilinca
+    # 'bos' sayilir. Modele giden metin degismez.
+    if len(session.turns) < min_turns:
         return SummaryResult("", "bos", "below-minimum-turns")
 
     transcript, _input_warnings = giris_kapisi.temizle(
