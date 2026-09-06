@@ -34,6 +34,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<!-- yazan: claude · opus-5 -->
+- **The spend ledger counted every response two or three times.** Claude Code
+  transcripts re-emit the same assistant message on streaming updates, retries
+  and compaction rewrites, and every copy carries its own `usage` block;
+  `harcama_defteri.py` summed all of them. Measured over the real
+  `~/.claude/projects` (1,740 files): 50,596 raw `usage` rows collapse to
+  22,036 distinct responses — 28,560 in-file duplicates, plus 53 responses
+  that appear in two different files. Every recorded number was therefore
+  inflated roughly 2–3×: cache-read tokens for 1–6 Sep fall from 1,477M to
+  716M (48.5%) and output tokens from 12.9M to 4.7M (36.5%). Each response is
+  now keyed by `message.id` (falling back to `requestId`, then `uuid`) and
+  only the **last** record for that key counts; a key already seen in an
+  earlier file is skipped and tallied in a new `capraz_yinelenen` counter.
+- **Daily totals were keyed to the session's last timestamp.** A session
+  crossing midnight moved its entire spend onto the wrong day, and appending
+  to a live session retroactively shifted earlier days. The daily breakdown is
+  now built per usage record from that record's **own** timestamp; per-session
+  totals are unchanged. `_gun()` also now converts the transcript's UTC stamp
+  to the local (Istanbul) calendar day instead of slicing the first ten
+  characters, so day keys and `ozet`'s local `date.today()` finally share one
+  calendar. Codex rollouts, whose `total_token_usage` is a cumulative counter,
+  were **not** double-counted (only the last record was ever read); their
+  per-day split is now derived from the differences between consecutive
+  counter values, leaving session totals identical.
+- The ledger persists a per-file `id → [day, model, in, out, cache_r,
+  cache_w]` map (`surum: 2`, ~4 MB for 2,059 sessions) so deduplication
+  survives incremental runs; the size+mtime watermark and the atomic write are
+  unchanged, a changed file's map is replaced rather than merged, and a
+  `surum: 1` ledger is rebuilt from scratch on load rather than inheriting
+  inflated numbers. New `--yeniden` flag forces a full rebuild, and
+  `BEYIN_HARCAMA_DEFTERI` overrides the ledger path for read-only measurement
+  runs. `ozet` output format is unchanged — only the numbers.
+
 <!-- yazan: claude · fable-5.1 -->
 - **`bm25()`'s field weights were never actually applied.** FTS5's
   `bm25(notes, ...)` weights are positional over every column of `notes(name
