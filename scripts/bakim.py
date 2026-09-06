@@ -27,6 +27,9 @@ TMP_TTL_SECONDS = 24 * 60 * 60
 LOCK_TTL_SECONDS = 7 * 24 * 60 * 60
 SESSION_TTL_SECONDS = 3 * 24 * 60 * 60
 ENJEKSIYON_MAX_BYTES = 1024 * 1024
+# hook-girdi.jsonl is written by the hooks themselves and bounded there at the
+# same ceiling; maintenance rotates it too so the two agree.
+HOOK_GIRDI_MAX_BYTES = 512 * 1024
 
 
 def _old_regular_file(path: Path, now: float, ttl: int) -> bool:
@@ -92,30 +95,44 @@ def _prune_files(
             result["errors"] += 1
 
 
-def _rotate_enjeksiyon(
-    state_dir: Path,
+def _rotate_jsonl(
+    state_dirs: Sequence[Path],
+    name: str,
+    max_bytes: int,
     apply: bool,
     result: dict[str, Any],
 ) -> None:
-    source = state_dir / "enjeksiyon.jsonl"
-    try:
-        details = source.lstat()
-    except OSError:
-        return
-    if (
-        not stat.S_ISREG(details.st_mode)
-        or stat.S_ISLNK(details.st_mode)
-        or details.st_size < ENJEKSIYON_MAX_BYTES
-    ):
-        return
-    result["eligible"] = 1
-    if not apply:
-        return
-    try:
-        os.replace(source, state_dir / "enjeksiyon.jsonl.1")
-        result["changed"] = 1
-    except OSError:
-        result["errors"] = 1
+    """Rotate ``name`` wherever it actually lives.
+
+    The live SessionStart hook writes ``hooks/.state/enjeksiyon.jsonl`` while
+    maintenance used to look only in ``scripts/.state`` — so rotation never ran
+    in production (2026-09-06 audit). Every candidate directory is visited and
+    the older location is kept as a fallback for installs that still have one.
+    """
+    seen: list[Path] = []
+    for state_dir in state_dirs:
+        if state_dir in seen:
+            continue
+        seen.append(state_dir)
+        source = state_dir / name
+        try:
+            details = source.lstat()
+        except OSError:
+            continue
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or stat.S_ISLNK(details.st_mode)
+            or details.st_size < max_bytes
+        ):
+            continue
+        result["eligible"] += 1
+        if not apply:
+            continue
+        try:
+            os.replace(source, state_dir / (name + ".1"))
+            result["changed"] += 1
+        except OSError:
+            result["errors"] += 1
 
 
 def _prune_session_directories(
@@ -155,6 +172,7 @@ def run_maintenance(
         _result("retrieve-session ledgers", "delete"),
         _result("orphan tmp files", "delete"),
         _result("enjeksiyon.jsonl", "rotate"),
+        _result("hook-girdi.jsonl", "rotate"),
         _result("zero-byte lock carriers", "delete"),
         _result("stale session directories", "delete"),
     ]
@@ -174,17 +192,31 @@ def run_maintenance(
         apply,
         reports[1],
     )
-    _rotate_enjeksiyon(state_dir, apply, reports[2])
+    # Hook state first: that is where the live hooks write both ledgers.
+    _rotate_jsonl(
+        (hook_state_dir, state_dir),
+        "enjeksiyon.jsonl",
+        ENJEKSIYON_MAX_BYTES,
+        apply,
+        reports[2],
+    )
+    _rotate_jsonl(
+        (hook_state_dir, state_dir),
+        "hook-girdi.jsonl",
+        HOOK_GIRDI_MAX_BYTES,
+        apply,
+        reports[3],
+    )
     _prune_files(
         state_dir,
         "*.lock",
         moment,
         LOCK_TTL_SECONDS,
         apply,
-        reports[3],
+        reports[4],
         require_empty=True,
     )
-    _prune_session_directories(hook_state_dir, moment, apply, reports[4])
+    _prune_session_directories(hook_state_dir, moment, apply, reports[5])
     return reports
 
 

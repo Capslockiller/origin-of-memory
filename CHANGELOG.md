@@ -105,6 +105,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 <!-- yazan: claude · opus-5 -->
+- **Four mechanism debts: maintenance rotated a file nobody writes, the flush
+  hook left no trace of being entered, retrieval had a second gateless door,
+  and the OAuth cache went stale for 36 hours without saying why.** (Astra
+  A-borç 1–5, 2026-09-06.) `bakim.py` defined `HOOK_STATE_DIR` but rotated
+  `enjeksiyon.jsonl` under `scripts/.state`, while the live SessionStart hook
+  writes it to `hooks/.state` — so rotation had never run in production (the
+  live vault's copy sat at 12.7 KB in `hooks/.state` and did not exist under
+  `scripts/.state` at all). Rotation now visits the hook state directory first
+  and keeps the old location as a fallback. `flush-launch.ps1` appends one line
+  to the new bounded `hooks/.state/hook-girdi.jsonl`
+  (`{ts, hook, reason, pid}`) before it reads stdin, so "the hook never fired"
+  can finally be told apart from "the hook fired but Python never started" —
+  the question session 54's lost 19-hour transcript could not answer.
+  `session-start.ps1` should get the same one-liner (not changed here).
+  `memory-retrieve.ps1` is now a thin compatibility shim that pipes stdin to
+  `retrieve.py hook` and returns its stdout and exit code: it had kept its own
+  skip logic and no relevance gate while the live registration calls
+  `retrieve.py hook` directly, so retrieval had two entries with different
+  rules. It is kept, not deleted — that call is the owner's. `kota.py` now
+  records every refresh attempt in the cache (`son_deneme`, `son_hata`,
+  `http_status`, written without touching `yazilma` so a stale percentage never
+  looks fresh), surfaces it as `[oauth 2158dk bayat · 401]` on the one-line
+  output and as a `oauth yenileme: BAŞARISIZ … → çözüm:` pair under `--detay`.
+  Diagnosis of the live 36-hour freeze: the access token in
+  `~/.claude/.credentials.json` expired 2026-09-05 14:04 UTC and the endpoint
+  answers `401 OAuth access token has expired` — the reader does not refresh
+  tokens (that is the CLI's job), so this needs a `/login` by the owner.
+  Finally, a `serbest` band with usage ≥ 50% and no burn sample in the
+  measurement window now prints `kalan %NN`: "Codex 5s %83 [R 0,0 · serbest]"
+  had been read as an empty quota while 17% remained.
+
+<!-- yazan: claude · opus-5 -->
 - **A stale quota source no longer reads as "serbest", and `durum.py` shows the
   compile queue.** (Astra denetimi A8/A14, 2026-09-06.) The OAuth usage cache
   had been frozen since 2026-09-05 08:26 UTC, yet every read of `kota.py`

@@ -251,10 +251,28 @@ def _oauth_normalize(ham: dict) -> dict:
     return sonuc
 
 
-def _oauth_cache_oku() -> tuple[dt.datetime, dict] | None:
+def _oauth_ham_oku() -> dict:
+    """Önbellek dosyasının tamamı (veri + tanı alanları); yoksa boş sözlük."""
     try:
         ham = json.loads(CLAUDE_OAUTH_CACHE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return {}
+    return ham if isinstance(ham, dict) else {}
+
+
+def _oauth_tani_oku() -> dict:
+    """Son yenileme denemesinin kaydı: son_deneme · son_hata · http_status."""
+    ham = _oauth_ham_oku()
+    return {
+        "son_deneme": ham.get("son_deneme"),
+        "son_hata": ham.get("son_hata"),
+        "http_status": ham.get("http_status"),
+    }
+
+
+def _oauth_cache_oku() -> tuple[dt.datetime, dict] | None:
+    ham = _oauth_ham_oku()
+    if not ham:
         return None
     veri = ham.get("veri")
     if not isinstance(veri, dict):
@@ -268,19 +286,39 @@ def _oauth_cache_oku() -> tuple[dt.datetime, dict] | None:
     return yaz_zaman, veri
 
 
-def _oauth_cache_yaz(veri: dict) -> None:
-    """Atomik yaz: geçici dosya + os.replace. Yalnız SUNUCU YANITI durur — jeton asla."""
+def _oauth_atomik_yaz(ham: dict) -> None:
     try:
         CLAUDE_OAUTH_CACHE.parent.mkdir(parents=True, exist_ok=True)
         gecici = CLAUDE_OAUTH_CACHE.with_name(CLAUDE_OAUTH_CACHE.name + ".tmp")
-        icerik = json.dumps(
-            {"yazilma": dt.datetime.now(dt.timezone.utc).isoformat(), "veri": veri},
-            ensure_ascii=False,
-        )
-        gecici.write_text(icerik, encoding="utf-8")
+        gecici.write_text(json.dumps(ham, ensure_ascii=False), encoding="utf-8")
         os.replace(gecici, CLAUDE_OAUTH_CACHE)
     except OSError:
         pass  # önbellek yazılamazsa sessiz geç — kritik değil
+
+
+def _oauth_cache_yaz(veri: dict) -> None:
+    """Atomik yaz: geçici dosya + os.replace. Yalnız SUNUCU YANITI durur — jeton asla."""
+    _oauth_atomik_yaz({
+        "yazilma": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "veri": veri,
+        "son_deneme": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "son_hata": None,
+        "http_status": 200,
+    })
+
+
+def _oauth_tani_yaz(hata: str, http_status: int | None = None) -> None:
+    """Başarısız yenileme denemesini önbelleğe iliştirir (Astra A-borç 4).
+
+    ``yazilma`` ve ``veri`` KORUNUR: gözlem yaşı denemeyle sıfırlanmaz, yoksa
+    36 saatlik bayat bir yüzde taze görünürdü. Denetimde görülen hata tam da
+    sessiz düşüştü — yenileme yolu çöküyor, satır bunu hiç söylemiyordu.
+    """
+    ham = _oauth_ham_oku()
+    ham["son_deneme"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    ham["son_hata"] = hata
+    ham["http_status"] = http_status
+    _oauth_atomik_yaz(ham)
 
 
 def _kimlik_oku() -> tuple[str | None, int | None, str | None, str | None]:
@@ -325,6 +363,11 @@ def _claude_oauth_ic() -> dict | None:
             sozluk["_rateLimitTier"] = oran_katmani
         if bayat:
             sozluk["_bayat"] = True
+        tani = _oauth_tani_oku()
+        if tani.get("son_hata"):
+            sozluk["_oauth_hata"] = tani["son_hata"]
+            sozluk["_oauth_http"] = tani.get("http_status")
+            sozluk["_oauth_son_deneme"] = tani.get("son_deneme")
         return sozluk
 
     if onbellek:
@@ -342,10 +385,17 @@ def _claude_oauth_ic() -> dict | None:
 
     token, bitis_ms, _, _ = _kimlik_oku()
     if not token or not bitis_ms:
+        _oauth_tani_yaz("kimlik-dosyasi-okunamadi")
         return bayat_donus()
     if bitis_ms <= simdi.timestamp() * 1000:
-        return bayat_donus()  # erişim jetonu süresi dolmuş — YENİLEME DENENMEZ
+        # Erişim jetonu süresi dolmuş — YENİLEME DENENMEZ (jeton yenilemek
+        # CLI'nin işidir, kota okuyucusunun değil). 2026-09-06 teşhisi: uç
+        # gerçekten 401 "OAuth access token has expired" veriyor; çözüm
+        # sahibin Claude Code'da yeniden oturum açmasıdır.
+        _oauth_tani_yaz("jeton-suresi-doldu", 401)
+        return bayat_donus()
 
+    yanit_kodu: int | None = None
     try:
         ua = os.environ.get("BEYIN_KOTA_UA", OAUTH_UA_VARSAYILAN)
         istek = urllib.request.Request(
@@ -358,10 +408,17 @@ def _claude_oauth_ic() -> dict | None:
             method="GET",
         )
         with urllib.request.urlopen(istek, timeout=4) as yanit:
+            yanit_kodu = getattr(yanit, "status", None)
             govde = yanit.read().decode("utf-8", errors="replace")
         yeni_veri = json.loads(govde)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-            json.JSONDecodeError, OSError, ValueError):
+    except urllib.error.HTTPError as hata:
+        _oauth_tani_yaz("http-hatasi", getattr(hata, "code", None))
+        return bayat_donus()
+    except (urllib.error.URLError, TimeoutError, OSError) as hata:
+        _oauth_tani_yaz("ag-hatasi:" + type(hata).__name__, yanit_kodu)
+        return bayat_donus()
+    except (json.JSONDecodeError, ValueError) as hata:
+        _oauth_tani_yaz("yanit-cozulemedi:" + type(hata).__name__, yanit_kodu)
         return bayat_donus()
 
     _oauth_cache_yaz(yeni_veri)
@@ -478,6 +535,51 @@ def hizlar(codex: dict | None, resmi: dict | None, kaydet: bool = True) -> dict[
     return sonuc
 
 
+def _oauth_hata_eki(resmi: dict) -> str:
+    """`[oauth 2158dk bayat · 401]` — bayatlığın NEDENİ satırda durur.
+
+    Yenileme sessizce düşerse okuyucu yalnız "bayat" görür ve nedenini aramak
+    zorunda kalır; denetimde 36 saat böyle geçti (Astra A-borç 4).
+    """
+    hata = resmi.get("_oauth_hata")
+    if not hata:
+        return ""
+    http = resmi.get("_oauth_http")
+    return f" · {http}" if http else f" · {hata}"
+
+
+OAUTH_COZUM = {
+    "jeton-suresi-doldu": (
+        "Claude Code'da /login ile yeniden oturum aç — erişim jetonunun süresi "
+        "doldu, kota okuyucusu jeton yenilemez (yenileme CLI'nin işidir)."
+    ),
+    "kimlik-dosyasi-okunamadi": (
+        "~/.claude/.credentials.json okunamadı ya da claudeAiOauth bloğu yok; "
+        "Claude Code'da /login ile oturum aç."
+    ),
+}
+
+
+def oauth_tani_satirlari(resmi: dict) -> list[str]:
+    """``--detay`` için son yenileme denemesinin dökümü (boşsa boş liste)."""
+    hata = resmi.get("_oauth_hata")
+    if not hata:
+        return []
+    http = resmi.get("_oauth_http")
+    deneme = resmi.get("_oauth_son_deneme") or "?"
+    satirlar = [
+        "  oauth yenileme: BAŞARISIZ · {}{} · son deneme {}".format(
+            hata, f" · HTTP {http}" if http else "", deneme
+        )
+    ]
+    cozum = OAUTH_COZUM.get(str(hata))
+    if hata == "http-hatasi" and http == 401:
+        cozum = OAUTH_COZUM["jeton-suresi-doldu"]
+    if cozum:
+        satirlar.append(f"  → çözüm: {cozum}")
+    return satirlar
+
+
 def tek_satir(codex: dict | None, claude: dict, resmi: dict | None = None,
               hiz: dict[str, dict] | None = None) -> str:
     if hiz is None:
@@ -502,7 +604,7 @@ def tek_satir(codex: dict | None, claude: dict, resmi: dict | None = None,
     if resmi:
         if resmi.get("_kaynak") == "oauth":
             bayat_ek = " bayat" if resmi.get("_bayat") else ""
-            etiket = f"[oauth {resmi.get('_yas_dk', '?')}dk{bayat_ek}]"
+            etiket = f"[oauth {resmi.get('_yas_dk', '?')}dk{bayat_ek}{_oauth_hata_eki(resmi)}]"
         else:
             etiket = f"[{resmi.get('_yas_dk', '?')}dk önce]"
         bes = resmi.get("five_hour") or {}
@@ -582,6 +684,8 @@ def main() -> int:
             oran = resmi.get("_rateLimitTier")
             if abone or oran:
                 print(f"  claude abonelik: {abone or '?'} · oran katmanı: {oran or '?'}")
+            for satir in oauth_tani_satirlari(resmi):
+                print(satir)
             # Saat temposu dökümü — hafta bütçesi 168 saate bölünür (%0,60/saat).
             hafta = resmi.get("seven_day") or {}
             kalemler = [("hafta", hafta.get("used_percentage"), hafta.get("resets_at"))]

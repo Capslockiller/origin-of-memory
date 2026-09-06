@@ -54,9 +54,37 @@ function Write-BeyinHookError {
   } catch {}
 }
 
+# Hook giris izi (A-borc 2, 2026-09-06): 54. oturumda 19 saatlik transkript
+# daily'ye hic dusmedi; teshis "SessionEnd hic ateslemedi" ile "atesledi ama
+# python baslamadi" arasinda ayrim yapamadi. Bu satir KANCAYA GIRILDIGINI
+# kanitlar: stdin okunmadan once yazilir, hatasi yutulur, dosya 512 KB'i
+# gecince .1'e devrilir (bakim.py ayni tavanla ayrica devirir).
+function Write-BeyinHookGirdi {
+  param([string]$HookName, [string]$Reason)
+  try {
+    $dir = Join-Path $PSScriptRoot '.state'
+    if (-not (Test-Path -LiteralPath $dir)) {
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    $path = Join-Path $dir 'hook-girdi.jsonl'
+    $var = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+    if ($var -and $var.Length -gt 524288) {
+      Move-Item -LiteralPath $path -Destination ($path + '.1') -Force -ErrorAction SilentlyContinue
+    }
+    $record = @{
+      ts = [DateTimeOffset]::Now.ToString('o')
+      hook = $HookName
+      reason = $Reason
+      pid = $PID
+    } | ConvertTo-Json -Compress
+    [System.IO.File]::AppendAllText($path, $record + "`n", [System.Text.UTF8Encoding]::new($false))
+  } catch {}
+}
+
 # session-end.ps1 dot-sources only these shared interpreter/error helpers.
 if ($MyInvocation.InvocationName -eq '.') { return }
 if ($env:BEYIN_INVOKED_BY) { exit 0 }
+Write-BeyinHookGirdi 'flush-launch' $Reason
 
 $stdin = [Console]::In.ReadToEnd()
 if (-not $stdin) { exit 0 }

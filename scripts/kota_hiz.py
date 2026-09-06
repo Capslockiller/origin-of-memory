@@ -334,10 +334,29 @@ def _bayat_metni(d: dict) -> str:
     return f"? bayat {yas}dk" if isinstance(yas, int) else "? bilinmiyor"
 
 
+KALAN_GOSTER_USED = 50.0     # bu kullanımın üstünde "serbest" tek başına yetmez
+
+
+def _kalan_gosterilsin(d: dict) -> bool:
+    """Serbest + yüksek kullanım + yanma kanıtı yok → kalan% satırda durur.
+
+    A-borç 5 (2026-09-06): "Codex 5s %83 [R 0,0 · serbest]" satırı boş kota
+    diye okundu, oysa geriye %17 kalmıştı. R = 0,0 yalnız ölçüm penceresinde
+    yanma ÖRNEĞİ olmadığını söyler; bantın kendisi kalanı göstermez.
+    """
+    if d.get("bant") != BANT_AD[0]:
+        return False
+    if d.get("yanma"):  # gerçek bir yanma ölçüldü — biter/R zaten konuşuyor
+        return False
+    used = d.get("used")
+    return isinstance(used, (int, float)) and used >= KALAN_GOSTER_USED
+
+
 def kisa_metin(d: dict | None) -> str:
     """Satır içi ek: ` [R 1,3 karne · biter 03:40]` gibi; tahminse `~`.
 
     Bant bilinmiyorsa ölçü basılmaz, yerine ` [? bayat 2050dk]` çıkar.
+    Serbest ama kullanım yüksek ve yanma örneği yoksa ` · kalan %17` eklenir.
     """
     if not d:
         return ""
@@ -347,6 +366,8 @@ def kisa_metin(d: dict | None) -> str:
     if d["R"] is not None:
         parcalar.append(("R~" if d["tahmin"] else "R ") + _sayi(d["R"]))
     parcalar.append(d["bant"])
+    if _kalan_gosterilsin(d):
+        parcalar.append("kalan %" + _sayi(d.get("kalan"), 0))
     if d["harca"]:
         parcalar.append("HARCA")
     if d["tukenme"]:

@@ -14,11 +14,14 @@ model: opus-5
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+import unittest.mock
+import urllib.error
 
 import _helpers  # noqa: F401 — scripts dizinini sys.path'e ekler
 
@@ -256,6 +259,242 @@ class KotaSatirTests(unittest.TestCase):
         self.assertIn("[? bayat 2050dk]", satir)
         self.assertIn("bant: bilinmiyor (claude-5s bayat)", satir)
         self.assertNotIn("serbest", satir)
+
+
+class OauthTaniTests(unittest.TestCase):
+    """Yenileme denemesi düşerse NEDENİ önbelleğe yazılır ve satırda görünür.
+
+    Denetim (2026-09-06): OAuth önbelleği 2026-09-05 08:26'dan beri donmuştu ve
+    hiçbir yerde nedeni yazmıyordu. Canlı teşhis: erişim jetonunun süresi
+    dolmuş, uç 401 "OAuth access token has expired" veriyor. Bu testler ağa
+    çıkmaz; her yol sahte bir getirici ile sürülür.
+    """
+
+    def setUp(self) -> None:
+        self._gecici = tempfile.TemporaryDirectory()
+        kok = Path(self._gecici.name)
+        self.onbellek = kok / "claude-kota-oauth.json"
+        self.kimlik = kok / ".credentials.json"
+        self._yamalar = [
+            unittest.mock.patch.object(kota, "CLAUDE_OAUTH_CACHE", self.onbellek),
+            unittest.mock.patch.object(kota, "CLAUDE_CRED_PATH", self.kimlik),
+        ]
+        for yama in self._yamalar:
+            yama.start()
+
+    def tearDown(self) -> None:
+        for yama in reversed(self._yamalar):
+            yama.stop()
+        self._gecici.cleanup()
+
+    def _bayat_onbellek_yaz(self) -> None:
+        eski = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=2158)
+        self.onbellek.write_text(
+            json.dumps({
+                "yazilma": eski.isoformat(),
+                "veri": {
+                    "five_hour": {"utilization": 36.0,
+                                  "resets_at": "2026-09-05T10:59:59+00:00"},
+                    "seven_day": {"utilization": 7.0,
+                                  "resets_at": "2026-09-12T03:59:59+00:00"},
+                },
+            }),
+            encoding="utf-8",
+        )
+
+    def _kimlik_yaz(self, bitis_ms: int) -> None:
+        self.kimlik.write_text(
+            json.dumps({"claudeAiOauth": {
+                "accessToken": "sk-ant-oat01-sahte",
+                "expiresAt": bitis_ms,
+                "subscriptionType": "max",
+                "rateLimitTier": "default_claude_max_5x",
+            }}),
+            encoding="utf-8",
+        )
+
+    def _ham(self) -> dict:
+        return json.loads(self.onbellek.read_text(encoding="utf-8"))
+
+    def test_suresi_dolmus_jeton_onbellege_yazilir(self) -> None:
+        """Canlı teşhisin birebir hâli: jeton dolmuş, yenileme denenmiyor."""
+        self._bayat_onbellek_yaz()
+        dun = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=30)
+        self._kimlik_yaz(int(dun.timestamp() * 1000))
+
+        resmi = kota.claude_oauth()
+
+        ham = self._ham()
+        self.assertEqual(ham["son_hata"], "jeton-suresi-doldu")
+        self.assertEqual(ham["http_status"], 401)
+        self.assertTrue(ham["son_deneme"])
+        # Gözlem yaşı denemeyle SIFIRLANMAZ: bayat yüzde taze görünmemeli.
+        self.assertNotEqual(ham["yazilma"], ham["son_deneme"])
+        self.assertTrue(resmi["_bayat"])
+        self.assertEqual(resmi["_oauth_hata"], "jeton-suresi-doldu")
+        self.assertEqual(resmi["_oauth_http"], 401)
+
+    def test_http_hatasi_kod_ile_kaydedilir(self) -> None:
+        self._bayat_onbellek_yaz()
+        yarin = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+        self._kimlik_yaz(int(yarin.timestamp() * 1000))
+
+        def dusen_getirici(*_a, **_k):
+            raise urllib.error.HTTPError(
+                kota.OAUTH_URL, 401, "Unauthorized", None, None
+            )
+
+        with unittest.mock.patch.object(
+            kota.urllib.request, "urlopen", dusen_getirici
+        ):
+            resmi = kota.claude_oauth()
+
+        ham = self._ham()
+        self.assertEqual(ham["son_hata"], "http-hatasi")
+        self.assertEqual(ham["http_status"], 401)
+        self.assertEqual(resmi["_oauth_hata"], "http-hatasi")
+
+    def test_ag_hatasi_kaydedilir(self) -> None:
+        self._bayat_onbellek_yaz()
+        yarin = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+        self._kimlik_yaz(int(yarin.timestamp() * 1000))
+
+        def dusen_getirici(*_a, **_k):
+            raise urllib.error.URLError("baglanti yok")
+
+        with unittest.mock.patch.object(
+            kota.urllib.request, "urlopen", dusen_getirici
+        ):
+            kota.claude_oauth()
+
+        self.assertEqual(self._ham()["son_hata"], "ag-hatasi:URLError")
+
+    def test_basarili_yenileme_hatayi_temizler(self) -> None:
+        self._bayat_onbellek_yaz()
+        kota._oauth_tani_yaz("jeton-suresi-doldu", 401)
+        yarin = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+        self._kimlik_yaz(int(yarin.timestamp() * 1000))
+        govde = json.dumps({
+            "five_hour": {"utilization": 40.0, "resets_at": "2026-09-06T23:00:00+00:00"},
+            "seven_day": {"utilization": 9.0, "resets_at": "2026-09-12T03:59:59+00:00"},
+        }).encode("utf-8")
+
+        class _Yanit:
+            status = 200
+
+            def read(self):
+                return govde
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_a):
+                return False
+
+        with unittest.mock.patch.object(
+            kota.urllib.request, "urlopen", lambda *_a, **_k: _Yanit()
+        ):
+            resmi = kota.claude_oauth()
+
+        ham = self._ham()
+        self.assertIsNone(ham["son_hata"])
+        self.assertEqual(ham["http_status"], 200)
+        self.assertNotIn("_oauth_hata", resmi)
+
+    def test_satir_bayatligin_nedenini_gosterir(self) -> None:
+        resmi = {
+            "five_hour": {"used_percentage": 36.0, "resets_at": int(SIMDI - 100)},
+            "seven_day": {"used_percentage": 7.0, "resets_at": int(SIMDI + 6 * 86400)},
+            "_kaynak": "oauth",
+            "_yas_dk": 2158,
+            "_bayat": True,
+            "_gozlem": int(SIMDI - 2158 * 60),
+            "_oauth_hata": "jeton-suresi-doldu",
+            "_oauth_http": 401,
+            "_oauth_son_deneme": "2026-09-06T20:28:42+00:00",
+        }
+        hiz = {
+            p["id"]: kota_hiz.degerlendir(
+                p["id"], p["used"], p["resets_at"], p["pencere_sn"],
+                ornekler=[], simdi=SIMDI, gozlem_yas_dk=p["gozlem_yas_dk"],
+            )
+            for p in kota.pencereler(None, resmi, simdi=SIMDI)
+        }
+
+        satir = kota.tek_satir(None, {"5s": {}, "7g": {}}, resmi, hiz)
+
+        self.assertIn("[oauth 2158dk bayat · 401]", satir)
+
+    def test_detay_cozum_satiri_verir(self) -> None:
+        satirlar = kota.oauth_tani_satirlari({
+            "_oauth_hata": "jeton-suresi-doldu",
+            "_oauth_http": 401,
+            "_oauth_son_deneme": "2026-09-06T20:28:42+00:00",
+        })
+
+        self.assertEqual(len(satirlar), 2)
+        self.assertIn("BAŞARISIZ", satirlar[0])
+        self.assertIn("HTTP 401", satirlar[0])
+        self.assertIn("/login", satirlar[1])
+
+    def test_saglikli_kaynakta_tani_satiri_yok(self) -> None:
+        self.assertEqual(kota.oauth_tani_satirlari({"_kaynak": "oauth"}), [])
+
+
+class KalanYuzdeTests(unittest.TestCase):
+    """A-borç 5: "serbest" tek başına boş kota demek değildir."""
+
+    RESET = int(SIMDI + 4 * SAAT)          # 5s penceresinin 4 saati kaldı
+    TAZE_RESET = int(SIMDI + 4.9 * SAAT)   # pencere daha yeni açıldı → yedek yok
+
+    def _ornek(self, used: float, reset: int | None = None) -> dict:
+        """Ölçüm ufkunun (25 dk) içinde, en az aralığı (12 dk) aşan tek örnek."""
+        return {"ts": SIMDI - 20 * 60, "id": "codex-5s", "used": used,
+                "resets_at": reset if reset is not None else self.RESET}
+
+    def _d(self, used: float, ornekler: list[dict] | None = None,
+           reset: int | None = None) -> dict:
+        return kota_hiz.degerlendir(
+            "codex-5s", used, reset if reset is not None else self.RESET, 5 * SAAT,
+            ornekler=ornekler or [], simdi=SIMDI, gozlem_yas_dk=5,
+        )
+
+    def test_yuksek_kullanim_yanma_yokken_kalan_basilir(self) -> None:
+        """Gece görülen satır: "Codex 5s %83 [R 0,0 · serbest]" boş sanıldı."""
+        d = self._d(83.0, [self._ornek(83.0)])  # Δused = 0 → yanma kanıtı yok
+
+        self.assertEqual(d["bant"], "serbest")
+        self.assertEqual(d["R"], 0.0)
+        self.assertEqual(kota_hiz.kisa_metin(d), " [R 0,0 · serbest · kalan %17]")
+
+    def test_ornek_hic_yokken_de_kalan_basilir(self) -> None:
+        d = self._d(83.0, reset=self.TAZE_RESET)
+
+        self.assertEqual(d["bant"], "serbest")
+        self.assertIsNone(d["R"])
+        self.assertEqual(kota_hiz.kisa_metin(d), " [serbest · kalan %17]")
+
+    def test_dusuk_kullanimda_kalan_basilmaz(self) -> None:
+        d = self._d(12.0, reset=self.TAZE_RESET)
+
+        self.assertEqual(d["bant"], "serbest")
+        self.assertNotIn("kalan", kota_hiz.kisa_metin(d))
+
+    def test_gercek_yanma_olculdugunde_kalan_basilmaz(self) -> None:
+        """Yanma ölçüldüyse R ve `biter` zaten konuşuyor; kalan% gürültüdür."""
+        d = self._d(83.0, [self._ornek(82.7)])
+
+        self.assertEqual(d["bant"], "serbest")
+        self.assertTrue(d["yanma"])
+        self.assertNotIn("kalan %", kota_hiz.kisa_metin(d))
+
+    def test_bilinmiyor_bandi_degismedi(self) -> None:
+        d = kota_hiz.degerlendir(
+            "codex-5s", 83.0, int(SIMDI + 4 * SAAT), 5 * SAAT,
+            ornekler=[], simdi=SIMDI, gozlem_yas_dk=2158,
+        )
+
+        self.assertEqual(kota_hiz.kisa_metin(d), " [? bayat 2158dk]")
 
 
 if __name__ == "__main__":
