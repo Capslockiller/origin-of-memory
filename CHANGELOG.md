@@ -35,6 +35,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 <!-- yazan: claude · opus-5 -->
+- **A stale quota source no longer reads as "serbest", and `durum.py` shows the
+  compile queue.** (Astra denetimi A8/A14, 2026-09-06.) The OAuth usage cache
+  had been frozen since 2026-09-05 08:26 UTC, yet every read of `kota.py`
+  appended a *fresh-timestamped* sample of those identical percentages to
+  `.state/kota-orneklem.jsonl`; Δused came out 0, so the burn ratio came out
+  `R 0,0` and the governing band came out `serbest` — the status line said
+  `[oauth 2050dk bayat]` and the decision engine ignored it. Separately,
+  `degerlendir()` returned `serbest` unconditionally once a window's
+  `resets_at` was in the past, so a 99 %-used window read as free.
+  - Every window now carries the timestamp of the *server observation* behind
+    its percentage (`gozlem`: the OAuth cache's write time, the Codex rollout
+    file's mtime). Past `BEYIN_KOTA_BAYAT_DK` minutes (default 120) the band
+    becomes `bilinmiyor`, rendered `[? bayat 2124dk]`, and no ratio is
+    computed. `bilinmiyor` sorts between `dikkat` and `karne`: a `kapalı` or
+    `karne` window still governs, but an unknown one is never reported as
+    `serbest` — the line reads `bant: bilinmiyor (claude-5s bayat)`.
+  - A past reset now needs positive proof of freshness; without a fresh
+    observation it is `bilinmiyor`, with one it stays `serbest`.
+  - `kota_hiz.ornek_yaz` no longer appends a sample when the observation is
+    unchanged (same `gozlem` + `used` + `resets_at`), which is what
+    manufactured the artificial 0 burn rate. The ledger format stays backward
+    compatible: existing lines are read as before and new lines only *add* the
+    optional `gozlem` key. The `[kota]` prefix and the one-line `--hizli`
+    shape the SessionStart hook parses are unchanged.
+  - `durum.py` prints a `bekleyen kaynak` line — how many `daily/*.md` files
+    have no matching digest in `compile-state.json["ingested"]`, and the oldest
+    of them (the health table said ok/ok/ok while 5 and 6 September sat
+    uncompiled). Quarantined and parked dailies are excluded, matching
+    `compile.changed_daily_logs`.
+  - `warn:registry-truncated:77/525` is telemetry, not a fault: compile writes
+    it on every *successful* bounded registry selection. `durum.py` now shows
+    it as `info:registry-selection:77/525` and keeps it out of the warning
+    count (`warnings: 3 (+10 info)`). The demotion is a display-layer
+    translation table (`durum.WARNING_INFO_PREFIXES`); the raw string in
+    `health.json` is untouched, so writers and `--temizle-uyarilar` are
+    unaffected. Warning ageing (e80f375) is intact.
+
 - **The memory hook injected personal notes into internal `claude -p` calls,
   and into most prompts that did not want them (Astra A3/A4).** The live
   UserPromptSubmit hook calls `retrieve.py hook` directly, but the

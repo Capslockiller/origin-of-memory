@@ -23,6 +23,23 @@ Kaynaklar: Ham-Araştırma/2026-09-05-kota-kurali-claude.md, -codex.md,
 burada yalnız hızı ölçülür. Örneklem: .state/kota-orneklem.jsonl — her okuma
 bir satır ekler; aynı pencere = aynı resets_at (değişince yeni pencere sayılır,
 eski örnekler yok sayılır).
+
+BAYAT KAYNAK (Astra A8, 2026-09-06). Yüzdeler bir SUNUCU GÖZLEMİNDEN gelir;
+gözlemin kendi yaşı vardır (OAuth önbelleğinin yazılma anı, Codex rollout
+dosyasının mtime'ı). Denetimde görülen hata: 2026-09-05 08:26'da donmuş OAuth
+önbelleği 6 Eylül boyunca aynı değerleri verdi, her okumada YENİ zaman
+damgasıyla örnekleme yazıldı, Δused = 0 çıktı ve "R 0,0 · serbest" üretildi —
+yani hiçbir şey bilinmezken "serbest" denildi. İki karşı önlem:
+
+  1. Aynı gözlem (aynı ``gozlem`` + aynı ``used`` + aynı ``resets_at``) iki kez
+     örnekleme YAZILMAZ. Seçilen çözüm bu; alternatif olan "yaz ama bayat
+     işaretle" satır biçimini büyütürdü. Eski satırlarda ``gozlem`` alanı yok;
+     ``ornek_oku`` ek alanları zaten görmezden geldiği için biçim geriye dönük
+     uyumlu kalır (yeni satırlara yalnız bir anahtar EKLENİR).
+  2. Gözlem yaşı eşiği (``BEYIN_KOTA_BAYAT_DK``, varsayılan 120 dk) aşarsa
+     bant ``bilinmiyor`` olur; ``bilinmiyor`` asla "serbest" diye okunmaz.
+     Reset'i geçmiş pencere de, TAZE bir gözlemle desteklenmiyorsa
+     ``bilinmiyor``'dur (eskiden koşulsuz "serbest" dönüyordu).
 """
 from __future__ import annotations
 
@@ -42,6 +59,11 @@ YEDEK_ESIK = 0.10            # pencerenin bu payı geçmeden yedek (used÷elapse
 # Bant eşikleri (R) — Master kararı 2026-09-05 (Set C, Ham-Araştırma/2026-09-05-kota-bant-esikleri.md).
 BANT_ESIK = (0.9, 1.3, 2.0)  # serbest ≤ e0 · dikkat ≤ e1 · karne ≤ e2 · kapalı > e2
 BANT_AD = ("serbest", "dikkat", "karne", "kapalı")
+BANT_BILINMIYOR = "bilinmiyor"  # kaynak bayat/eksik — ölçüm yok, "serbest" DEĞİL
+BAYAT_ESIK_DK = 120          # gözlem bu yaştan büyükse bant bilinmiyor
+# Yönetici sıralaması: bilinmiyor, dikkat ile karne ARASINDA durur — yani
+# kapalı/karne bir pencere varsa yönetimi o alır, yoksa bilinmiyor kazanır.
+BANT_SIRA = {"serbest": 0.0, "dikkat": 1.0, BANT_BILINMIYOR: 1.5, "karne": 2.0, "kapalı": 3.0}
 KAPALI_KALAN = 10.0          # kalan% bunun altındaysa bant kapalı, R ne olursa olsun
 HARCA_PAY = 12.0 / 168.0     # kalan süre pencerenin bu payının altında (hafta: 12 s · 5 s: 21 dk)
 HARCA_KALAN = 50.0           # ve kalan% bunun üstündeyse → HARCA (yalnız serbest/dikkat bantta)
@@ -51,21 +73,74 @@ def _simdi() -> float:
     return dt.datetime.now(dt.timezone.utc).timestamp()
 
 
+def bayat_esik_dk() -> int:
+    """Bayatlık eşiği, dakika. ``BEYIN_KOTA_BAYAT_DK`` ile geçersiz kılınır."""
+    ham = os.environ.get("BEYIN_KOTA_BAYAT_DK")
+    try:
+        deger = int(str(ham).strip())
+    except (TypeError, ValueError):
+        return BAYAT_ESIK_DK
+    return deger if deger > 0 else BAYAT_ESIK_DK
+
+
 # ---------------------------------------------------------------------------
 # Örneklem defteri
 # ---------------------------------------------------------------------------
 
-def ornek_yaz(pencereler: Iterable[dict], yol: Path = ORNEKLEM_YOLU, simdi: float | None = None) -> int:
-    """Her pencere için {ts,id,used,resets_at} satırı ekler. Hata yutulur (kota kritik değil)."""
+def _son_ornekler(ornekler: Iterable[dict]) -> dict[str, dict]:
+    """id → o id'nin en taze örneği."""
+    son: dict[str, dict] = {}
+    for o in ornekler:
+        pid = o.get("id")
+        if not isinstance(pid, str):
+            continue
+        onceki = son.get(pid)
+        if onceki is None or float(o.get("ts") or 0) >= float(onceki.get("ts") or 0):
+            son[pid] = o
+    return son
+
+
+def _ayni_gozlem(onceki: dict | None, p: dict) -> bool:
+    """Bu pencere için son satır AYNI sunucu gözlemini mi taşıyor?
+
+    Aynı ``gozlem`` (kaynak zaman damgası) + aynı ``used`` + aynı ``resets_at``
+    ise yeni satır bilgi taşımaz; yazılırsa yalnız sahte bir Δt üretir (A8).
+    """
+    if not onceki:
+        return False
+    try:
+        if int(onceki.get("resets_at") or 0) != int(p["resets_at"]):
+            return False
+        if float(onceki.get("used")) != float(p["used"]):
+            return False
+    except (TypeError, ValueError):
+        return False
+    return onceki.get("gozlem") == p.get("gozlem")
+
+
+def ornek_yaz(pencereler: Iterable[dict], yol: Path = ORNEKLEM_YOLU, simdi: float | None = None,
+              ornekler: list[dict] | None = None) -> int:
+    """Her pencere için {ts,id,used,resets_at[,gozlem]} satırı ekler.
+
+    Sunucu gözlemi değişmemişse (bkz. ``_ayni_gozlem``) satır YAZILMAZ — bayat
+    kaynak yapay bir yanma hızı üretmesin diye. Hata yutulur (kota kritik değil).
+    """
     simdi = simdi if simdi is not None else _simdi()
+    pencereler = list(pencereler)
+    if ornekler is None:
+        ornekler = ornek_oku(yol)
+    son = _son_ornekler(ornekler)
     satirlar = []
     for p in pencereler:
         if p.get("used") is None or not p.get("resets_at"):
             continue
-        satirlar.append(json.dumps(
-            {"ts": int(simdi), "id": p["id"], "used": float(p["used"]), "resets_at": int(p["resets_at"])},
-            ensure_ascii=False,
-        ))
+        if _ayni_gozlem(son.get(p["id"]), p):
+            continue
+        kayit = {"ts": int(simdi), "id": p["id"], "used": float(p["used"]),
+                 "resets_at": int(p["resets_at"])}
+        if p.get("gozlem"):
+            kayit["gozlem"] = int(p["gozlem"])
+        satirlar.append(json.dumps(kayit, ensure_ascii=False))
     if not satirlar:
         return 0
     try:
@@ -147,21 +222,48 @@ def bant(R: float | None, kalan: float, esik: tuple[float, float, float] = BANT_
     return BANT_AD[3]
 
 
+def _bilinmiyor(pid: str, used: float, kalan: float, kalan_saat: float,
+                neden: str, yas_dk: int | None) -> dict:
+    return {"id": pid, "used": used, "kalan": kalan, "kalan_saat": max(kalan_saat, 0.0),
+            "surdurulebilir": None, "yanma": None, "R": None, "tahmin": False,
+            "tukenme": None, "bant": BANT_BILINMIYOR, "harca": False,
+            "bayat": neden == "bayat", "gozlem_yas_dk": yas_dk, "not": neden}
+
+
 def degerlendir(pid: str, used: float | None, resets_at: int | None, pencere_sn: int,
                 ornekler: list[dict] | None = None, simdi: float | None = None,
-                esik: tuple[float, float, float] = BANT_ESIK) -> dict | None:
-    """Tek pencere için tam değerlendirme; veri eksikse None."""
+                esik: tuple[float, float, float] = BANT_ESIK,
+                gozlem_yas_dk: int | None = None,
+                bayat_esik: int | None = None) -> dict | None:
+    """Tek pencere için tam değerlendirme; veri eksikse None.
+
+    ``gozlem_yas_dk`` = bu yüzdenin geldiği SUNUCU gözleminin yaşı (dakika).
+    Eşiği aşarsa bant ``bilinmiyor``. Yaş bilinmiyorsa (None) ölçüm yine
+    yapılır, ama reset'i geçmiş pencere için TAZELİK KANITI sayılmaz.
+    """
     if used is None or not resets_at or not pencere_sn:
         return None
     simdi = simdi if simdi is not None else _simdi()
     ornekler = ornekler if ornekler is not None else []
+    esik_dk = bayat_esik if bayat_esik is not None else bayat_esik_dk()
     used = float(used)
     kalan = max(0.0, 100.0 - used)
     kalan_saat = (int(resets_at) - simdi) / 3600
+    bayat = gozlem_yas_dk is not None and gozlem_yas_dk > esik_dk
+    taze = gozlem_yas_dk is not None and gozlem_yas_dk <= esik_dk
+    if bayat:
+        # Değer donmuş olabilir: %36 da, %99 da aynı görünür. Ölçme, sus.
+        return _bilinmiyor(pid, used, kalan, kalan_saat, "bayat", gozlem_yas_dk)
     if kalan_saat <= 0:
+        if not taze:
+            # A8: reset geçmiş + taze gözlem YOK → eskiden koşulsuz "serbest"
+            # dönerdi; %99 dolu bir pencere bile serbest görünüyordu.
+            return _bilinmiyor(pid, used, kalan, kalan_saat, "reset geçti, gözlem doğrulanmadı",
+                               gozlem_yas_dk)
         return {"id": pid, "used": used, "kalan": kalan, "kalan_saat": 0.0, "surdurulebilir": None,
                 "yanma": None, "R": None, "tahmin": False, "tukenme": None,
-                "bant": BANT_AD[0], "harca": False, "not": "reset geçti"}
+                "bant": BANT_AD[0], "harca": False, "bayat": False,
+                "gozlem_yas_dk": gozlem_yas_dk, "not": "reset geçti"}
     surdurulebilir = kalan / kalan_saat
     ufuk = max(UFUK_PAY * pencere_sn / 3600, 0.25)
     yanma = yanma_hizi(pid, used, int(resets_at), ornekler, simdi, ufuk_saat=ufuk,
@@ -190,16 +292,22 @@ def degerlendir(pid: str, used: float | None, resets_at: int | None, pencere_sn:
         "id": pid, "used": used, "kalan": kalan, "kalan_saat": kalan_saat,
         "surdurulebilir": surdurulebilir, "yanma": yanma, "R": R, "tahmin": tahmin,
         "tukenme": tukenme, "bant": b, "harca": harca,
+        "bayat": False, "gozlem_yas_dk": gozlem_yas_dk,
     }
 
 
 def yonetici(degerler: Iterable[dict | None]) -> dict | None:
-    """Yönetici bant: en yüksek R'li pencere (kapalı olan her zaman kazanır)."""
+    """Yönetici bant: en yüksek R'li pencere (kapalı olan her zaman kazanır).
+
+    ``bilinmiyor`` dikkat ile karne arasında sıralanır: başka bir pencere
+    kapalı/karne ise yönetimi o alır; değilse bilinmiyor yönetir ve satır
+    "serbest" demez (A8).
+    """
     adaylar = [d for d in degerler if d]
     if not adaylar:
         return None
-    sira = {ad: i for i, ad in enumerate(BANT_AD)}
-    return max(adaylar, key=lambda d: (sira[d["bant"]], d["R"] if d["R"] is not None else -1.0))
+    return max(adaylar, key=lambda d: (BANT_SIRA.get(d["bant"], 0.0),
+                                       d["R"] if d["R"] is not None else -1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +329,20 @@ def _saat_metni(epoch: float | None) -> str:
     return yerel.strftime("%d.%m %H:%M")
 
 
+def _bayat_metni(d: dict) -> str:
+    yas = d.get("gozlem_yas_dk")
+    return f"? bayat {yas}dk" if isinstance(yas, int) else "? bilinmiyor"
+
+
 def kisa_metin(d: dict | None) -> str:
-    """Satır içi ek: ` [R 1,3 karne · biter 03:40]` gibi; tahminse `~`."""
+    """Satır içi ek: ` [R 1,3 karne · biter 03:40]` gibi; tahminse `~`.
+
+    Bant bilinmiyorsa ölçü basılmaz, yerine ` [? bayat 2050dk]` çıkar.
+    """
     if not d:
         return ""
+    if d.get("bant") == BANT_BILINMIYOR:
+        return " [" + _bayat_metni(d) + "]"
     parcalar = []
     if d["R"] is not None:
         parcalar.append(("R~" if d["tahmin"] else "R ") + _sayi(d["R"]))
@@ -239,6 +357,11 @@ def kisa_metin(d: dict | None) -> str:
 def detay_metni(d: dict | None, ad: str) -> str:
     if not d:
         return f"  {ad}: veri yok"
+    if d.get("bant") == BANT_BILINMIYOR:
+        return (
+            f"  {ad}: kullanım %{_sayi(d['used'], 0)} · bant {BANT_BILINMIYOR}"
+            f" ({d.get('not') or 'kaynak doğrulanmadı'}) · ölçüm yapılmadı"
+        )
     return (
         f"  {ad}: kalan %{_sayi(d['kalan'], 0)} / {_sayi(d['kalan_saat'])} saat → "
         f"sürdürülebilir %{_sayi(d['surdurulebilir'], 2)}/s · yanma "

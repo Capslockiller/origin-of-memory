@@ -22,11 +22,23 @@ from beyin_ortak import CALLS_LEDGER_NAME
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 STATE_DIR = SCRIPT_DIR / ".state"
+VAULT_ROOT = SCRIPT_DIR.parent.parent
 SCHEMA_VERSION = 1
 COMPONENTS = ("flush", "compile", "ingest")
 CALLS_WINDOW_DAYS = 7
 WARNING_STALE_SECONDS = 24 * 60 * 60
 HEALTH_NAME = "health.json"
+
+# Uyarı → bilgi çeviri tablosu (Astra A14, 2026-09-06).
+# ``warn:registry-truncated:77/525`` compile.py'de BAŞARILI her sınırlı seçimde
+# yazılır: 525 satırlık kayıt defterinden 77'si seçildiyse mekanizma çalışmıştır,
+# arıza yoktur. Bu bir telemetri kalemidir, uyarı değil. health.json'a
+# DOKUNULMAZ (ham dize orada aynen durur, uyumluluk için); yalnız burada,
+# gösterim katmanında çevrilir ve uyarı sayımının dışında tutulur.
+# Anahtar = ham önek, değer = gösterilecek önek.
+WARNING_INFO_PREFIXES = {
+    "warn:registry-truncated:": "info:registry-selection:",
+}
 
 
 def _read_object(path: Path) -> dict[str, Any]:
@@ -74,6 +86,14 @@ def _warning_entry_ts(entry: Any) -> float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _demote(message: str) -> tuple[str, bool]:
+    """``(gösterilecek mesaj, bilgi mi)`` — bkz. ``WARNING_INFO_PREFIXES``."""
+    for raw_prefix, info_prefix in WARNING_INFO_PREFIXES.items():
+        if message.startswith(raw_prefix):
+            return info_prefix + message[len(raw_prefix):], True
+    return message, False
+
+
 def _resolve_warning_ts(entry: Any, top_ts: float | None) -> float | None:
     own = _warning_entry_ts(entry)
     return own if own is not None else top_ts
@@ -102,15 +122,24 @@ def summarize_warnings(
             max(0, int(round(now_ts - effective_ts))) if effective_ts is not None else None
         )
         eski = age_seconds is not None and age_seconds > WARNING_STALE_SECONDS
+        raw = _warning_message(entry)
+        message, info = _demote(raw)
         result.append(
             {
-                "message": _warning_message(entry),
+                "message": message,
+                "raw": raw,
+                "info": info,
                 "ts": int(effective_ts) if effective_ts is not None else None,
                 "age_seconds": age_seconds,
                 "eski": eski,
             }
         )
     return result
+
+
+def _warning_count(warnings: Sequence[dict[str, Any]]) -> int:
+    """Hattı yeşilden çıkaran kalem sayısı — bilgi kalemleri sayılmaz."""
+    return sum(1 for entry in warnings if not entry.get("info"))
 
 
 def temizle_uyarilar(
@@ -286,10 +315,57 @@ def summarize_calls(
     }
 
 
+def bekleyen_kaynak(
+    vault_root: Path, compile_state: dict[str, Any]
+) -> dict[str, Any]:
+    """Derlenmeyi bekleyen günlükler (Astra A14).
+
+    ``compile.changed_daily_logs`` ile aynı ölçüt — ``daily/*.md`` içeriğinin
+    sha256'sı ``compile-state.json["ingested"]`` içindeki değerle eşleşmiyorsa
+    dosya beklemededir — ama burası salt okunur bir rapor yüzeyi: karantina ve
+    park edilmiş kalemler bekleyenden düşülür, hiçbir yol ihlali istisna
+    fırlatmaz (okunamayan dosya sessizce atlanır). ``compile`` içe aktarılmaz;
+    o modül model çalıştırıcılarını da yükler, durum raporu bunu kaldırmaz.
+    """
+    daily_dir = Path(vault_root) / "daily"
+    ingested = compile_state.get("ingested")
+    ingested = ingested if isinstance(ingested, dict) else {}
+    quarantined = compile_state.get("quarantined")
+    quarantined = quarantined if isinstance(quarantined, dict) else {}
+    parked = compile_state.get("parked")
+    parked = parked if isinstance(parked, dict) else {}
+
+    pending: list[str] = []
+    try:
+        candidates = sorted(daily_dir.glob("*.md"))
+    except OSError:
+        candidates = []
+    for path in candidates:
+        try:
+            digest = beyin_ortak._sha256(path)
+        except OSError:
+            continue
+        if ingested.get(path.name) == digest or digest in quarantined:
+            continue
+        park = parked.get(path.name)
+        if isinstance(park, dict) and park.get("digest") == digest:
+            continue
+        pending.append(path.name)
+    return {
+        "count": len(pending),
+        "oldest": pending[0] if pending else None,
+        "files": pending,
+    }
+
+
 def build_summary(
-    state_dir: Path, now: dt.datetime | None = None
+    state_dir: Path, now: dt.datetime | None = None, vault_root: Path | None = None
 ) -> dict[str, Any]:
     moment = (now or dt.datetime.now()).astimezone()
+    # ``.state`` scripts/ altında, scripts/ de <vault>/.claude altındadır;
+    # --state-dir ile taşındığında kök de onunla birlikte taşınsın.
+    if vault_root is None:
+        vault_root = Path(state_dir).resolve().parent.parent.parent
     health = _read_object(state_dir / "health.json")
     ingest_health = _read_object(state_dir / "ingest-health.json")
     compile_state = _read_object(state_dir / "compile-state.json")
@@ -336,10 +412,14 @@ def build_summary(
             "quarantine_count": quarantine_count,
         },
     ]
+    warnings = summarize_warnings(health, now=moment)
     return {
         "schema_version": SCHEMA_VERSION,
         "rows": rows,
-        "warnings": summarize_warnings(health, now=moment),
+        "warnings": warnings,
+        "warning_count": _warning_count(warnings),
+        "info_count": len(warnings) - _warning_count(warnings),
+        "bekleyen": bekleyen_kaynak(vault_root, compile_state),
         "calls": summarize_calls(state_dir, now=moment),
     }
 
@@ -431,7 +511,12 @@ def _print_warnings(warnings: Sequence[dict[str, Any]]) -> None:
     if not warnings:
         print("warnings: none recorded")
         return
-    print(f"warnings: {len(warnings)}")
+    real = _warning_count(warnings)
+    info = len(warnings) - real
+    headline = f"warnings: {real}"
+    if info:
+        headline += f" (+{info} info)"
+    print(headline)
     print()
     _print_grid(
         ("warning", "age", "eski"),
@@ -444,6 +529,21 @@ def _print_warnings(warnings: Sequence[dict[str, Any]]) -> None:
             for entry in warnings
         ],
     )
+
+
+def _print_pending(pending: dict[str, Any]) -> None:
+    # Gövde bilerek ASCII: bu tablo bir rapor yüzeyi ve main() her istisnayı
+    # yutuyor, yani cp437 gibi dar bir konsolda tek bir "ü" raporun geri
+    # kalanını sessizce kesebilirdi.
+    print()
+    count = pending.get("count", 0)
+    if not count:
+        print("bekleyen kaynak: none pending")
+        return
+    oldest = str(pending.get("oldest") or "?")
+    if oldest.endswith(".md"):
+        oldest = oldest[: -len(".md")]
+    print(f"bekleyen kaynak: {count} daily uncompiled (oldest {oldest})")
 
 
 def _print_table(summary: dict[str, Any]) -> None:
@@ -460,6 +560,7 @@ def _print_table(summary: dict[str, Any]) -> None:
             for row in summary["rows"]
         ],
     )
+    _print_pending(summary.get("bekleyen", {}))
     _print_warnings(summary.get("warnings", []))
     _print_calls(summary["calls"])
 
@@ -468,6 +569,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--state-dir", type=Path, default=STATE_DIR)
+    parser.add_argument(
+        "--vault-root",
+        type=Path,
+        default=None,
+        help="günlük dizininin kökü (varsayılan: --state-dir'den türetilir)",
+    )
     parser.add_argument(
         "--temizle-uyarilar",
         action="store_true",
@@ -491,7 +598,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print("temizlenecek eski uyarı yok.")
             return 0
-        summary = build_summary(args.state_dir)
+        summary = build_summary(args.state_dir, vault_root=args.vault_root)
         if args.json:
             print(json.dumps(summary, ensure_ascii=False, indent=2))
         else:

@@ -243,5 +243,190 @@ class TemizleUyarilarTests(unittest.TestCase):
         self.assertIn("temizlendi", printed)
 
 
+class RegistrySelectionDemotionTests(unittest.TestCase):
+    """``warn:registry-truncated`` telemetridir, arıza değil (Astra A14).
+
+    compile.py bu satırı BAŞARILI her sınırlı kayıt-defteri seçiminde yazar;
+    uyarı sayılınca sağlık hattı hiç yeşile dönmüyordu.
+    """
+
+    def setUp(self) -> None:
+        self.now = dt.datetime(2026, 9, 6, 12, 0).astimezone()
+
+    def test_the_raw_string_is_shown_as_info(self) -> None:
+        health = {
+            "ts": int((self.now - dt.timedelta(hours=1)).timestamp()),
+            "warnings": ["warn:registry-truncated:77/525"],
+        }
+
+        warnings = durum.summarize_warnings(health, now=self.now)
+
+        self.assertEqual(warnings[0]["message"], "info:registry-selection:77/525")
+        self.assertEqual(warnings[0]["raw"], "warn:registry-truncated:77/525")
+        self.assertIs(warnings[0]["info"], True)
+
+    def test_info_entries_do_not_count_as_warnings(self) -> None:
+        health = {
+            "ts": int((self.now - dt.timedelta(hours=1)).timestamp()),
+            "warnings": [
+                "warn:registry-truncated:77/525",
+                "fail:rootmap-regen-failed",
+            ],
+        }
+
+        warnings = durum.summarize_warnings(health, now=self.now)
+
+        self.assertEqual(durum._warning_count(warnings), 1)
+
+    def test_a_real_warning_is_untouched(self) -> None:
+        health = {
+            "ts": int((self.now - dt.timedelta(hours=1)).timestamp()),
+            "warnings": ["warn:timeout-invalid"],
+        }
+
+        warnings = durum.summarize_warnings(health, now=self.now)
+
+        self.assertEqual(warnings[0]["message"], "warn:timeout-invalid")
+        self.assertIs(warnings[0]["info"], False)
+
+    def test_the_headline_separates_warnings_from_info(self) -> None:
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / ".state"
+            state.mkdir()
+            (state / "health.json").write_text(
+                json.dumps(
+                    {
+                        "ts": int((self.now - dt.timedelta(hours=1)).timestamp()),
+                        "warnings": [
+                            "warn:registry-truncated:77/525",
+                            "fail:rootmap-regen-failed",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            summary = durum.build_summary(state, now=self.now)
+            self.assertEqual(summary["warning_count"], 1)
+            self.assertEqual(summary["info_count"], 1)
+
+            with mock.patch("builtins.print") as printer:
+                durum._print_table(summary)
+
+        printed = "\n".join(
+            str(call.args[0]) for call in printer.call_args_list if call.args
+        )
+        self.assertIn("warnings: 1 (+1 info)", printed)
+        self.assertIn("info:registry-selection:77/525", printed)
+
+
+class BekleyenKaynakTests(unittest.TestCase):
+    """Derlenmeyi bekleyen günlükler sağlık tablosunda görünür (Astra A14).
+
+    Denetimde tablo ok/ok/ok gösterirken 5 ve 6 Eylül günlükleri derlenmemiş
+    bekliyordu; hiçbir satır bunu söylemiyordu.
+    """
+
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.vault = Path(self._temporary.name) / "vault"
+        self.state = self.vault / ".claude" / "scripts" / ".state"
+        self.state.mkdir(parents=True)
+        self.daily = self.vault / "daily"
+        self.daily.mkdir()
+        self.now = dt.datetime(2026, 9, 6, 12, 0).astimezone()
+
+    def _daily(self, name: str, body: str) -> str:
+        import hashlib
+
+        path = self.daily / name
+        path.write_text(body, encoding="utf-8")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _compile_state(self, ingested: dict, **extra) -> None:
+        (self.state / "compile-state.json").write_text(
+            json.dumps({"ingested": ingested, "last_status": "ok", **extra}),
+            encoding="utf-8",
+        )
+
+    def test_two_uningested_dailies_are_pending(self) -> None:
+        done = self._daily("2026-09-04.md", "derlendi\n")
+        self._daily("2026-09-05.md", "beklemede\n")
+        self._daily("2026-09-06.md", "beklemede\n")
+        self._compile_state({"2026-09-04.md": done})
+
+        pending = durum.bekleyen_kaynak(self.vault, {"ingested": {"2026-09-04.md": done}})
+
+        self.assertEqual(pending["count"], 2)
+        self.assertEqual(pending["oldest"], "2026-09-05.md")
+        self.assertEqual(pending["files"], ["2026-09-05.md", "2026-09-06.md"])
+
+    def test_an_edited_daily_becomes_pending_again(self) -> None:
+        digest = self._daily("2026-09-04.md", "ilk hâli\n")
+        (self.daily / "2026-09-04.md").write_text("düzenlendi\n", encoding="utf-8")
+
+        pending = durum.bekleyen_kaynak(self.vault, {"ingested": {"2026-09-04.md": digest}})
+
+        self.assertEqual(pending["count"], 1)
+
+    def test_quarantined_and_parked_dailies_are_not_pending(self) -> None:
+        karantina = self._daily("2026-09-05.md", "karantina\n")
+        park = self._daily("2026-09-06.md", "park\n")
+
+        pending = durum.bekleyen_kaynak(
+            self.vault,
+            {
+                "ingested": {},
+                "quarantined": {karantina: {"reason": "schema"}},
+                "parked": {"2026-09-06.md": {"digest": park, "attempts": 3}},
+            },
+        )
+
+        self.assertEqual(pending["count"], 0)
+        self.assertIsNone(pending["oldest"])
+
+    def test_a_missing_daily_directory_is_not_an_error(self) -> None:
+        pending = durum.bekleyen_kaynak(Path(self._temporary.name) / "yok", {})
+
+        self.assertEqual(pending, {"count": 0, "oldest": None, "files": []})
+
+    def test_the_table_prints_the_pending_line(self) -> None:
+        from unittest import mock
+
+        done = self._daily("2026-09-04.md", "derlendi\n")
+        self._daily("2026-09-05.md", "beklemede\n")
+        self._daily("2026-09-06.md", "beklemede\n")
+        self._compile_state({"2026-09-04.md": done})
+
+        summary = durum.build_summary(self.state, now=self.now)
+        self.assertEqual(summary["bekleyen"]["count"], 2)
+
+        with mock.patch("builtins.print") as printer:
+            durum._print_table(summary)
+        printed = "\n".join(
+            str(call.args[0]) for call in printer.call_args_list if call.args
+        )
+
+        # Kök --state-dir'den türetilir: <vault>/.claude/scripts/.state → <vault>
+        self.assertIn("bekleyen kaynak: 2 daily uncompiled (oldest 2026-09-05)", printed)
+
+    def test_nothing_pending_says_so(self) -> None:
+        from unittest import mock
+
+        done = self._daily("2026-09-04.md", "derlendi\n")
+        self._compile_state({"2026-09-04.md": done})
+
+        summary = durum.build_summary(self.state, now=self.now)
+
+        with mock.patch("builtins.print") as printer:
+            durum._print_table(summary)
+        printed = "\n".join(
+            str(call.args[0]) for call in printer.call_args_list if call.args
+        )
+        self.assertIn("bekleyen kaynak: none pending", printed)
+
+
 if __name__ == "__main__":
     unittest.main()

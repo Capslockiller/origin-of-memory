@@ -30,6 +30,12 @@ Kaynaklar (Ham-Araştırma/2026-08-29-kota-okuma.md):
 Zincir: statüsline önbelleği → oauth ucu → yerel harcama dökümü.
 ToS-riskli yollar (ChatGPT token'ını belgesiz uca göndermek) bilinçli DIŞARIDA.
 
+BAYAT KAYNAK (Astra A8, 2026-09-06): her pencere, yüzdenin geldiği gözlemin
+zaman damgasını (`gozlem`) da taşır — OAuth önbelleğinin yazılma anı, Codex
+rollout dosyasının mtime'ı. Gözlem `BEYIN_KOTA_BAYAT_DK` dakikadan (varsayılan
+120) eskiyse o pencerenin bantı `bilinmiyor` olur ve satırda `[? bayat 2050dk]`
+görünür; `bilinmiyor` asla "serbest" diye okunmaz. Ayrıntı: kota_hiz docstring'i.
+
 Kullanım:  python kota.py            # tek satır (SessionStart enjeksiyonu için)
            python kota.py --detay    # çok satırlı döküm
            python kota.py --json     # makine okur
@@ -85,10 +91,13 @@ def codex_resmi() -> dict | None:
         except OSError:
             continue
         if son:
+            mtime = dosya.stat().st_mtime
             son["_kaynak"] = dosya.name
-            son["_dosya_zamani"] = dt.datetime.fromtimestamp(
-                dosya.stat().st_mtime
-            ).isoformat(timespec="minutes")
+            son["_dosya_zamani"] = dt.datetime.fromtimestamp(mtime).isoformat(
+                timespec="minutes"
+            )
+            # Gözlem anı = rollout dosyasının mtime'ı; bayatlık ölçüsü buradan.
+            son["_gozlem"] = int(mtime)
             return son
     return None
 
@@ -169,6 +178,7 @@ def claude_resmi() -> dict | None:
     if isinstance(rl, dict):
         rl = dict(rl)
         rl["_yas_dk"] = int(yas.total_seconds() // 60)
+        rl["_gozlem"] = int(dt.datetime.fromisoformat(yazilma).timestamp())
         rl["_kaynak"] = "statusline"
         return rl
     return None
@@ -307,6 +317,8 @@ def _claude_oauth_ic() -> dict | None:
         sozluk = dict(sozluk)
         sozluk["_kaynak"] = "oauth"
         sozluk["_yas_dk"] = int(yas_sn // 60)
+        # Gözlem anı = önbelleğin yazıldığı an (sunucu yanıtının alındığı an).
+        sozluk["_gozlem"] = int(simdi.timestamp() - yas_sn)
         if abone:
             sozluk["_subscriptionType"] = abone
         if oran_katmani:
@@ -402,40 +414,67 @@ def _tempo_metni(tempo: float | None) -> str:
     return f" ({isaret}{tempo:.1f}×)".replace(".", ",")
 
 
-def pencereler(codex: dict | None, resmi: dict | None) -> list[dict]:
-    """Hız katmanının okuduğu ortak pencere listesi: id · used · resets_at · pencere_sn."""
+def _yas_dk(gozlem: int | None, simdi: float | None = None) -> int | None:
+    """Gözlem anının dakika cinsinden yaşı; gözlem yoksa None (= yaş bilinmiyor)."""
+    if not gozlem:
+        return None
+    simdi = simdi if simdi is not None else dt.datetime.now(dt.timezone.utc).timestamp()
+    return max(0, int((simdi - int(gozlem)) // 60))
+
+
+def pencereler(codex: dict | None, resmi: dict | None, simdi: float | None = None) -> list[dict]:
+    """Hız katmanının okuduğu ortak pencere listesi.
+
+    Alanlar: id · used · resets_at · pencere_sn · gozlem (kaynak zaman damgası,
+    epoch) · gozlem_yas_dk. Gözlem A8'in düzeltmesi: yüzdenin kendisi değil,
+    yüzdenin NE ZAMAN gözlendiği bantı belirler.
+    """
     liste = []
     if codex:
+        codex_gozlem = codex.get("_gozlem")
         for pid, blok, vars_dk in (("codex-5s", codex.get("primary"), 300),
                                    ("codex-hafta", codex.get("secondary"), 10080)):
             blok = blok or {}
             liste.append({"id": pid, "used": blok.get("used_percent"), "resets_at": blok.get("resets_at"),
-                          "pencere_sn": int(blok.get("window_minutes") or vars_dk) * 60})
+                          "pencere_sn": int(blok.get("window_minutes") or vars_dk) * 60,
+                          "gozlem": codex_gozlem,
+                          "gozlem_yas_dk": _yas_dk(codex_gozlem, simdi)})
     if resmi:
+        gozlem = resmi.get("_gozlem")
+        yas = _yas_dk(gozlem, simdi)
+        if yas is None and isinstance(resmi.get("_yas_dk"), int):
+            yas = resmi["_yas_dk"]
         bes = resmi.get("five_hour") or {}
         hafta = resmi.get("seven_day") or {}
         liste.append({"id": "claude-5s", "used": bes.get("used_percentage"),
-                      "resets_at": bes.get("resets_at"), "pencere_sn": SAAT_5})
+                      "resets_at": bes.get("resets_at"), "pencere_sn": SAAT_5,
+                      "gozlem": gozlem, "gozlem_yas_dk": yas})
         liste.append({"id": "claude-hafta", "used": hafta.get("used_percentage"),
-                      "resets_at": hafta.get("resets_at"), "pencere_sn": GUN_7})
+                      "resets_at": hafta.get("resets_at"), "pencere_sn": GUN_7,
+                      "gozlem": gozlem, "gozlem_yas_dk": yas})
         for k in resmi.get("_kapsamli") or []:
             liste.append({"id": "claude-" + str(k.get("ad") or "?").lower(),
                           "used": k.get("used_percentage"), "resets_at": k.get("resets_at"),
-                          "pencere_sn": GUN_7})
+                          "pencere_sn": GUN_7, "gozlem": gozlem, "gozlem_yas_dk": yas})
     return liste
 
 
 def hizlar(codex: dict | None, resmi: dict | None, kaydet: bool = True) -> dict[str, dict]:
-    """Her pencere için kota_hiz.degerlendir; kaydet=True ise örneklem defterine yazar."""
+    """Her pencere için kota_hiz.degerlendir; kaydet=True ise örneklem defterine yazar.
+
+    Örneklem defterine yalnız DEĞİŞMİŞ gözlemler yazılır (kota_hiz.ornek_yaz);
+    aynı defter hem ölçüm hem yazım için tek kez okunur.
+    """
     liste = pencereler(codex, resmi)
     ornekler = kota_hiz.ornek_oku()
     sonuc = {}
     for p in liste:
-        d = kota_hiz.degerlendir(p["id"], p["used"], p["resets_at"], p["pencere_sn"], ornekler)
+        d = kota_hiz.degerlendir(p["id"], p["used"], p["resets_at"], p["pencere_sn"], ornekler,
+                                 gozlem_yas_dk=p.get("gozlem_yas_dk"))
         if d:
             sonuc[p["id"]] = d
     if kaydet:
-        kota_hiz.ornek_yaz(liste)
+        kota_hiz.ornek_yaz(liste, ornekler=ornekler)
     return sonuc
 
 
@@ -493,7 +532,12 @@ def tek_satir(codex: dict | None, claude: dict, resmi: dict | None = None,
         )
     yon = kota_hiz.yonetici(hiz.values())
     if yon:
-        parcalar.append("bant: {} ({})".format(yon["bant"], yon["id"]))
+        if yon["bant"] == kota_hiz.BANT_BILINMIYOR:
+            # A8: bilinmiyor "serbest" diye okunamaz; nedeni de satırda durur.
+            neden = "bayat" if yon.get("bayat") else (yon.get("not") or "doğrulanmadı")
+            parcalar.append("bant: {} ({} {})".format(yon["bant"], yon["id"], neden))
+        else:
+            parcalar.append("bant: {} ({})".format(yon["bant"], yon["id"]))
     return "[kota] " + " | ".join(parcalar)
 
 
