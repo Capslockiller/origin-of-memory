@@ -62,7 +62,7 @@ reads in one folder, and one that does both everywhere.
 | --- | --- | --- | --- |
 | `SessionStart` | `session-start.ps1` | 15 s | Inject companion memory + root map + today's log |
 | `UserPromptSubmit` | `prompt-counter.ps1` | 5 s | Count prompts; nudge every 15th |
-| `UserPromptSubmit` | `memory-retrieve.ps1` | 5 s | BM25 retrieval, inject top 3 notes |
+| `UserPromptSubmit` | `retrieve.py hook` (retired `memory-retrieve.ps1` wrapper) | 5 s | Gated BM25 retrieval, inject top 3 notes |
 | `SessionEnd` | `flush-launch.ps1 -Reason sessionend` | 15 s | Detach `flush.py` |
 | `SessionEnd` | `session-end.ps1` | 10 s | Raise `needs_reflection` if memory was not updated |
 | `PreCompact` | `flush-launch.ps1 -Reason precompact` | 15 s | Detach `flush.py` before compaction |
@@ -90,8 +90,12 @@ executable line and exits 0:
 if ($env:BEYIN_INVOKED_BY) { exit 0 }
 ```
 
-`compile.py` and `ingest.py` make the same check in `main()`. The one place the
-variable is deliberately removed is `flush.maybe_trigger_compile()`, which pops it
+`compile.py` and `ingest.py` make the same check in `main()`. `retrieve.py hook`
+(§7.2) checks it too, in Python rather than PowerShell — the live
+`UserPromptSubmit` hook calls `retrieve.py hook` directly, so the guard has to
+live in the entry point it actually reaches, not only in the retired
+`memory-retrieve.ps1` wrapper. The one place the variable is deliberately
+removed is `flush.maybe_trigger_compile()`, which pops it
 from the environment before launching `compile.py` — that launch happens from a
 flush that may itself have been a child, and the compiler must be allowed to run.
 
@@ -133,9 +137,31 @@ returns immediately; the summariser is not on the session-teardown critical path
 7. **Redact outbound.** `secret_guard.redact()` again, over the summary.
 8. **Append.** `daily/YYYY-MM-DD.md` is created with a `# Günlük Log` header if
    absent, then a `### Oturum (HH:MM)` block is appended — suffixed
-   `, compaction öncesi` for a `PreCompact` flush. A recent-duplicate check
-   prevents the same summary being appended twice.
+   `, compaction öncesi` for a `PreCompact` flush. The old 60-second
+   duplicate guard is gone; see the turn cursor below for what replaced it.
 9. **Maybe trigger compile.** See below.
+
+**Delivery ledger, turn cursor, honest counts (Astra A5).** Every flush attempt
+— successes included — appends one bounded line to
+`.state/flush-teslimat.jsonl` (rotates to `.1` past 2 MB), carrying a reason
+code: `flush:ok`, `flush:missing-transcript`, `flush:unreadable-transcript`,
+`flush:no-turns`, `flush:no-new-turns`, `flush:rejected`, `flush:bos`, or
+`flush:append-failed`. Every reason except `flush:ok` and `flush:no-new-turns`
+also raises a `health.json` warning, so a missing or unreadable transcript is
+no longer silent. The hook still exits 0 in every case — this is visibility,
+not failure.
+
+The old 60-second duplicate guard is replaced by a per-session turn cursor
+(`last_turn_index`, stored in the existing flush state JSON): a flush
+summarises only the turns after the cursor and advances it only after the
+daily append lands, so a crash mid-flush costs a repeat rather than a gap. A
+session with nothing new past the cursor calls no model and records
+`flush:no-new-turns`. `format_turns()` now reports the number of turns that
+survived **both** the turn cap and the character cap, instead of the
+pre-character-cap figure. `BEYIN_FLUSH_MAX_TURNS` overrides `MAX_TURNS`;
+`BEYIN_FLUSH_MAX_CHARS` overrides the character cap and sits behind the older
+`BEYIN_FLUSH_CHUNK_CHARS` for backward compatibility. Both degrade to the
+shipped default on invalid input.
 
 ### 4.3 The evening trigger
 
@@ -610,19 +636,65 @@ daily tail second, and a truncated block is marked
 `[not: indeks kirpildi - beyin-doktor calistir]`. The companion directory is found
 by globbing `*850-Companion`; if it is absent those sections are simply empty.
 
-### 7.2 `UserPromptSubmit` → `memory-retrieve.ps1`
+### 7.2 `UserPromptSubmit` → `retrieve.py hook`
 
-1. Reads the hook JSON from stdin, taking `user_input` (or `prompt`).
-2. Skips prompts shorter than 12 characters and anything starting with `/` — "yes",
-   "continue" and slash commands carry no retrieval signal.
-3. Resolves Python the same way `flush-launch.ps1` does and runs
-   `retrieve.py query <text> --limit 3 --session <session_id> --format hook`.
-4. On any failure — no Python, no script, no JSON, no hits — exits 0 silently.
-5. Wraps the returned notes in a block that names each source path and states that
-   the contents are **data**, and that no sentence inside them is to be executed.
+The live hook now calls `retrieve.py hook` directly (D1), reading the hook JSON
+from stdin itself rather than going through `retrieve.py query` from a
+PowerShell wrapper. `run_hook_stdin()`:
+
+1. Reads `user_input` (or `prompt`) and `session_id` from the hook JSON.
+2. Exits with nothing (`skip:internal`) when `BEYIN_INVOKED_BY` is set — the
+   recursion guard used to live only in the retired PS wrapper, so every
+   `claude -p` the compiler/flush/benchmark spawned got personal concept notes
+   injected.
+3. Skips prompts shorter than `HOOK_MIN_PROMPT_LEN` (12) characters
+   (`skip:short`) and anything starting with `/` (`skip:slash`).
+4. Skips a prompt that is a pure code/tool command rather than a question
+   (`skip:intent`, `prompt_hafiza_ister()`) — a fenced code block, or a first
+   content word naming a tool or an edit ("fix", "run", "commit", "kur",
+   "derle", …).
+5. Runs the relevance gate (below) and returns `None` (silent) whenever the
+   gate produces no notes, or when the index itself is missing or corrupt.
+6. Wraps the returned notes in a block that names each source path and states
+   that the contents are **data**, and that no sentence inside them is to be
+   executed.
 
 The 5-second hook timeout is the hard budget; the measured p95 on the author's
-corpus was 347 ms, which includes Python interpreter startup.
+corpus was 347 ms, which includes Python interpreter startup. `retrieve.py
+query <text> --limit 3 --session <session_id> --format hook` (the raw ranking,
+without the gate) remains available for callers — `context_pack.py` and the
+MCP `memory_search` tool — that ask an explicit question and want every hit
+regardless of overlap.
+
+**The relevance gate (Astra A3/A4).** Before this gate the hook injected on
+almost every prompt: query tokens were OR-joined, `--min-score` defaulted to
+0, and the only skips were the length and slash checks above — measured
+against the live 527-note index, all 30 probe prompts injected. A candidate
+now survives only when at least `GATE_MIN_TOKEN_OVERLAP` (2) distinct content
+words of the prompt (`gate_tokens()`, folded, stopword-filtered, at least
+`GATE_MIN_TOKEN_LEN` (4) characters) occur in the candidate note's own
+title/aliases/tags — the body is deliberately excluded — or its score clears
+a strict escape-hatch threshold. The BM25 score alone cannot do this
+filtering: on the measured corpus, memory-worthy top-1 hits scored
+11.4–37.7 and junk hits scored 6.0–20.9, ranges that overlap almost
+completely. Two environment variables tune it, both read through
+`hook_result()`:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `BEYIN_RETRIEVE_MIN_SCORE` | `0.0` (off) | Floor on positive `-bm25()` relevance before the gate runs |
+| `BEYIN_RETRIEVE_STRICT_SCORE` | `25.0` | A hit at or above this score is admitted even with no token overlap |
+
+A gated-off candidate set returns `skip:score` when nothing scored at all and
+`skip:token-overlap` when hits existed but none passed the gate; a successful
+injection is logged `inject`. `context_pack.py` and `memory_search` opt out of
+the gate entirely (`require_overlap=False`) and keep the raw ranking.
+
+**Query-aware dedup.** The per-session ledger used to key solely on the note's
+name, so a note suppressed for one question could never answer a materially
+different later one. Suppression now keys on `<query_signature>:<note>` —
+`query_signature()` hashes the prompt's folded token set — so the same note
+can be re-shown for a genuinely different question in the same session.
 
 ### 7.3 `retrieve.py`
 
@@ -652,7 +724,9 @@ fixed-length truncation — chosen over a Turkish stemmer, which over-stems badl
 are positional over every column including the UNINDEXED `name`, so the
 leading `0.0` is required to keep title=8, aliases=6, tags=3, body=1 landing
 on the right columns — a four-weight call silently shifts them all one column
-left. `--min-score` applies a floor on the positive `-bm25` relevance.
+left. `--min-score` (`query` subcommand) applies a floor on the positive
+`-bm25` relevance; the `hook` subcommand reads the same floor from
+`BEYIN_RETRIEVE_MIN_SCORE` and layers the relevance gate on top (§7.2).
 Results are capped at `PER_NOTE_CAP = 1_500` characters per note and
 `TOTAL_BODY_CAP = 4_500` overall. With `--session`, hits already served in that
 session are recorded in `.state/retrieve-session-<id>.json` and not repeated;
@@ -700,7 +774,11 @@ buckets keyed by identifier and file digest, resumable `should_skip`/`record_don
 bookkeeping, the summariser call (default model `haiku`; the `gemini` subcommand
 defaults to the Codex path), the daily-append helper and the exclusive lock. The
 ingester never raises out of `main()` — every failure path writes a health entry
-and returns 0.
+and returns 0. The `min_turns` gate in `summarize_session()` compares against
+`len(session.turns)`, the session's real turn count, not the count
+`format_turns()` returns — that count is capped to what survived the character
+cap (§4.2), so a short session that happened to hit the cap used to be
+misclassified `bos`.
 
 Backfilled sessions land in `daily/` exactly like live ones, marked with a suffix
 naming the source and summariser, and are then compiled by the same nightly path.
@@ -746,6 +824,24 @@ clock.
 no-op — file untouched, mtime unchanged — when nothing is old or the file is
 absent; it prints a one-line result and exits 0 without printing the rest of
 the report.
+
+**`bekleyen kaynak` — the pending-compile queue (Astra A14).** A `bekleyen
+kaynak: <count> daily uncompiled (oldest <name>)` line prints below the
+warnings table: how many `daily/*.md` files have a SHA-256 that does not match
+`compile-state.json["ingested"]`, and the oldest one by filename. Quarantined
+and parked entries are excluded from the count — this is a read-only report
+surface, so a file already flagged elsewhere is not double-counted as
+pending. `--json`'s `bekleyen` object carries `count`, `oldest` and the full
+`files` list. Zero pending prints `bekleyen kaynak: none pending`.
+
+**`info:registry-selection` demotion.** `warn:registry-truncated:<n>/<total>`
+is telemetry compile.py writes on **every** successful bounded duplicate-check
+selection (README's "Compiler input is now bounded, not free" limitation),
+not a sign that anything is wrong. `durum.py` now renders it as
+`info:registry-selection:<n>/<total>` in the table and excludes it from the
+warning count (`warnings: N (+M info)` when `M` such entries exist) — the
+translation is display-layer only, so `health.json`'s own raw
+`warn:registry-truncated:` string is unchanged on disk.
 
 Below that table it summarises the last 7 days of `.state/calls.jsonl` (§5.8):
 calls per backend with median and p95 duration, and estimated tokens per
@@ -798,6 +894,7 @@ so treat it as a stable contract:
     {"message": "fail:rootmap-regen-failed", "ts": 1756289400,
      "age_seconds": 3600, "eski": false}
   ],
+  "bekleyen": {"count": 2, "oldest": "2026-09-04.md", "files": ["2026-09-04.md", "2026-09-05.md"]},
   "calls": {
     "window_days": 7,
     "total_calls": 9,
@@ -825,6 +922,8 @@ Shape rules, so a consumer can rely on them:
 - `warnings` is always present, one entry per `health.json["warnings"]` item in
   order, and empty rather than absent when there are none. `ts`/`age_seconds`
   are `null` when no timestamp (own or top-level) could be resolved.
+- `bekleyen` is always present: `count` (int), `oldest` (filename or `null`)
+  and `files` (the full pending list, possibly empty).
 - `calls` is always present. Its `backends` and `components` lists are sorted by
   call count descending, then by name, and are empty when nothing was recorded —
   an empty ledger is not an absent key.
@@ -837,6 +936,60 @@ Shape rules, so a consumer can rely on them:
   the table has one column instead of a footnote. Read it once, not three times.
 - Add fields in a later version rather than renaming or reordering these, and
   raise `schema_version` when the meaning of an existing field changes.
+
+### 9.2 `kota.py` / `kota_hiz.py` — quota bands and the `bilinmiyor` band
+
+```powershell
+python scripts/kota.py            # one line, for SessionStart injection
+python scripts/kota.py --detay    # multi-line breakdown
+python scripts/kota.py --json     # machine-readable
+```
+
+`kota.py` reads official quota percentages for each window (Claude's OAuth
+usage endpoint, then the statusline cache, then a local spend tally; Codex's
+own `rate_limits` field) and `kota_hiz.py` turns each into a forward-looking
+band from `R = yanma / sürdürülebilir` (burn rate over the sustainable rate to
+the reset).
+
+**Stale-source handling (Astra A8).** Every percentage rides on a server-side
+observation that itself has an age — the moment the OAuth cache was written,
+or the Codex rollout file's mtime. Past `BEYIN_KOTA_BAYAT_DK` minutes (default
+`120`) the window's band becomes `bilinmiyor` ("unknown") instead of whatever
+the stale percentage would otherwise imply, and the line prints
+`[? bayat <n>dk]`. `bilinmiyor` sorts between "dikkat" (attention) and a
+closed/rationed band in the manager selection — an unrationed window still
+wins management, but `bilinmiyor` is never read as "serbest" (free). A window
+past its reset time needs a fresh observation to be called free; without one
+it is `bilinmiyor` too, where it used to report `serbest` unconditionally. An
+unchanged observation (same `gozlem` + `used` + `resets_at`) is no longer
+appended to `.state/kota-orneklem.jsonl` a second time — that duplicate
+appending under a fresh timestamp was what produced a synthetic Δused = 0 and
+a false "R 0.0 · serbest" reading. Older sample lines have no `gozlem` field;
+the reader ignores unknown fields, so the format stays backward compatible.
+
+### 9.3 `harcama_defteri.py` — the spend ledger, v2
+
+```powershell
+python scripts/harcama_defteri.py --topla            # update the ledger
+python scripts/harcama_defteri.py --topla --yeniden  # rebuild from scratch
+python scripts/harcama_defteri.py --ozet             # print a summary
+```
+
+Reads `usage` blocks out of `~/.claude/projects/**/*.jsonl` and Codex's
+`total_token_usage` counters to tally model spend. The ledger file records
+`surum` (schema version) `2`: a Claude Code transcript re-emits the same
+assistant message across streaming updates, retries and compaction rewrites,
+and every copy carries its own `usage` block, so a `surum 1` ledger counted
+some responses two or three times. Each usage record is now keyed by
+`message.id` (falling back to `requestId`, then `uuid`), keeping the **last**
+record seen for that key; a key already recorded from an earlier file (in
+sorted path order) is skipped and counted separately as a cross-file
+duplicate. The daily breakdown is built from each record's own timestamp
+(converted to the local calendar day) rather than the session's last
+timestamp, so a session crossing midnight splits correctly across days. A
+`surum 1` ledger is rebuilt rather than inherited. `--yeniden` forces a full
+rebuild; `BEYIN_HARCAMA_DEFTERI` overrides the ledger's path, for read-only
+measurement runs against a copy.
 
 ## 10. Tests
 

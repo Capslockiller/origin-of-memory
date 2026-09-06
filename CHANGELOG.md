@@ -290,6 +290,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with every other key; it is a no-op — file untouched — when nothing is
   stale or the file is absent. `write_health()` itself is unchanged.
 
+### Documentation
+
+- Aligned `docs/retrieval.md`, `docs/architecture.md`, `docs/features.md`,
+  `docs/features.tr.md` and `docs/evaluation.md` with the Astra week-1 code:
+  the `retrieve.py hook` relevance gate and query-aware dedup, the
+  `flush.py` delivery ledger and turn cursor, `kota`/`kota_hiz`'s
+  `bilinmiyor` band, `durum.py`'s pending-compile line and
+  `info:registry-selection` demotion, and the `harcama_defteri.py` v2 ledger.
+
 ## [0.5.0] - 2026-09-02
 
 ### Added

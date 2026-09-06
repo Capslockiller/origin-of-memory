@@ -190,8 +190,13 @@ them:
 - **Ranked but below k** — genuine ranking failure; check whether the recall@5
   column rescues it. On the corrected run, ten of these were rescued at
   positions four and five, which is why the top-5 column is worth storing.
-- **Query too short or filtered** — the hook skips prompts under 12 characters and
-  slash commands. Real usage does this too; count it, do not exempt it.
+- **Query too short or filtered** — the live hook skips prompts under 12
+  characters, slash commands, code/tool commands, and anything the relevance
+  gate finds no title/aliases/tags overlap for (see
+  [retrieval.md](retrieval.md#9-the-hook-relevance-gate)). The measurement in
+  this document scores `retrieve.py query`, the raw ranking, so these skips do
+  not affect the reported recall — but real usage hits them, so count a
+  gate-filtered question against the live system, do not exempt it.
 
 ## 7. Threats to validity
 

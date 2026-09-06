@@ -35,8 +35,12 @@ applies. This was a real, shipped defect, fixed by adding the leading `0.0`
 placeholder; no index rebuild is needed, since it is a query-time-only change
 that reads the same columns as before.
 
-**`--min-score`** is a floor on positive `-bm25()` relevance: any hit whose
-`-score` falls below it is discarded before ranking.
+**`--min-score`** (the `query` subcommand) is a floor on positive `-bm25()`
+relevance: any hit whose `-score` falls below it is discarded before ranking.
+The `hook` subcommand — the live `UserPromptSubmit` entry point — reads the
+same floor from `BEYIN_RETRIEVE_MIN_SCORE` (default `0.0`, i.e. off) and
+layers a separate relevance gate on top; see [§9](#9-the-hook-relevance-gate)
+below.
 
 ## 2. A fused-ranking mode was tried and removed
 
@@ -257,3 +261,52 @@ flat assertion reads exactly like a fact.
 
 The rules live in `COMPILE_PROMPT` in the compiler's own language and register;
 `AGENTS.md` explains why model-facing prompts here stay Turkish.
+
+## 9. The hook relevance gate
+
+`retrieve.py hook` is the live `UserPromptSubmit` entry point (D1): it reads
+the hook JSON from stdin directly, rather than through a PowerShell wrapper
+around `query`, and returns nothing (`skip:internal`) when `BEYIN_INVOKED_BY`
+is set — the recursion guard that used to live only in that wrapper. Before
+this gate the hook injected on almost every prompt: query tokens were
+OR-joined, `min_score` defaulted to `0`, and the only skips were "under 12
+characters" and "starts with `/`". Measured against the live 527-note index,
+all 30 probe prompts injected, including ones with no retrieval-worthy intent
+at all.
+
+Two further skips run before the index is even opened: `skip:short` (under
+`HOOK_MIN_PROMPT_LEN`, 12 characters) and `skip:slash`, then `skip:intent`
+(`prompt_hafiza_ister()`) for a prompt that is a fenced code block or opens
+with a word naming a tool or an edit ("fix", "run", "commit", "kur", "derle",
+…) rather than a question.
+
+What actually decides relevance is **token overlap, not the BM25 score**: on
+the measured corpus, memory-worthy top-1 hits scored 11.4–37.7 and junk hits
+scored 6.0–20.9 — ranges that overlap almost completely, so no single score
+threshold separates them. A candidate is kept only when at least
+`GATE_MIN_TOKEN_OVERLAP` (2) distinct content words of the prompt
+(folded, stopword-filtered, at least `GATE_MIN_TOKEN_LEN` (4) characters)
+occur in the candidate's own title/aliases/tags — the body is excluded, since
+a 1,500-character note mentions a lot of words in passing — or its score
+clears the `BEYIN_RETRIEVE_STRICT_SCORE` escape hatch (default `25.0`,
+chosen above the strongest measured junk top-1 hit). The gate is **opt-in**:
+`context_pack.py` and the MCP `memory_search` tool ask an explicit question
+and keep the raw ranking; only the prompt-submit hook turns it on.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `BEYIN_RETRIEVE_MIN_SCORE` | `0.0` | Floor on positive `-bm25()` relevance, applied before the gate |
+| `BEYIN_RETRIEVE_STRICT_SCORE` | `25.0` | A hit at or above this score is admitted without token overlap |
+
+Every decision — `inject`, `skip:internal`, `skip:short`, `skip:slash`,
+`skip:intent`, `skip:score` (nothing scored at all), `skip:token-overlap`
+(hits existed, none passed) — is logged to the per-session ledger with that
+`reason`.
+
+**Dedup is query-aware.** The ledger used to key on the note's name alone, so
+a note suppressed for one question could never resurface for a materially
+different one asked later in the same session. Suppression now keys on
+`<query_signature>:<note>`, where `query_signature()` hashes the prompt's
+folded token set — two prompts that fold to the same tokens share a
+signature, which is exactly when re-showing a note is repetition rather than
+a fresh question.

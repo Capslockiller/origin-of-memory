@@ -40,9 +40,9 @@ see [architecture.md](architecture.md).
    knowledge/hubs/*.md
         |                               |
         v                               v
-  session-start.ps1              memory-retrieve.ps1
+  session-start.ps1              retrieve.py hook
   SessionStart:                  UserPromptSubmit:
-  companion memory +             BM25 over the prompt ->
+  companion memory +             gated BM25 over the prompt ->
   root map, 16k char budget      top 3 full notes injected
 ```
 
@@ -63,8 +63,15 @@ Two properties are load-bearing:
   link, plus a single-row-per-article table in `knowledge/index-full.md`.
 - **Per-prompt retrieval.** SQLite FTS5 with `bm25(notes, 8, 6, 3, 1)` — title,
   aliases, tags, body — returns the top 3 full notes, capped at 1,500 characters
-  per note and 4,500 in total. Trivial prompts (under 12 characters) and slash
-  commands are skipped; a per-session ledger prevents re-injecting the same note.
+  per note and 4,500 in total. A relevance gate keeps the hook from firing on
+  most prompts: trivial ones (under 12 characters), slash commands, pure
+  code/tool commands, and internal `claude -p` calls the pipeline itself spawns
+  are all skipped, and a candidate note is injected only when it shares at
+  least two content words with the prompt in its own title/aliases/tags (or
+  clears a strict score threshold). A per-session ledger, keyed on the
+  question as well as the note, prevents re-injecting the same note for the
+  same question twice while still allowing it to answer a different one. See
+  [retrieval.md](retrieval.md#9-the-hook-relevance-gate).
 - **Root map layer.** `rootmap.py` keeps `knowledge/index.md` under a 4,000
   character budget as a topic map into `knowledge/hubs/*.md`, with the full table
   kept separately. Every concept is verified to be covered by a hub before

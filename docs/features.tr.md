@@ -40,9 +40,9 @@ yazdığın companion katmanı. README kısa sürümü tutuyor; bu sayfa onun k�
    knowledge/hubs/*.md
         |                               |
         v                               v
-  session-start.ps1              memory-retrieve.ps1
+  session-start.ps1              retrieve.py hook
   SessionStart:                  UserPromptSubmit:
-  companion hafıza +             mesaj üstünden BM25 ->
+  companion hafıza +             kapılı BM25 mesaj üstünden ->
   kök harita, 16k krkt tavan     ilk 3 tam not enjekte edilir
 ```
 
@@ -63,8 +63,15 @@ yazdığın companion katmanı. README kısa sürümü tutuyor; bu sayfa onun k�
   `knowledge/index-full.md` içinde makale başına tek satır tutuluyor.
 - **Mesaj başına getirme.** SQLite FTS5, `bm25(notes, 8, 6, 3, 1)` ağırlıklarıyla
   (başlık, aliases, etiket, gövde) ilk 3 tam notu döndürüyor; not başına 1.500,
-  toplamda 4.500 karakter tavanı var. 12 karakterin altındaki mesajlar ve eğik
-  çizgi komutları atlanıyor, oturum içi defter aynı notu tekrar enjekte etmiyor.
+  toplamda 4.500 karakter tavanı var. Bir ilgililik kapısı kancanın çoğu mesajda
+  ateşlenmesini engelliyor: 12 karakterin altındaki mesajlar, eğik çizgi
+  komutları, salt kod/araç komutları ve hattın kendi başlattığı iç `claude -p`
+  çağrıları atlanıyor; bir not yalnız mesajla en az iki içerik kelimesini
+  kendi başlık/aliases/etiketinde paylaşıyorsa (ya da katı bir eşik skorunu
+  aşıyorsa) enjekte ediliyor. Oturum içi defter hem soruyu hem notu anahtar
+  aldığı için aynı notu aynı soruya tekrar enjekte etmiyor ama farklı bir
+  soruya yine cevap verebiliyor. Bkz.
+  [retrieval.md](retrieval.md#9-the-hook-relevance-gate) (İngilizce).
 - **Kök harita katmanı.** `rootmap.py`, `knowledge/index.md`'yi 4.000 karakter
   bütçesinin altında, `knowledge/hubs/*.md` merkezlerine yönlendiren bir konu
   haritası olarak tutuyor. Yayından önce her kavramın bir merkezde göründüğü
