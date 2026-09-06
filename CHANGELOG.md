@@ -10,6 +10,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: claude · opus-5 -->
+- **The secret guard now catches credentials that only their label gives away
+  (Astra A10).** `secret_guard` gains a single context-sensitive rule,
+  `contextual-code`: a label (`kod`/`kodu`/`giriş kodu`/`erişim kodu`/
+  `davet kodu`/`tek kullanımlık kod`, `code`/`access code`/`invite code`/
+  `login code`, `passcode`, `OTP`, `PIN`) followed by `:`, `=`, `→` or `is`,
+  followed by a value that actually looks like a credential — six to sixty-four
+  space-free characters carrying a digit, or a dash-separated uppercase group
+  such as `XXXX-XXXX-99XX`. Only the *value* is replaced with
+  `[SIR:contextual-code]`; the label stays, so the sentence still reads. The
+  gap between label and separator may hold at most twelve non-word characters,
+  which is what keeps Turkish compounds (`kod grafiği:`, `kod tabanı:`) from
+  being read as labels, and `_looks_like_code` additionally refuses commit
+  hashes (7–40 lowercase hex — safe by design), version strings, ISO dates,
+  clock times, path- or template-shaped values and the existing placeholder
+  vocabulary. `şifre`/`parola`/`password`/`token` are deliberately *not* in the
+  label set: `kimlik-atamasi` already owns them, and two rules over one span
+  would make the reported pattern name ambiguous. No call site changes —
+  `giris_kapisi.temizle` runs `secret_guard.redact` for every flush, compile and
+  ingest input, so the new rule reaches all of them and raises
+  `warn:secret-redacted-<phase>:contextual-code` in the component's health file.
+  Previously a one-time login code handed to a pilot user
+  (`daily/2026-09-04.md`, a username and a four-by-four dash-grouped code on one
+  line) passed both `secret_guard.scan` and `pii_guard.redact` with no hits at
+  all. `test_secret_guard.py` grows from twenty-two generated cases to
+  fifty-one: twelve `contextual-code` positives, fifteen new negatives
+  (`kod grafiği`, `kod tabanı`, `git 78b8d95`, `v0.5.0`, `2026-09-04`,
+  `kod: yok`, `session:` anchors, wikilinks, `${TOKEN}`) and two hand-written
+  cases for label preservation and rule precedence; `test_giris_kapisi.py`
+  proves the warning reaches health through the shared gate. Separately, the
+  `import gemini_ayikla` in `test_ingest_gemini.py` now says where the module
+  actually lives — `tools/gemini_ayikla.py`, reachable through the `_helpers`
+  TOOLS_DIR bridge, not `scripts/` — because an installed vault carries a
+  personalised derivative of it under `.claude/scripts/` whose keyword table
+  diverges on purpose, and reading the bare import as a missing script sent one
+  audit down the wrong path.
 - **Flush now has a delivery contract: a ledger, a turn cursor, and honest
   counts (Astra A5).** Every flush attempt — successes included — appends one
   line to the new bounded `.state/flush-teslimat.jsonl`

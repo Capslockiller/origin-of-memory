@@ -25,6 +25,19 @@ POSITIVE_CASES = (
         "pem-anahtar",
         "-----BEGIN PRIVATE KEY-----\nSYNTHETIC\n-----END PRIVATE KEY-----",
     ),
+    # Bağlam duyarlı kimlik bilgileri (Astra A10). Değerler sentetiktir.
+    ("contextual-code", "kod: `SYNT-ABCD-12EF`"),
+    ("contextual-code", "giriş kodu: 481920"),
+    ("contextual-code", "erişim kodu = SYNT-9931"),
+    ("contextual-code", "davet kodu → BETA-2026-XY"),
+    ("contextual-code", "tek kullanımlık kod: 771903"),
+    ("contextual-code", "kodunuz: zx9q4m2"),
+    ("contextual-code", "access code is A1B2C3D4"),
+    ("contextual-code", "invite code: SYNT-7788-QQ"),
+    ("contextual-code", "OTP: 481920"),
+    ("contextual-code", "PIN=8471-2290"),
+    ("contextual-code", "passcode: hunter42x"),
+    ("contextual-code", "Login code: 55-77-99-11"),
 )
 
 
@@ -40,11 +53,44 @@ NEGATIVE_CASES = (
     "postgres://demo@localhost/db",
     "api_key=EXAMPLE",
     "-----BEGIN PUBLIC KEY-----\nSYNTHETIC\n-----END PUBLIC KEY-----",
+    # ``contextual-code`` yanlış pozitif olmamalı: Türkçe tamlamalar, commit
+    # özetleri, sürümler, tarihler, çapa/wikilink söz dizimi, yer tutucular.
+    "kod grafiği bu hafta çıkacak",
+    "kod tabanı: python",
+    "kod yazılım tarafında duruyor",
+    "git 78b8d95",
+    "kod: 78b8d95",
+    "v0.5.0",
+    "kod: v0.5.0",
+    "2026-09-04",
+    "kod: 2026-09-04",
+    "kod: yok",
+    "session:abc",
+    "kaynak session:2026-09-04-benchmark",
+    "[[kod defteri]]",
+    "kod: ${TOKEN}",
+    "the code is unclear",
 )
 
 
 class SecretGuardTests(unittest.TestCase):
-    pass
+    def test_contextual_code_keeps_the_label_and_redacts_only_the_value(
+        self,
+    ) -> None:
+        cleaned, hits = secret_guard.redact("kullanıcı adı: pilot, kod: `SYNT-ABCD-12EF`")
+        self.assertEqual(hits, ["contextual-code"])
+        self.assertEqual(
+            cleaned,
+            "kullanıcı adı: pilot, kod: `[SIR:contextual-code]`",
+        )
+
+    def test_contextual_code_does_not_shadow_the_existing_assignment_rule(
+        self,
+    ) -> None:
+        # şifre/parola/password/token bilerek contextual-code'a alınmadı.
+        self.assertEqual(
+            secret_guard.scan("parola: SyntheticValue9"), ["kimlik-atamasi"]
+        )
 
 
 def _positive_test(family: str, sample: str):

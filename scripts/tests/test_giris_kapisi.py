@@ -66,6 +66,21 @@ class GirisKapisiTests(unittest.TestCase):
         self.assertIn("warn:secret-redacted-input:kimlik-atamasi", health)
         self.assertIn("warn:pii-redacted-input:tckn", health)
 
+    def test_contextual_code_reaches_health_through_the_shared_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            cleaned, warnings = giris_kapisi.temizle(
+                "pilot girişi — kod: `SYNT-ABCD-12EF`",
+                component="ingest-input",
+                state_dir=state_dir,
+            )
+            health = (state_dir / "ingest-health.json").read_text(encoding="utf-8")
+
+        self.assertNotIn("SYNT-ABCD-12EF", cleaned)
+        self.assertIn("kod: `[SIR:contextual-code]`", cleaned)
+        self.assertEqual(warnings, ["warn:secret-redacted-input:contextual-code"])
+        self.assertIn("warn:secret-redacted-input:contextual-code", health)
+
 
 if __name__ == "__main__":
     unittest.main()

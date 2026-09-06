@@ -7,10 +7,16 @@
 Kalıplar bilinçli olarak dar tutuldu: hedef, terminale dökülen gerçek kimlik
 bilgileri (anahtar, token, bağlantı dizesi, şifre ataması). Serbest metni
 bozacak genişlikte kalıp eklenmez.
+
+``contextual-code`` bunun tek bağlam duyarlı istisnası: kalıbı olmayan ama
+etiketiyle ele veren kimlik bilgileri (``kod: VALE-VUYW-84NN``, ``OTP: 481920``)
+yalnız bir ETİKET + ayraç + kimlik bilgisi görünümlü DEĞER üçlüsü aynı satırda
+yan yana geldiğinde yakalanır; karartılan yalnız değerdir, etiket kalır.
 """
 from __future__ import annotations
 
 import re
+from typing import Callable
 
 # (kalıp adı, düzenli ifade, karartılacak grup numarası — 0: tüm eşleşme)
 _RULES: list[tuple[str, re.Pattern[str], int]] = [
@@ -54,6 +60,30 @@ _RULES: list[tuple[str, re.Pattern[str], int]] = [
         ),
         1,
     ),
+    # "kod: VALE-VUYW-84NN" / "giriş kodu = 481920" / "access code is A1B2C3" —
+    # ETİKET korunur, yalnız DEĞER karartılır. Ayraçtan önce yalnız harf/rakam
+    # taşımayan en çok 12 karakterlik boşluk kabul edilir; böylece "kod grafiği:"
+    # ya da "kod tabanı:" gibi Türkçe tamlamalar etiket sayılmaz. Değerin
+    # kimlik bilgisi görünümü ayrıca ``_looks_like_code`` ile doğrulanır.
+    # ``şifre``/``parola``/``password``/``token`` bilerek yok: onları zaten
+    # ``kimlik-atamasi`` yakalıyor, iki kalıbın çakışması ad kararsızlığı yapar.
+    (
+        "contextual-code",
+        re.compile(
+            r"(?i)\b(?:"
+            r"(?:tek\s+kullanımlık\s+|giriş\s+|erişim\s+|davet\s+|geçici\s+|"
+            r"doğrulama\s+|güvenlik\s+)?"
+            r"kod(?:unuzu|unuz|umuz|unu|un|u)?"
+            r"|(?:one[-\s]?time\s+|access\s+|invite\s+|login\s+|security\s+|"
+            r"verification\s+)?codes?"
+            r"|passcode|otp|pin"
+            r")"
+            r"[^\w\n]{0,12}(?::|=|→|is\b)"
+            r"[ \t]*[\"'`]?"
+            r"([^\s\"'`,;:\[\]]{6,64})"
+        ),
+        1,
+    ),
 ]
 
 # Değer gibi görünmeyen atamaları (yer tutucu, süslü parantez, yıldız) esgeç.
@@ -62,6 +92,43 @@ _HARMLESS_VALUE = re.compile(
     r"REDACTED|KARARTILDI|NONE|NULL|TRUE|FALSE|CHANGEME|"
     r"PLACEHOLDER|EXAMPLE|ORNEK|ÖRNEK)$"
 )
+
+# ``contextual-code`` değerinin kimlik bilgisi olmadığını kanıtlayan kalıplar.
+_CODE_COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
+_CODE_VERSION = re.compile(r"(?i)^v?\d+(?:\.\d+){1,3}(?:[.+-][0-9a-z]+)*$")
+_CODE_DATE = re.compile(r"(?i)^\d{4}-\d{2}-\d{2}")
+_CODE_TIME = re.compile(r"^\d{1,2}[.]\d{2}(?:[.]\d{2})?$")
+_CODE_PATHISH = re.compile(r"[/\\<>{}()]")
+# Kimlik bilgisi görünümü: ya XXXX-XXXX-99XX gibi tireli büyük harf öbeği,
+# ya da içinde rakam geçen bitişik bir dizi.
+_CODE_DASH_GROUP = re.compile(r"^[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+$")
+_CODE_HAS_DIGIT = re.compile(r"\d")
+
+
+def _looks_like_code(value: str) -> bool:
+    """Etiketten sonra gelen değer gerçekten kimlik bilgisi görünümlü mü?"""
+    if _HARMLESS_VALUE.match(value):
+        return False
+    if _CODE_PATHISH.search(value):
+        return False
+    # `git 78b8d95` gibi commit özetleri tasarım gereği güvenli sayılır.
+    if _CODE_COMMIT.match(value):
+        return False
+    if _CODE_VERSION.match(value):
+        return False
+    if _CODE_DATE.match(value):
+        return False
+    if _CODE_TIME.match(value):
+        return False
+    if _CODE_DASH_GROUP.match(value):
+        return True
+    return bool(_CODE_HAS_DIGIT.search(value))
+
+
+# Kalıp adına bağlı ek değer doğrulaması (yoksa yalnız _HARMLESS_VALUE bakılır).
+_VALUE_CHECKS: dict[str, Callable[[str], bool]] = {
+    "contextual-code": _looks_like_code,
+}
 
 
 def _finding_spans(text: str) -> list[tuple[int, int, str]]:
@@ -72,6 +139,9 @@ def _finding_spans(text: str) -> list[tuple[int, int, str]]:
             if value is None:
                 continue
             if group != 0 and _HARMLESS_VALUE.match(value):
+                continue
+            check = _VALUE_CHECKS.get(name)
+            if check is not None and not check(value):
                 continue
             spans.append((match.start(group), match.end(group), name))
     return spans

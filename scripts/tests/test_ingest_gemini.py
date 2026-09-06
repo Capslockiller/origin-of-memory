@@ -14,6 +14,11 @@ from unittest import mock
 import _helpers
 from _helpers import GOOD_SUMMARY, write_jsonl
 
+# ``gemini_ayikla`` scripts/ altında DEĞİL: tek seferlik göç aracı olarak
+# ``tools/gemini_ayikla.py`` içinde yaşar (AGENTS.md düzen tablosu) ve
+# ``_helpers`` TOOLS_DIR köprüsüyle içe aktarılabilir hale gelir. Kurulu
+# kasadaki ``.claude/scripts/gemini_ayikla.py`` kopyası ise kişiselleştirilmiş
+# bir türev; etiket tablosu bilerek ayrışır, depo kopyası kanonik olandır.
 import gemini_ayikla
 import flush
 import ingest
