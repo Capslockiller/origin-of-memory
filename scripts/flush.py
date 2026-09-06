@@ -45,6 +45,19 @@ COMPILE_MIN_INTERVAL_ENV = "BEYIN_COMPILE_MIN_INTERVAL_HOURS"
 DEFAULT_COMPILE_MIN_INTERVAL_HOURS = 20.0
 COMPILE_TRIGGER_TTL_ENV = "BEYIN_COMPILE_TRIGGER_TTL_MIN"
 DEFAULT_COMPILE_TRIGGER_TTL_MINUTES = 180.0
+COMPILE_EVENING_HOUR_ENV = "BEYIN_COMPILE_EVENING_HOUR"
+DEFAULT_COMPILE_EVENING_HOUR = 18
+
+# Zamanlı tarama (Master kararı 2026-09-07): SessionEnd kancası uygulama ya da
+# makine öldürüldüğünde hiç teslim edilmiyor (54. oturum, 19 saat kayıp). Sekiz
+# saatte bir çalışan süpürge, tur imlecini kullanarak flush'ı oturum sonundan
+# bağımsız kılar; "son flush'tan sonra değişiklik yoksa çalışmasın" iki katmanda
+# uygulanır: dosya damgası (mtime+size) ve tur imleci.
+SWEEP_REASON = "tara"
+SWEEP_STATE_NAME = "flush-tara.json"
+PROJECTS_DIR_ENV = "BEYIN_CLAUDE_PROJECTS"
+DEFAULT_SWEEP_SINCE_HOURS = 8.0
+SESSION_FILE_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 
 # Teslimat defteri (A5): her flush denemesi — başarı dahil — buraya bir satır
 # bırakır. `health.json` yalnız son durumu taşır; defter ise "bu oturum hiç
@@ -58,6 +71,7 @@ REASON_UNREADABLE_TRANSCRIPT = "flush:unreadable-transcript"
 REASON_NO_TURNS = "flush:no-turns"
 REASON_NO_NEW_TURNS = "flush:no-new-turns"
 REASON_REJECTED = "flush:rejected"
+REASON_LOCKED = "flush:locked"
 REASON_BOS = "flush:bos"
 REASON_APPEND_FAILED = "flush:append-failed"
 
@@ -110,6 +124,43 @@ def resolve_compile_min_interval_hours(
     if value < 0 or value != value:
         return DEFAULT_COMPILE_MIN_INTERVAL_HOURS
     return value
+
+
+def resolve_compile_evening_hour(
+    environment: dict[str, str] | None = None,
+) -> int:
+    """``BEYIN_COMPILE_EVENING_HOUR``; out-of-range or junk keeps 18:00."""
+    env = os.environ if environment is None else environment
+    raw = (env.get(COMPILE_EVENING_HOUR_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_COMPILE_EVENING_HOUR
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_COMPILE_EVENING_HOUR
+    if not 0 <= value <= 23:
+        return DEFAULT_COMPILE_EVENING_HOUR
+    return value
+
+
+def _compile_window_open(
+    now: dt.datetime,
+    elapsed_hours: float | None,
+    minimum_hours: float,
+) -> bool:
+    """Master 2026-09-07: ``>=18:00`` **or** ``>=20 h`` since the last success.
+
+    The evening hour alone used to gate the compiler, which meant a machine
+    that is only awake during the day never compiled at all. The second door
+    needs a *known* last success: with no successful run on record the old
+    evening rule still stands, so a fresh install does not compile at 09:00
+    on its first flush.
+    """
+    if _effective_hour(now) >= resolve_compile_evening_hour():
+        return True
+    if elapsed_hours is None:
+        return False
+    return minimum_hours <= 0 or elapsed_hours >= minimum_hours
 
 
 def _hours_since_last_success(
@@ -630,8 +681,6 @@ def maybe_trigger_compile(
 ) -> bool:
     """Start one detached evening compile when daily content has changed."""
     current = now or _event_now()
-    if _effective_hour(current) < 18:
-        return False
 
     state_dir = vault_root / ".claude" / "scripts" / ".state"
     compile_state = _load_json_object(
@@ -641,6 +690,13 @@ def maybe_trigger_compile(
     ingested = compile_state.get("ingested", {})
     if not isinstance(ingested, dict):
         raise ValueError("compile-state-ingested-invalid")
+
+    # The clock gate has to be read before the daily scan, but after the state
+    # it now depends on: the second door is "long enough since a success".
+    minimum_hours = resolve_compile_min_interval_hours()
+    elapsed = _hours_since_last_success(compile_state, current)
+    if not _compile_window_open(current, elapsed, minimum_hours):
+        return False
 
     daily_dir = vault_root / "daily"
     if daily_dir.exists():
@@ -666,8 +722,6 @@ def maybe_trigger_compile(
 
     # Second half of the gate: a changed daily log is necessary but not
     # sufficient — a successful run must also be far enough behind us.
-    minimum_hours = resolve_compile_min_interval_hours()
-    elapsed = _hours_since_last_success(compile_state, current)
     if minimum_hours > 0 and elapsed is not None and elapsed < minimum_hours:
         write_health_skip(
             state_dir,
@@ -828,18 +882,60 @@ def _sweep_stale_flush_state(state_dir: Path, now_epoch: float) -> None:
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--hook-input", required=True, type=Path)
+    parser.add_argument("--hook-input", type=Path)
     parser.add_argument(
         "--reason",
         choices=("sessionend", "precompact"),
         default="sessionend",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--tara",
+        action="store_true",
+        help="Zamanlı süpürge: tüm transkriptleri tara, değişenleri flush et.",
+    )
+    parser.add_argument("--projects-dir", type=Path, default=None)
+    parser.add_argument(
+        "--since-hours",
+        type=float,
+        default=DEFAULT_SWEEP_SINCE_HOURS,
+        help="Bu kadar saatten eski transkriptler hiç açılmaz (0 = sınırsız).",
+    )
+    parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Yalnız say: model çağrısı yok, hiçbir yere yazılmaz.",
+    )
+    args = parser.parse_args(argv)
+    if args.tara == (args.hook_input is not None):
+        parser.error("either --hook-input or --tara, not both")
+    return args
 
 
-def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
+def _flush_once(
+    args: argparse.Namespace,
+    event_time: dt.datetime,
+    *,
+    hook_input: dict[str, Any] | None = None,
+    lock_blocking: bool = True,
+    dry_run: bool = False,
+    outcome: dict[str, Any] | None = None,
+) -> int:
+    """One session's flush. The sweep reuses this path verbatim.
+
+    ``hook_input`` lets a caller hand in the payload the hook would have
+    written, so ``--tara`` walks the same cursor, the same guards and the same
+    ledger as a live ``SessionEnd``. ``outcome`` collects the reason code for
+    the caller, since the return value stays 0 on every branch (hook contract).
+    """
     now_epoch = event_time.timestamp()
-    hook_input = load_hook_input(args.hook_input)
+    if hook_input is None:
+        hook_input = load_hook_input(args.hook_input)
+
+    def report(reason: str) -> None:
+        if outcome is not None:
+            outcome["reason"] = reason
+
     session_id = hook_input.get("session_id")
     transcript_value = hook_input.get("transcript_path")
     if not isinstance(session_id, str) or not session_id:
@@ -848,10 +944,46 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
         raise ValueError("transcript-path-missing")
     transcript_path = Path(transcript_value).expanduser()
 
+    if dry_run:
+        # Read-only probe: no lock file, no state, no ledger, no model. Only
+        # the cursor is consulted, and only by reading it.
+        try:
+            turns = read_transcript(transcript_path)
+        except FileNotFoundError:
+            report(REASON_MISSING_TRANSCRIPT)
+            return 0
+        except (OSError, ValueError):
+            report(REASON_UNREADABLE_TRANSCRIPT)
+            return 0
+        cursor = _read_turn_cursor(STATE_DIR, session_id)
+        if not turns:
+            report(REASON_NO_TURNS)
+        elif cursor < len(turns):
+            report(REASON_OK)
+        else:
+            report(REASON_NO_NEW_TURNS)
+        return 0
+
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = _session_lock_path(STATE_DIR, session_id)
     with lock_path.open("a+", encoding="utf-8") as lock_file:
-        _lock_exclusive(lock_file, blocking=True)
+        if lock_blocking:
+            _lock_exclusive(lock_file, blocking=True)
+        else:
+            # A sweep must never queue behind a live hook flush: that session
+            # is already being delivered, so leave it alone and move on.
+            try:
+                _lock_exclusive(lock_file, blocking=False)
+            except OSError:
+                _note_delivery(
+                    STATE_DIR,
+                    session_id=session_id,
+                    reason=REASON_LOCKED,
+                    transcript=transcript_path,
+                    when=event_time,
+                )
+                report(REASON_LOCKED)
+                return 0
 
         chunk_chars, chunk_warning = resolve_flush_chunk_chars()
         if chunk_warning:
@@ -879,6 +1011,9 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
                 when=event_time,
                 **fields,
             )
+            reason = fields.get("reason")
+            if isinstance(reason, str):
+                report(reason)
 
         # A transcript we cannot read is the one case the hook used to swallow
         # whole: `return 0`, no state, no health, no trace. Health never learned
@@ -1124,7 +1259,229 @@ def _flush_once(args: argparse.Namespace, event_time: dt.datetime) -> int:
     return 0
 
 
+def resolve_projects_dir(
+    override: Path | None = None,
+    environment: dict[str, str] | None = None,
+) -> Path:
+    """Where Claude Code keeps its transcripts: flag, env, then the default."""
+    if override is not None:
+        return Path(override).expanduser()
+    env = os.environ if environment is None else environment
+    raw = (env.get(PROJECTS_DIR_ENV) or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".claude" / "projects"
+
+
+def _load_sweep_state(path: Path) -> dict[str, Any]:
+    try:
+        state = _load_json_object(path, {})
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    known = state.get("transkriptler")
+    return known if isinstance(known, dict) else {}
+
+
+def _fingerprint_changed(
+    previous: Any,
+    mtime: float,
+    size: int,
+) -> bool:
+    """A transcript is worth opening only if its stamp moved since last sweep."""
+    if not isinstance(previous, dict):
+        return True
+    try:
+        return (
+            abs(float(previous.get("mtime", -1.0)) - mtime) > 1e-6
+            or int(previous.get("size", -1)) != size
+        )
+    except (TypeError, ValueError):
+        return True
+
+
+def _cwd_from_transcript(path: Path) -> str | None:
+    """First ``cwd`` a transcript record carries; the hook payload has one."""
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for _index, raw_line in zip(range(20), handle):
+                if not raw_line.strip():
+                    continue
+                try:
+                    record = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    value = record.get("cwd")
+                    if isinstance(value, str) and value:
+                        return value
+    except OSError:
+        return None
+    return None
+
+
+def record_sweep(
+    state_dir: Path,
+    counts: dict[str, int],
+    *,
+    when: dt.datetime | None = None,
+    ledger_name: str = DELIVERY_LEDGER_NAME,
+    max_bytes: int = DELIVERY_LEDGER_MAX_BYTES,
+) -> None:
+    """One summary line per sweep in the delivery ledger — counts only."""
+    try:
+        moment = when or dt.datetime.now().astimezone()
+        record = {
+            "ts": moment.isoformat(timespec="seconds"),
+            "reason": SWEEP_REASON,
+            "taranan": int(counts.get("taranan", 0)),
+            "degisen": int(counts.get("degisen", 0)),
+            "ozetlenen": int(counts.get("ozetlenen", 0)),
+            "atlanan": int(counts.get("atlanan", 0)),
+            "hatali": int(counts.get("hatali", 0)),
+        }
+        state_dir = Path(state_dir)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = state_dir / ledger_name
+        _rotate_delivery_ledger(path, max_bytes)
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+# Reasons that mean "this transcript is settled for now": the sweep may stamp
+# its fingerprint. A rejected summary, a failed append or a locked session must
+# NOT be stamped, or the retry would wait for the file to change again.
+SWEEP_SETTLED_REASONS = frozenset(
+    {REASON_OK, REASON_NO_NEW_TURNS, REASON_NO_TURNS, REASON_BOS}
+)
+
+
+def sweep(
+    *,
+    event_time: dt.datetime,
+    projects_dir: Path | None = None,
+    since_hours: float = DEFAULT_SWEEP_SINCE_HOURS,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Flush every transcript that moved since the last sweep.
+
+    Master 2026-09-07: "8 saatte bir flush çalışsın; son flush'tan sonra
+    değişiklik yoksa çalışmasın." Two cheap gates enforce the second half —
+    the file stamp here, and the per-session turn cursor inside ``_flush_once``
+    — so a quiet machine costs one directory walk and no model call at all.
+    """
+    root = resolve_projects_dir(projects_dir)
+    state_path = STATE_DIR / SWEEP_STATE_NAME
+    known = _load_sweep_state(state_path)
+    fresh: dict[str, Any] = {}
+    counts = {
+        "taranan": 0,
+        "degisen": 0,
+        "ozetlenen": 0,
+        "atlanan": 0,
+        "hatali": 0,
+    }
+    cutoff = (
+        event_time.timestamp() - since_hours * 3_600.0
+        if since_hours and since_hours > 0
+        else None
+    )
+
+    try:
+        candidates = sorted(root.rglob("*.jsonl")) if root.is_dir() else []
+    except OSError:
+        candidates = []
+
+    for path in candidates:
+        try:
+            details = path.lstat()
+        except OSError:
+            counts["hatali"] += 1
+            continue
+        if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+            continue
+        session_id = path.stem
+        if not SESSION_FILE_NAME.fullmatch(session_id):
+            continue
+        counts["taranan"] += 1
+        key = str(path)
+        stamp = {"mtime": details.st_mtime, "size": details.st_size}
+        previous = known.get(key)
+        if cutoff is not None and details.st_mtime < cutoff:
+            counts["atlanan"] += 1
+            if previous is not None:
+                fresh[key] = previous
+            continue
+        if not _fingerprint_changed(previous, details.st_mtime, details.st_size):
+            counts["atlanan"] += 1
+            fresh[key] = previous
+            continue
+
+        counts["degisen"] += 1
+        payload = {
+            "session_id": session_id,
+            "transcript_path": key,
+            "reason": SWEEP_REASON,
+        }
+        cwd = _cwd_from_transcript(path)
+        if cwd:
+            payload["cwd"] = cwd
+        outcome: dict[str, Any] = {}
+        try:
+            _flush_once(
+                argparse.Namespace(hook_input=None, reason=SWEEP_REASON),
+                event_time,
+                hook_input=payload,
+                lock_blocking=False,
+                dry_run=dry_run,
+                outcome=outcome,
+            )
+        except Exception:  # noqa: BLE001 — one bad transcript never stops a sweep
+            counts["hatali"] += 1
+            if previous is not None:
+                fresh[key] = previous
+            continue
+        reason = outcome.get("reason")
+        if reason == REASON_OK:
+            counts["ozetlenen"] += 1
+        elif reason in SWEEP_SETTLED_REASONS or reason == REASON_LOCKED:
+            counts["atlanan"] += 1
+        else:
+            counts["hatali"] += 1
+        if reason in SWEEP_SETTLED_REASONS:
+            fresh[key] = stamp
+        elif previous is not None:
+            fresh[key] = previous
+
+    if not dry_run:
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            _atomic_write_json(
+                state_path,
+                {
+                    "son_tarama_ts": event_time.isoformat(timespec="seconds"),
+                    "transkriptler": fresh,
+                },
+            )
+        except OSError:
+            write_health(STATE_DIR, "tara-state-write-failed", component="flush")
+        record_sweep(STATE_DIR, counts, when=event_time)
+        try:
+            maybe_trigger_compile(VAULT_ROOT, event_time)
+        except (OSError, ValueError, json.JSONDecodeError):
+            write_health(STATE_DIR, "compile-trigger-failed", component="flush")
+
+    print(
+        "[beyin] tara: taranan={taranan} degisen={degisen} "
+        "ozetlenen={ozetlenen} atlanan={atlanan} hatali={hatali}".format(**counts)
+        + (" (kuru)" if dry_run else "")
+    )
+    return counts
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    global STATE_DIR
     if os.environ.get("BEYIN_INVOKED_BY"):
         return 0
 
@@ -1133,6 +1490,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exc:
         if exc.code:
             write_health(STATE_DIR, "invalid-arguments", component="flush")
+        return 0
+
+    if args.state_dir is not None:
+        # Only the sweep offers this: a dry measurement must be able to read a
+        # copy of the live cursor state without touching the real one.
+        STATE_DIR = Path(args.state_dir).expanduser()
+
+    if args.tara:
+        try:
+            sweep(
+                event_time=_event_now(),
+                projects_dir=args.projects_dir,
+                since_hours=args.since_hours,
+                dry_run=args.dry_run,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            error = str(exc) or exc.__class__.__name__
+            write_health(STATE_DIR, f"tara:{error}", component="flush")
         return 0
 
     managed_input = _managed_hook_input(args.hook_input, STATE_DIR)

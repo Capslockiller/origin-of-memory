@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 <!-- yazan: claude · opus-5 -->
+- **Flush no longer depends on a session ending politely: `flush.py --tara`
+  sweeps every 8 hours, and does nothing when nothing changed (Master,
+  2026-09-07).** `SessionEnd` is a courtesy, not a guarantee — when the app or
+  the machine is killed the hook is never delivered, and session 54 lost 19
+  hours that way. The new sweep walks `~/.claude/projects/**/*.jsonl`
+  (`BEYIN_CLAUDE_PROJECTS` or `--projects-dir` overrides the root), derives the
+  session id from each filename and runs **the same per-session path as the
+  hook** by building the hook payload in memory (`session_id`,
+  `transcript_path`, `cwd` from the transcript's first record, reason `tara`).
+  Master's second half — "son flush'tan sonra değişiklik yoksa çalışmasın" — is
+  enforced by two gates before any model is reachable: a `{mtime, size}` stamp
+  per transcript in `.state/flush-tara.json` (with `son_tarama_ts`), and the
+  existing per-session turn cursor, so a transcript that grew by tool results
+  alone records `flush:no-new-turns` and calls nothing. `--since-hours`
+  (default 8, `0` lifts it) bounds the first sweep so it cannot summarise the
+  whole archive. A session already held by a live hook flush is taken
+  **non-blocking**: it records the new `flush:locked` reason and is left alone.
+  A stamp is written only on a settled outcome (`flush:ok`,
+  `flush:no-new-turns`, `flush:no-turns`, `flush:bos`) — a rejected summary, a
+  failed append or a locked session is retried on the next sweep instead of
+  waiting for the file to change again. The sweep ends with one
+  `maybe_trigger_compile()` and one ledger line,
+  `{ts, reason:"tara", taranan, degisen, ozetlenen, atlanan, hatali}`, also
+  printed to stdout. `--dry-run` does the walk and the cursor check and writes
+  nothing at all — no lock, no state, no ledger, no model — which is how this
+  was measured against the live archive before shipping: 1,749 transcripts,
+  17 changed in the last 8 h, 16 that would be summarised, 0 errors.
+  `hooks/flush-launch.ps1` gains a `-Tara` switch (same Ollama backend env,
+  foreground so a scheduled task can time it, same `hook-girdi.jsonl` trace
+  with reason `tara`), and `hooks/zamanli-flush-kur.ps1` registers the
+  `OdenaOS-Flush` task idempotently — next full hour, every 8 h,
+  start-when-available, 30-minute limit, no battery restrictions, and **only
+  when the user is logged on**, because the sweep needs the user's own Ollama
+  service. `-Durum` prints the task, `-Kaldir` removes it.
+
+  The same sweep relaxes the nightly compile gate to **"≥18:00 or ≥20 h since
+  the last success"** (Master, same decision): the evening hour alone gated the
+  compiler, so a machine that is only awake during the day never compiled at
+  all. The daytime door requires a *recorded* successful run at least
+  `BEYIN_COMPILE_MIN_INTERVAL_HOURS` (20 h) old — the same interval that
+  already throttled repeat runs — so with no success on record the old evening
+  rule still stands and a fresh install does not compile at 09:00 on its first
+  flush. `BEYIN_COMPILE_EVENING_HOUR` moves the evening hour (junk or
+  out-of-range falls back to 18).
+
 - **Every model call now says why it ran, and an estimate can no longer sit in
   a field that promises a measurement (Astra B2).** Three changes, one point:
   make the cost of keeping the memory separable from the cost of the work the

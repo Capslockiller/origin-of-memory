@@ -13,6 +13,8 @@ session is opened in the vault itself.
 | `../scripts/retrieve.py hook` | UserPromptSubmit | Retrieval: a BM25 query built from the prompt injects the 3 most relevant full notes (per-session dedupe, relevance floor, measured p95 347 ms). **Registered as a direct `python -X utf8 retrieve.py hook` command — not through a `.ps1`.** |
 | `memory-retrieve.ps1` | — (not registered) | Compatibility shim only: pipes stdin to `retrieve.py hook` and passes stdout/exit code back. It carries no skip logic and no relevance gate of its own, so retrieval keeps a single entry point (2026-09-06). |
 | `flush-launch.ps1` | SessionEnd + PreCompact | Hands the transcript to a detached `flush.py` (daily summarisation) |
+| `flush-launch.ps1 -Tara` | `OdenaOS-Flush` scheduled task, every 8 h | Timed sweep: runs `flush.py --tara` in the foreground with the same backend env. Enumerates every transcript, skips the ones whose `{mtime, size}` has not moved since the last sweep, and lets the turn cursor drop the rest — an idle machine makes no model call (Master, 2026-09-07) |
+| `zamanli-flush-kur.ps1` | — (run once, by hand) | Idempotent registration of that task (`-Durum` prints it, `-Kaldir` removes it). Runs **only when the user is logged on** — the sweep needs the user's own Ollama service |
 | `session-end.ps1` | SessionEnd | Raises the `needs_reflection` flag when a session closes without the companion memory being updated |
 
 If registration has to change, merge into the user's existing settings rather
@@ -39,6 +41,13 @@ olmasın diye bilerek boş bırakılmıştır. Kayıt değişikliği gerekirse m
 kullanıcı ayarlarını koruyarak birleştir. `BEYIN_INVOKED_BY` ortam değişkeni set
 olan oturumlar (derleyicinin ve flush'ın kendi `claude -p` çağrıları) her
 kancadan ilk satırda çıkar.
+
+`SessionEnd` bir garanti değil, bir nezakettir: uygulama ya da makine
+öldürüldüğünde kanca hiç teslim edilmez (54. oturum, 19 saat kayıp). Bu yüzden
+`OdenaOS-Flush` zamanlanmış görevi 8 saatte bir `flush-launch.ps1 -Tara`
+çalıştırır; süpürge her transkripti gezer, damgası oynamayanı hiç açmaz, açtığı
+dosyada yeni tur yoksa modele gitmez. Kaydı `zamanli-flush-kur.ps1` yapar
+(kaydı orkestratör atar; script yalnız komutu üretir ve yazdırır).
 
 Getirmenin tek giriş noktası `scripts/retrieve.py hook`'tur ve canlı kayıt
 doğrudan o python çağrısıdır; `memory-retrieve.ps1` yalnızca eski kayıtlar için

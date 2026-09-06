@@ -167,8 +167,13 @@ shipped default on invalid input.
 
 `flush.maybe_trigger_compile()` runs after a successful flush:
 
-- returns immediately before 18:00 local time (`BEYIN_FAKE_HOUR` overrides the
-  hour for tests, `BEYIN_FAKE_NOW` the whole clock);
+- opens the clock gate at 18:00 local time **or**, earlier in the day, once a
+  *recorded successful* compile is at least `BEYIN_COMPILE_MIN_INTERVAL_HOURS`
+  (20 h) behind — a machine that is only awake during the day used to never
+  compile at all (Master, 2026-09-07). With no successful run on record the
+  evening rule alone applies, so a fresh install does not compile at 09:00.
+  `BEYIN_COMPILE_EVENING_HOUR` moves the evening hour, `BEYIN_FAKE_HOUR`
+  overrides the hour for tests and `BEYIN_FAKE_NOW` the whole clock;
 - compares each `daily/*.md` SHA-256 against `compile-state.json["ingested"]` and
   returns if nothing changed;
 - claims the day with `os.open(..., O_CREAT | O_EXCL)` on
@@ -182,7 +187,54 @@ shipped default on invalid input.
 Daily directories and files are checked for symlinks and non-regular types before
 any of this; a violation raises rather than proceeding.
 
-### 4.4 Model backend dispatch
+### 4.4 The timed sweep — `flush.py --tara`
+
+`SessionEnd` is a courtesy, not a guarantee: when the app or the machine is
+killed the hook is never delivered, and session 54 lost 19 hours that way. The
+sweep makes the write path independent of session end. Master's decision
+(2026-09-07): *"8 saatte bir flush çalışsın; son flush'tan sonra değişiklik
+yoksa çalışmasın."*
+
+`flush.py --tara` walks `~/.claude/projects/**/*.jsonl`
+(`BEYIN_CLAUDE_PROJECTS`, or `--projects-dir`, overrides the root), derives the
+session id from each filename, and runs **the same per-session path as the
+hook** — it builds the hook payload in memory (`session_id`,
+`transcript_path`, `cwd` from the transcript's first record, reason `tara`) and
+calls `_flush_once`. "Nothing changed → do nothing" is enforced by two cheap
+gates before any model is reachable:
+
+1. **File stamp.** `.state/flush-tara.json` keeps `son_tarama_ts` and a
+   `{mtime, size}` per transcript. An unchanged stamp is skipped without the
+   file being opened. `--since-hours` (default 8, `0` lifts it) additionally
+   ignores anything older than the window, which is what keeps the *first*
+   sweep from summarising the entire archive.
+2. **Turn cursor.** A transcript whose stamp moved but whose turns did not
+   (tool results, metadata) hits the existing `last_turn_index` cursor and
+   records `flush:no-new-turns` — no model call.
+
+A session already being flushed by a live hook holds its per-session lock; the
+sweep takes that lock **non-blocking**, records `flush:locked` and moves on
+rather than queueing. A transcript is stamped only on a settled outcome
+(`flush:ok`, `flush:no-new-turns`, `flush:no-turns`, `flush:bos`); a rejected
+summary, a failed append or a locked session leaves the stamp alone so the next
+sweep retries it. One bad transcript is counted, never fatal.
+
+The sweep closes by calling `maybe_trigger_compile()` once and appending one
+summary line to the delivery ledger:
+`{ts, reason:"tara", taranan, degisen, ozetlenen, atlanan, hatali}`. The same
+line is printed to stdout. `--dry-run` performs the walk and the cursor check
+and writes nothing at all — no lock file, no state, no ledger, no model — which
+is how the change was measured against the live archive before it shipped
+(1,749 transcripts, 17 changed in 8 h, 16 to summarise).
+
+Registration is `hooks/zamanli-flush-kur.ps1` (idempotent; `-Durum`, `-Kaldir`):
+a `OdenaOS-Flush` scheduled task starting at the next full hour, repeating every
+8 hours, running `flush-launch.ps1 -Tara` **only when the user is logged on** —
+the sweep needs the user's own Ollama service, which does not exist in a service
+session — start-when-available, 30-minute execution limit, no battery
+restrictions.
+
+### 4.5 Model backend dispatch
 
 Every model call in the system — flush summarize, ingest summarize, compile
 distill — goes through one function, `claude_runner.run_claude()`. That function
@@ -283,7 +335,7 @@ treats `.claude/**` as sensitive and blocks writes there even under
 `claude -p --model sonnet --safe-mode --tools Read,Write,Edit,Glob,Grep
 --permission-mode acceptEdits --allowedTools Read,Write,Edit,Glob,Grep`, working
 directory = the staging tree, 900 s timeout, prompt on stdin. This call always
-runs on the Claude backend; see §4.4 for why the optional Antigravity backend
+runs on the Claude backend; see §4.5 for why the optional Antigravity backend
 refuses it.
 
 The prompt (`COMPILE_PROMPT`) carries:
@@ -530,7 +582,7 @@ Three boundaries define what this gate is:
 ### 5.8 Per-call accounting — `.state/calls.jsonl`
 
 Nothing recorded what a model call cost or how long it took, which left the
-backend comparison in §4.4 — and the "is a local model worth it" question in
+backend comparison in §4.5 — and the "is a local model worth it" question in
 [docs/local-models.md](local-models.md) — with no data behind it.
 
 `claude_runner.run_claude()` now appends one line per call, because it is the

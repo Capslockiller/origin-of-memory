@@ -1,4 +1,4 @@
-param([string]$Reason = 'sessionend')
+param([string]$Reason = 'sessionend', [switch]$Tara)
 # Oturum ozetleme yerel modelde kosar (Master karari 2026-08-30); derleyici
 # backend'i flush.py icindeki pin ile 'claude' kalir (A4 muhru).
 $env:BEYIN_MODEL_BACKEND = 'ollama'
@@ -84,7 +84,32 @@ function Write-BeyinHookGirdi {
 # session-end.ps1 dot-sources only these shared interpreter/error helpers.
 if ($MyInvocation.InvocationName -eq '.') { return }
 if ($env:BEYIN_INVOKED_BY) { exit 0 }
+if ($Tara) { $Reason = 'tara' }
 Write-BeyinHookGirdi 'flush-launch' $Reason
+
+# Zamanli supurge (Master karari 2026-09-07): SessionEnd kancasi uygulama ya da
+# makine oldurulunce hic teslim edilmiyor (54. oturum, 19 saat kayip). Gorev
+# zamanlayicisi bu dali 8 saatte bir cagirir; stdin yoktur, cikis onplanda
+# beklenir ki zamanlanmis gorev calisma suresini dogru olcsun.
+if ($Tara) {
+  $scriptsDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'scripts'
+  $stateDir = Join-Path $scriptsDir '.state'
+  New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+  $python = Resolve-BeyinPython
+  if (-not $python) {
+    Write-BeyinHookError $stateDir 'flush-launch' 'python-3.12+-missing'
+    [Console]::Error.WriteLine('[beyin] Python 3.12+ bulunamadi; tara atlandi.')
+    exit 0
+  }
+  $flush = Join-Path $scriptsDir 'flush.py'
+  if (-not (Test-Path -LiteralPath $flush)) {
+    Write-BeyinHookError $stateDir 'flush-launch' 'flush-script-missing'
+    [Console]::Error.WriteLine('[beyin] flush.py bulunamadi; tara atlandi.')
+    exit 0
+  }
+  & $python.Path @($python.Prefix) -X utf8 $flush --tara
+  exit 0
+}
 
 $stdin = [Console]::In.ReadToEnd()
 if (-not $stdin) { exit 0 }
