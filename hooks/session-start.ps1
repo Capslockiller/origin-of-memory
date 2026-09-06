@@ -5,6 +5,29 @@
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 if ($env:BEYIN_INVOKED_BY) { exit 0 }
+# hook-girdi izi (2026-09-07, 56. oturum): kanca girdi mi sorusu icin, stdin okunmadan once.
+function Write-BeyinHookGirdi {
+  param([string]$HookName, [string]$Reason)
+  try {
+    $dir = Join-Path $PSScriptRoot '.state'
+    if (-not (Test-Path -LiteralPath $dir)) {
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    $path = Join-Path $dir 'hook-girdi.jsonl'
+    $var = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+    if ($var -and $var.Length -gt 524288) {
+      Move-Item -LiteralPath $path -Destination ($path + '.1') -Force -ErrorAction SilentlyContinue
+    }
+    $record = @{
+      ts = [DateTimeOffset]::Now.ToString('o')
+      hook = $HookName
+      reason = $Reason
+      pid = $PID
+    } | ConvertTo-Json -Compress
+    [System.IO.File]::AppendAllText($path, $record + "`n", [System.Text.UTF8Encoding]::new($false))
+  } catch {}
+}
+Write-BeyinHookGirdi 'session-start' 'start'
 $stdin = [Console]::In.ReadToEnd()
 $hook = $null
 if ($stdin) { try { $hook = $stdin | ConvertFrom-Json } catch {} }
