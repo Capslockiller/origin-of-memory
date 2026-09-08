@@ -85,7 +85,8 @@ def compose_context(
         rendered = []
         for note in notes:
             rendered.append(
-                f"### knowledge/concepts/{note['name']}.md\n\n{note['body']}"
+                f"### {note.get('label') or 'knowledge/concepts/' + note['name'] + '.md'}"
+                f"\n\n{note['body']}"
             )
         sections.append("## Relevant notes\n\n" + "\n\n".join(rendered))
     return "\n\n".join(sections) + "\n"
@@ -155,7 +156,14 @@ def _aday_notlar(question: str, vault_root: Path, limit: int) -> list[dict[str, 
         result = retrieve.hook_result(question, limit=limit, db_path=db_path)
     except (OSError, sqlite3.Error):
         return []
-    return [{"name": note["name"], "body": note["body"]} for note in result["notes"]]
+    return [
+        {
+            "name": note["name"],
+            "body": note["body"],
+            "label": note.get("label", f"knowledge/concepts/{note['name']}.md"),
+        }
+        for note in result["notes"]
+    ]
 
 
 def _manifest_satiri(manifest: dict[str, str]) -> str:
@@ -232,7 +240,7 @@ def _tam_govde(
     if root_map_text:
         parts.append("## Kök harita\n\n" + root_map_text)
     for note in notes:
-        parts.append(f"### knowledge/concepts/{note['name']}.md\n\n{note['body']}")
+        parts.append(f"### {note.get('label') or note['name']}\n\n{note['body']}")
     if not parts:
         parts.append(NO_MATCHES)
     return "\n\n".join(parts), list(notes)
@@ -270,7 +278,7 @@ def _butceli_govde(
                 remaining -= len(kisa_harita)
 
     for note in notes:
-        blok = f"### knowledge/concepts/{note['name']}.md\n\n{note['body']}"
+        blok = f"### {note.get('label') or note['name']}\n\n{note['body']}"
         ek_uzunluk = len(blok) + (2 if parts else 0)
         if ek_uzunluk <= remaining:
             parts.append(blok)
@@ -281,7 +289,7 @@ def _butceli_govde(
     if not parts and notes:
         ilk = notes[0]
         kirpilmis = ilk["body"][:ILK_NOT_KIRPMA]
-        blok = f"### knowledge/concepts/{ilk['name']}.md\n\n{kirpilmis}\n\n{KESILDI_ISARETI}"
+        blok = f"### {ilk.get('label') or ilk['name']}\n\n{kirpilmis}\n\n{KESILDI_ISARETI}"
         parts.append(blok)
         dahil.append({"name": ilk["name"], "body": kirpilmis})
         kesildi = True

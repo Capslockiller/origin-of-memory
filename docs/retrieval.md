@@ -18,6 +18,15 @@ gives the same order, every time, with no model in the loop.
 CREATE VIRTUAL TABLE notes USING fts5(name UNINDEXED, title, aliases, tags, body);
 ```
 
+<!-- yazan: codex · gpt-5.6-sol -->
+Rows now come from two sources. `knowledge/concepts/*.md` remains the distilled
+concept layer. `Last-Session.md`, `Threads.md`, and `Journal.md` in the vault
+directory matching `*850-Companion` form the human-written **hand layer**.
+Hand files split at `##`/`###`; sections over 1,500 characters split again at
+blank lines or bullets into passages of at most 1,200 characters. Heading paths
+stay in titles, wikilinks and bold lead words become tags, and each row carries
+`source`, `source_file`, `heading`, and `source_date` (`guncel`) provenance.
+
 `bm25(notes, ...)` weights are **positional over every column of the table,
 UNINDEXED ones included** — not just the indexed ones. `name` occupies the
 first position even though it can never match, so the call must pass five
@@ -41,6 +50,65 @@ The `hook` subcommand — the live `UserPromptSubmit` entry point — reads the
 same floor from `BEYIN_RETRIEVE_MIN_SCORE` (default `0.0`, i.e. off) and
 layers a separate relevance gate on top; see [§9](#9-the-hook-relevance-gate)
 below.
+
+### Scoped hand authority
+
+The strongest concept BM25 score is the reference for each query. A hand hit
+moves before concept hits only when its positive relevance is at least
+`BEYIN_EL_KATMANI_ORAN` times that reference (default `0.6`). Qualifying hand
+hits come first, concept hits fill the remaining result/body budget, and weaker
+hand hits remain after them. If no concept matches, hand hits rank normally.
+Each emitted hand passage starts with visible provenance:
+
+```text
+[el katmanı · Threads.md › Active › Speaking · 2026-09-18]
+```
+
+The 1,500-character per-result and 4,500-character total caps are unchanged.
+
+### Correction exclusion contract
+
+`Duzeltmeler.md` sits beside the hand files, and **its grammar is owned by
+`scripts/duzelt.py`**, not by this module. Retrieval hands the file's text to
+`duzelt.ayristir()` and reads the records back; it does not carry a second
+regex for the same blocks, because two parsers for one file is exactly how the
+compile side and the query side come to disagree about what a human wrote.
+
+A block is one header comment on a single line, then line-based fields:
+
+```text
+<!-- duzeltme kavram=<slug> durum=<bekliyor|uygulandi> ts=<ISO8601> kaynak=<...> -->
+iddia: <the sentence that is wrong>
+dogru: <the sentence that is right>
+```
+
+`gecersiz=evet` and `uygulandi_ts=<ISO8601>` are optional extra attributes, and
+`not:` is an optional extra field. The block ends at the first blank line.
+
+What retrieval does with it:
+
+- **`durum=bekliyor`** — the target concept is never emitted. Nobody has fixed
+  the note yet, so whatever it says about this subject is still wrong.
+- **`durum=uygulandi`** — the target is emitted again *only if the wrong
+  sentence really is gone*, tested with `duzelt.iddia_kalmis_mi()` against the
+  body about to be injected. "The compiler rewrote the file" is not proof, and
+  the index can also be older than the fix; when the claim is still there, or
+  the block records no `iddia:` to test, the note stays hidden. This is the
+  same accountability test lane B uses before it will close a correction, so a
+  note can never be readable here and unfixed there.
+- A concept with a non-empty `superseded_by:` in frontmatter is never emitted,
+  correction or no correction.
+- When a hidden note would have been a hit and the block has a `dogru:` line,
+  the first 300 characters of that line are injected in its place under a
+  `[düzeltme · <slug>]` header. With no `dogru:` line the hit simply
+  disappears — silence is better than a sentence known to be false.
+- Every exclusion is recorded as `exclude:correction` in the session ledger,
+  with the excluded slugs, so a surprising absence is answerable afterwards.
+
+The ledger file is found the same way the hand files are (the vault directory
+matching `*850-Companion`) rather than through `duzelt.yol()`, whose canonical
+emoji name would make the two layers read different directories on an install
+that named it differently.
 
 ## 2. A fused-ranking mode was tried and removed
 
@@ -88,6 +156,18 @@ session id never becomes a searchable token — otherwise a query for "claude"
 would match every note in the vault — and stripping them again at query time
 means an index built by an older version cannot leak one into a session either.
 
+<!-- yazan: claude · opus-5 -->
+The same holds for **retired** anchors. `compile.py --capa-temizle` moves ghost
+anchors out of the active block into one
+`<!-- gecmis-capalar: session:<id> ts:<stamp> source:<kind>; ... -->` line
+inside the note body. That line deliberately no longer matches
+`SESSION_ANCHOR` — being unmatched is what makes it inactive provenance — but
+that also meant nothing was removing it, so every retired session id, timestamp
+and source word sat in the indexed body as ordinary searchable text.
+`strip_session_anchors()` now removes that comment too, on its own line or
+inline, so retired history is readable in the file and invisible to both the
+index and the injected context.
+
 The daily log is untrusted data, so an anchor is never copied verbatim out of
 it. Both the writer and the carrier re-render through
 `retrieve.format_session_anchor()`, which strips anything that could close the
@@ -117,6 +197,12 @@ corpus to discover nothing. `compile.py` now records a manifest hash
 content digest of exactly the files `build_index` reads. Unchanged manifest,
 no rebuild. The manifest is recorded only after a *successful* rebuild, so a
 failed one retries rather than latching.
+
+Hand memory is decoupled from that compiler cycle. `retrieve.py yenile` deletes
+and recreates only hand rows in one SQLite transaction. A full `build` stores a
+nanosecond mtime stamp for each of the three Companion files in `meta`; the live
+`hook` compares those stamps before searching and runs the same hand-only
+refresh when a file changed, appeared, or disappeared. Concept rows stay intact.
 
 **The nightly trigger fired on a changed daily log alone.** It is now gated on
 both conditions:
@@ -157,6 +243,7 @@ a nightly no-op cannot grow the file without bound. Current reasons:
 | Variable | Default | Effect |
 |---|---|---|
 | `BEYIN_COMPILE_MIN_INTERVAL_HOURS` | `20` | Minimum gap after a successful compile; `0` disables the gate |
+| `BEYIN_EL_KATMANI_ORAN` | `0.6` | Minimum hand-hit/best-concept relevance ratio for hand-first authority |
 
 Every one of these degrades to its default on junk input rather than raising.
 These run inside hooks, and a hook that crashes takes the session's turn with it.
@@ -166,6 +253,12 @@ These run inside hooks, and a hook that crashes takes the session's turn with it
 ```powershell
 # Query
 python <vault>\.claude\scripts\retrieve.py query "kalıcı bellek"
+
+# Full concept + hand rebuild (`--vault-root` is equivalent)
+python <vault>\.claude\scripts\retrieve.py build --vault <vault>
+
+# Hand-only refresh (`refresh` is an English alias)
+python <vault>\.claude\scripts\retrieve.py yenile --vault <vault>
 
 # Latency (--bench lives under the `query` subcommand)
 python <vault>\.claude\scripts\retrieve.py query --bench
@@ -179,8 +272,8 @@ python <vault>\.claude\scripts\retrieve.py verify --vault-root <vault>
 `missing` and `extra` ids and exiting non-zero on any drift. It reads file names
 only, so a note with broken frontmatter shows up as missing instead of hiding
 the drift behind a parse error. The `beyin-doktor` skill runs it as check 14 and
-reports 🟢/🟡/🔴 from the same JSON; a `schema_version` below 2 is the 🟡 case,
-an index built before `source_date` existed.
+reports 🟢/🟡/🔴 from the same JSON. Schema version 3 is the first version with
+hand-layer provenance and concept supersession fields.
 
 ## 6. Measurements
 
@@ -215,6 +308,12 @@ hardware and different note sizes.
 
 `bm25` with `limit=3` stops consuming rows after three hits. Note bodies are
 fetched only for the notes actually returned.
+
+The Phase 1 acceptance fixture contains ten synthetic episodic questions across
+the three Companion files plus a stale concept contradicting the current
+Speaking entry. Measured top-3 recall is **10/10**: the current hand passage is
+first for the contradiction and the stale concept is second. This is a
+regression-fixture result, not a claim about a private corpus.
 
 ## 7. Known limits
 
@@ -276,15 +375,16 @@ at all.
 
 Two further skips run before the index is even opened: `skip:short` (under
 `HOOK_MIN_PROMPT_LEN`, 12 characters) and `skip:slash`, then `skip:intent`
-(`prompt_hafiza_ister()`) for a prompt that is a fenced code block or opens
-with a word naming a tool or an edit ("fix", "run", "commit", "kur", "derle",
-…) rather than a question.
+(`prompt_hafiza_ister()`). Intent rejects fenced code, prompts with fewer than
+three content words, JSON/hook envelopes, and input beginning with or made
+mostly from `<task-notification>`, `<system-reminder>`, `<command-name>`, or
+`<local-command-stdout>`. A first word naming a tool/edit also skips as before.
 
 What actually decides relevance is **token overlap, not the BM25 score**: on
 the measured corpus, memory-worthy top-1 hits scored 11.4–37.7 and junk hits
 scored 6.0–20.9 — ranges that overlap almost completely, so no single score
-threshold separates them. A candidate is kept only when at least
-`GATE_MIN_TOKEN_OVERLAP` (2) distinct content words of the prompt
+threshold separates them. A candidate is kept only when at least 2 distinct
+content words for a prompt of at most 6 content words, or 3 above that,
 (folded, stopword-filtered, at least `GATE_MIN_TOKEN_LEN` (4) characters)
 occur in the candidate's own title/aliases/tags — the body is excluded, since
 a 1,500-character note mentions a lot of words in passing — or its score
@@ -297,6 +397,12 @@ and keep the raw ranking; only the prompt-submit hook turns it on.
 |---|---|---|
 | `BEYIN_RETRIEVE_MIN_SCORE` | `0.0` | Floor on positive `-bm25()` relevance, applied before the gate |
 | `BEYIN_RETRIEVE_STRICT_SCORE` | `25.0` | A hit at or above this score is admitted without token overlap |
+| `BEYIN_EL_KATMANI_ORAN` | `0.6` | Hand-first threshold relative to the best concept score |
+
+`gate_tokens()` also drops path-shaped chunks (slashes, drive paths, `.py`,
+`.md`, `.ps1`), hexadecimal ids of seven or more characters, and one shared
+set of generic Turkish caller words. Hook paths and phrases such as “dur bana
+soru sorma” therefore cannot manufacture overlap.
 
 Every decision — `inject`, `skip:internal`, `skip:short`, `skip:slash`,
 `skip:intent`, `skip:score` (nothing scored at all), `skip:token-overlap`

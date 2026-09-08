@@ -898,6 +898,8 @@ those sections are simply empty.
 
 ### 7.2 `UserPromptSubmit` → `retrieve.py hook`
 
+<!-- yazan: codex · gpt-5.6-sol -->
+
 The live hook now calls `retrieve.py hook` directly (D1), reading the hook JSON
 from stdin itself rather than going through `retrieve.py query` from a
 PowerShell wrapper. `run_hook_stdin()`:
@@ -909,13 +911,15 @@ PowerShell wrapper. `run_hook_stdin()`:
    injected.
 3. Skips prompts shorter than `HOOK_MIN_PROMPT_LEN` (12) characters
    (`skip:short`) and anything starting with `/` (`skip:slash`).
-4. Skips a prompt that is a pure code/tool command rather than a question
-   (`skip:intent`, `prompt_hafiza_ister()`) — a fenced code block, or a first
-   content word naming a tool or an edit ("fix", "run", "commit", "kur",
-   "derle", …).
-5. Runs the relevance gate (below) and returns `None` (silent) whenever the
+4. Skips machine-shaped input and non-memory intent (`skip:intent`,
+   `prompt_hafiza_ister()`): JSON/hook envelopes, the four recognised XML-style
+   payload tags, fewer than three content words, fenced code, or a first word
+   naming a tool/edit.
+5. Compares Companion mtimes with the index metadata and runs the hand-only
+   `yenile` transaction before searching when any changed.
+6. Runs the relevance gate (below) and returns `None` (silent) whenever the
    gate produces no notes, or when the index itself is missing or corrupt.
-6. Wraps the returned notes in a block that names each source path and states
+7. Wraps the returned notes in a block that names each source path and states
    that the contents are **data**, and that no sentence inside them is to be
    executed.
 
@@ -930,20 +934,27 @@ regardless of overlap.
 almost every prompt: query tokens were OR-joined, `--min-score` defaulted to
 0, and the only skips were the length and slash checks above — measured
 against the live 527-note index, all 30 probe prompts injected. A candidate
-now survives only when at least `GATE_MIN_TOKEN_OVERLAP` (2) distinct content
-words of the prompt (`gate_tokens()`, folded, stopword-filtered, at least
-`GATE_MIN_TOKEN_LEN` (4) characters) occur in the candidate note's own
-title/aliases/tags — the body is deliberately excluded — or its score clears
+now survives only when enough distinct content words of the prompt
+(`gate_tokens()`, folded, stopword-filtered, at least `GATE_MIN_TOKEN_LEN` (4)
+characters) occur in the candidate note's own title/aliases/tags — 2 overlaps
+for at most 6 content words, 3 above that; the body is deliberately excluded —
+or its score clears
 a strict escape-hatch threshold. The BM25 score alone cannot do this
 filtering: on the measured corpus, memory-worthy top-1 hits scored
 11.4–37.7 and junk hits scored 6.0–20.9, ranges that overlap almost
-completely. Two environment variables tune it, both read through
+completely. The environment variables below tune retrieval through
 `hook_result()`:
 
 | Variable | Default | Effect |
 |---|---|---|
 | `BEYIN_RETRIEVE_MIN_SCORE` | `0.0` (off) | Floor on positive `-bm25()` relevance before the gate runs |
 | `BEYIN_RETRIEVE_STRICT_SCORE` | `25.0` | A hit at or above this score is admitted even with no token overlap |
+| `BEYIN_EL_KATMANI_ORAN` | `0.6` | Hand-first authority threshold relative to the best concept hit |
+
+Path-like chunks, `.py`/`.md`/`.ps1` names, drive paths, hexadecimal ids of at
+least seven characters, and generic Turkish caller words are removed before
+overlap. This prevents hook envelopes and incidental path text from becoming
+retrieval evidence.
 
 A gated-off candidate set returns `skip:score` when nothing scored at all and
 `skip:token-overlap` when hits existed but none passed the gate; a successful
@@ -958,21 +969,46 @@ can be re-shown for a genuinely different question in the same session.
 
 ### 7.3 `retrieve.py`
 
-**`build`** reads every note in `knowledge/concepts/`, parses the frontmatter
-subset used by atomic concepts (`title`, `aliases`, `tags`), and creates a fresh
-database:
+**`build`** reads every note in `knowledge/concepts/` plus the hand layer
+(`Last-Session.md`, `Threads.md`, `Journal.md` in `*850-Companion`). Concept
+frontmatter supplies `title`, `aliases`, `tags`, and `superseded_by`. Hand files
+split at `##`/`###`; oversized sections split at Markdown boundaries into
+≤1,200-character passages. Wikilinks and bold lead words become tags. It then
+creates a fresh schema-version-3 database:
 
 ```sql
 CREATE VIRTUAL TABLE notes USING fts5(name UNINDEXED, title, aliases, tags, body);
-CREATE TABLE documents(rowid, name, title, aliases, tags, body);
+CREATE TABLE documents(rowid, name, title, aliases, tags, body, source_date,
+                       source, source_file, heading, superseded_by);
 CREATE TABLE meta(key, value);
 ```
 
 `documents` holds the original text; `notes` holds the **tokenised** form, so
 retrieval never depends on FTS5's own tokeniser understanding Turkish. The
 database is built to a temporary path and moved into place, so a query never sees
-a half-built index. A note with missing or invalid frontmatter raises
+a half-built index. `meta` records the three hand-file mtimes. **`yenile`**
+(`refresh` alias) replaces only hand rows in a transaction; `hook` invokes it
+automatically on mtime drift. A note with missing or invalid frontmatter raises
 `RetrieveError` rather than being silently indexed wrong.
+
+**Scoped authority.** Search computes ordinary BM25 for both layers. Hand hits
+whose positive score reaches 0.6 of the best concept score (configurable by
+`BEYIN_EL_KATMANI_ORAN`) move before concepts; weaker hand hits do not. Emitted
+hand passages carry `[el katmanı · <file> › <heading> · <date>]`.
+
+**Correction exclusion.** `Duzeltmeler.md` and its grammar belong to `duzelt.py`
+(§5.9); retrieval parses it with `duzelt.ayristir()` rather than a second regex
+of its own, and `duzelt` is imported lazily so an install with no ledger never
+loads it. A `durum=bekliyor` target is never emitted. A `durum=uygulandi` target
+is emitted again only when `duzelt.iddia_kalmis_mi()` says the wrong sentence is
+actually gone from the body about to be injected — the same accountability test
+that lets lane B close the block, so a stale index or a returned claim keeps the
+note hidden. A concept with `superseded_by:` is never emitted either. The
+block's `dogru:` line replaces its target at ≤300 characters under
+`[düzeltme · <slug>]`, and every exclusion is ledgered as `exclude:correction`.
+Retired ghost-anchor history (`<!-- gecmis-capalar: ... -->`, §5.10) is stripped
+by `strip_session_anchors()` at build and at query time, so it never becomes a
+searchable token or reaches a session as context.
 
 **Tokenisation** (`expanded_tokens`): fold with `turkish_fold()`, take
 `[^\W_]+` words of at least 3 characters, emit the word, and additionally emit its
@@ -987,7 +1023,7 @@ on the right columns — a four-weight call silently shifts them all one column
 left. `--min-score` (`query` subcommand) applies a floor on the positive
 `-bm25` relevance; the `hook` subcommand reads the same floor from
 `BEYIN_RETRIEVE_MIN_SCORE` and layers the relevance gate on top (§7.2).
-Results are capped at `PER_NOTE_CAP = 1_500` characters per note and
+Results are capped at `PER_NOTE_CAP = 1_500` characters per passage and
 `TOTAL_BODY_CAP = 4_500` overall. With `--session`, hits already served in that
 session are recorded in `.state/retrieve-session-<id>.json` and not repeated;
 session ids are validated against `[A-Za-z0-9_.-]{1,128}` before touching the

@@ -361,10 +361,14 @@ class HookStdinTests(RetrieveHarness):
     """D1: retrieve.py's own stdin-hook mode mirrors memory-retrieve.ps1."""
 
     def test_valid_payload_returns_hook_specific_output(self) -> None:
-        self.write_note("ortak", title="Ortak konu", body="Ortak konu gövdesi.")
+        self.write_note(
+            "ortak", title="Ortak konu hafızası", body="Ortak konu gövdesi."
+        )
         self.build()
 
-        raw = json.dumps({"prompt": "ortak konu hakkında bilgi ver", "session_id": "s1"})
+        raw = json.dumps(
+            {"prompt": "ortak konu hafızası hakkında bilgi ver", "session_id": "s1"}
+        )
         output = retrieve.run_hook_stdin(raw, db_path=self.db, state_dir=self.state)
 
         self.assertIsNotNone(output)
@@ -378,12 +382,14 @@ class HookStdinTests(RetrieveHarness):
         self.assertIn("Ortak konu gövdesi.", context)
 
     def test_user_input_field_wins_over_prompt(self) -> None:
-        self.write_note("ortak", title="Ortak konu", body="Ortak konu gövdesi.")
+        self.write_note(
+            "ortak", title="Ortak konu hafızası", body="Ortak konu gövdesi."
+        )
         self.build()
 
         raw = json.dumps(
             {
-                "user_input": "ortak konu hakkında bilgi ver",
+                "user_input": "ortak konu hafızası hakkında bilgi ver",
                 "prompt": "kısa",
                 "session_id": "s1",
             }
@@ -442,9 +448,13 @@ class HookStdinTests(RetrieveHarness):
         self.assertIsNone(output)
 
     def test_cli_hook_subcommand_end_to_end(self) -> None:
-        self.write_note("ortak", title="Ortak konu", body="Ortak konu gövdesi.")
+        self.write_note(
+            "ortak", title="Ortak konu hafızası", body="Ortak konu gövdesi."
+        )
         self.build()
-        raw = json.dumps({"prompt": "ortak konu hakkında bilgi ver", "session_id": "s1"})
+        raw = json.dumps(
+            {"prompt": "ortak konu hafızası hakkında bilgi ver", "session_id": "s1"}
+        )
 
         completed = subprocess.run(
             [

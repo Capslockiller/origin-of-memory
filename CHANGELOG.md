@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+<!-- yazan: codex · gpt-5.6-sol -->
+- **Retrieval now searches the human-written Companion layer with scoped
+  authority (Phase 1 lane C).** `Last-Session.md`, `Threads.md`, and
+  `Journal.md` are heading-split into provenance-bearing passages and share the
+  FTS5 index with concepts (schema 3). Competitive hand hits rank first at the
+  configurable `BEYIN_EL_KATMANI_ORAN` ratio; concepts fill the remaining
+  4,500-character budget. `retrieve.py yenile` refreshes only hand rows, and
+  the live hook invokes it on Companion mtime drift. Retrieval also consumes
+  `Duzeltmeler.md` **through `duzelt.ayristir()`**, so the block grammar has one
+  owner: a pending target and a `superseded_by:` concept can never be emitted,
+  and an applied target comes back only when `duzelt.iddia_kalmis_mi()` confirms
+  the wrong sentence has actually left the body being injected. The block's
+  `dogru:` line is shown in its place, capped at 300 characters, and ledgered.
+  Caller filtering now rejects machine envelopes/JSON and prompts under three
+  content words, removes path/id/generic tokens, and requires three metadata
+  overlaps for prompts over six content words. The synthetic episodic
+  regression fixture scores 10/10 at top 3 and pins the hand correction ahead
+  of a contradicting stale concept.
+
+### Fixed
+
+<!-- yazan: claude · opus-5 -->
+- **Retired ghost-anchor history is no longer searchable text.**
+  `compile.py --capa-temizle` moves ghost anchors into a
+  `<!-- gecmis-capalar: ... -->` comment inside the concept body, which by
+  design no longer matches `SESSION_ANCHOR` — so nothing was stripping it, and
+  every retired session id, timestamp and source word stayed in the index as
+  ordinary tokens and could be injected as context.
+  `retrieve.strip_session_anchors()` now removes that comment too, on its own
+  line or inline, at build time and at query time.
+
 ### Fixed
 
 <!-- yazan: codex · gpt-5.6-sol -->
