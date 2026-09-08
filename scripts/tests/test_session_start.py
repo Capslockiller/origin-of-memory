@@ -70,12 +70,18 @@ class SessionStartProtectionTests(unittest.TestCase):
             self.assertGreater(context.rfind("[ZAMAN]"), context.rfind("[Bugunun Logu]"))
             self.assertIn("FRESHEST_DAILY_MARKER", context)
 
-            for _ in range(8):
-                second, duplicate = self._run(hook)
-                if duplicate["cift"]:
-                    break
-            else:
-                self.fail("could not produce a same-second duplicate hook start")
+            # A duplicate is "same stamp (to the second), same cwd" in the last
+            # 32 ledger lines.  Two PowerShell starts landing in one wall-clock
+            # second is a race the CI runner loses (1216-test run, 2026-09-08),
+            # so the ledger is seeded with a record for each of the next
+            # seconds instead — deterministic, and the hook is not touched.
+            ledger = hook.parent / ".state" / "enjeksiyon.jsonl"
+            seed_from = datetime.datetime.now().astimezone()
+            with ledger.open("a", encoding="utf-8") as handle:
+                for offset in range(0, 25):
+                    stamp = (seed_from + datetime.timedelta(seconds=offset)).isoformat(timespec="seconds")
+                    handle.write(json.dumps({"ts": stamp, "cwd": "C:\\fixture\\project", "session_id": "seed", "cift": False}) + "\n")
+            second, duplicate = self._run(hook)
             duplicate_context = second["hookSpecificOutput"]["additionalContext"]
             self.assertTrue(duplicate["cift"])
             self.assertEqual(duplicate["session_id"], "lane-d-session")
