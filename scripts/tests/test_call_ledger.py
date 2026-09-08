@@ -693,6 +693,13 @@ class RepositoryCallSiteTests(unittest.TestCase):
             parts = path.parts
             if "tests" in parts or ".git" in parts or "node_modules" in parts:
                 continue
+            # Untracked working copies inside the checkout (benchmark e2e vaults,
+            # gate copies, agent worktrees) carry older snapshots of these very
+            # scripts; they are not repository call sites. Skip any dot-directory
+            # component below the repo root (2026-09-08).
+            relative_parts = parts[len(self.REPO.parts):]
+            if any(part.startswith(".") for part in relative_parts[:-1]):
+                continue
             source = path.read_text(encoding="utf-8", errors="replace")
             for match in self.PATTERN.finditer(source):
                 line_start = source.rfind("\n", 0, match.start()) + 1
