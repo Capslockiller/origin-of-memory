@@ -80,7 +80,20 @@ SESSION_FILE_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 # `stage-compile` geçer) kullanıcı oturumu gibi özetlenirse günlük, hiç
 # yaşanmamış "oturumlar"la dolar (2026-09-08: 15 alt ajan + 2 derleyici).
 SWEEP_EXCLUDED_PATH_PARTS = frozenset({"subagents"})
-SWEEP_EXCLUDED_DIR_MARKERS = ("stage-compile",)
+SWEEP_EXCLUDED_DIR_MARKERS = (
+    "stage-compile",
+    # The mechanism's own `claude -p` calls (flush summariser, ingest,
+    # kaydet) run in temporary working dirs named `beyin-<component>-*`;
+    # with a Claude backend each such call leaves a transcript under
+    # projects/. Summarising it would summarise our own summariser — a
+    # self-feeding loop first seen 2026-09-08 19:30 after the Haiku switch.
+    "-beyin-flush-",
+    "-beyin-claude-",
+    "-beyin-ingest-",
+    "-beyin-kaydet-",
+    "-beyin-compile-",
+    "Temp-beyin-",
+)
 SWEEP_EXCLUDED_STEM_PREFIXES = ("agent-",)
 
 # Teslimat defteri (A5): her flush denemesi — başarı dahil — buraya bir satır

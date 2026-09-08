@@ -678,3 +678,25 @@ class SweepCompileTests(SweepHarness):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MechanismOwnTranscriptExclusionTests(unittest.TestCase):
+    """The summariser's own `claude -p` transcripts must never be swept.
+
+    Regression for 2026-09-08 19:30: after the flush backend moved to Claude,
+    every flush left a transcript under a `…Temp-beyin-flush-*` project dir and
+    the next sweep summarised the summariser.
+    """
+
+    def test_temp_beyin_dirs_are_excluded(self) -> None:
+        for name in (
+            "C--Users-musta-AppData-Local-Temp-beyin-flush-nplfaybr",
+            "C--Users-musta-AppData-Local-Temp-beyin-claude-abc123",
+            "C--Users-musta-AppData-Local-Temp-beyin-ingest-x1",
+        ):
+            path = Path("projects") / name / "7d0c6268-f4c4-4726-a4f8-73713664d103.jsonl"
+            self.assertTrue(flush._is_excluded_transcript(path), name)
+
+    def test_real_project_dirs_still_pass(self) -> None:
+        path = Path("projects") / "E--OdenaWorks" / "595ee48e-62dd-48ae-9bfa-ea769804a5f2.jsonl"
+        self.assertFalse(flush._is_excluded_transcript(path))
