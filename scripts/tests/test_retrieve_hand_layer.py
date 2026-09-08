@@ -505,5 +505,144 @@ class CallerAwareGateTests(RetrieveHarness):
         self.assertEqual(seven["notes"], [])
 
 
+class HandLayerBodyOverlapGateTests(RetrieveHarness):
+    """A sparse-metadata hand passage now passes the hook gate on body overlap.
+
+    ``Randevu güncellemesi`` mirrors the live-vault bug this fixes: the
+    heading and the bold-lead tag it derives ("Speaking") share only one
+    content word with the flagship question, so before this change the gate
+    (metadata-only, >=2 overlap) admitted nothing from the hand layer for it
+    -- only the CLI ``query`` ranking, never the hook, ever saw the passage.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.companion = self.root / "demo-850-Companion"
+        self.companion.mkdir()
+        self.write_note(
+            "speaking-plan",
+            title="Speaking sınavı tarih ücret",
+            tags=("speaking", "sınav", "ücret"),
+            body=(
+                "Speaking sınavının tarihi 2 Ağustos 2026 ve ücreti 40 euro "
+                "olarak kaydedilmişti."
+            ),
+        )
+        (self.companion / "Threads.md").write_text(
+            "## Active\n\n### Randevu güncellemesi\n\n"
+            "**Speaking:** Yeni randevu 18 Eylül 2026 için alındı; "
+            "kesin ücret 75 euro.\n",
+            encoding="utf-8",
+        )
+        self.build()
+
+    def test_sparse_metadata_hand_passage_injects_via_hook_ahead_of_concept(
+        self,
+    ) -> None:
+        # Metadata alone gives exactly one overlap ("speaking"): title
+        # "Threads › Active › Randevu güncellemesi" and tag "Speaking" share
+        # nothing else with the question's content words.
+        hand_hit = next(
+            hit
+            for hit in retrieve.search(
+                "Speaking için yeni tarih alındı mı ve ücret kaç euro?",
+                db_path=self.db,
+                vault_root=self.root,
+            )
+            if hit.source == retrieve.SOURCE_HAND
+        )
+        meta_only = retrieve.token_overlap(
+            retrieve.gate_tokens(
+                "Speaking için yeni tarih alındı mı ve ücret kaç euro?"
+            ),
+            retrieve.SearchHit(
+                hand_hit.name,
+                hand_hit.title,
+                "",
+                hand_hit.score,
+                aliases=hand_hit.aliases,
+                tags=hand_hit.tags,
+                source=hand_hit.source,
+            ),
+        )
+        self.assertEqual(meta_only, ("speaking",))
+
+        raw = json.dumps(
+            {
+                "prompt": "Speaking için yeni tarih alındı mı ve ücret kaç euro?",
+                "session_id": "flagship-question",
+            }
+        )
+        output = retrieve.run_hook_stdin(
+            raw, db_path=self.db, state_dir=self.state, environ={}
+        )
+
+        self.assertIsNotNone(output)
+        payload = json.loads(output)
+        context = payload["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("[el katmanı · Threads.md", context)
+        self.assertIn("18 Eylül 2026", context)
+        hand_index = context.index("--- Companion/Threads.md ---")
+        concept_index = context.index(
+            "--- knowledge/concepts/speaking-plan.md ---"
+        )
+        self.assertLess(
+            hand_index,
+            concept_index,
+            "the hand passage must precede the concept in the injected context",
+        )
+
+    def test_unrelated_prompts_still_inject_nothing(self) -> None:
+        junk_prompts = [
+            "Bugün akşam yemeği için ne pişirelim güzel bir tarif var mı",
+            "Kütüphaneden hangi kitapları geri götürmemiz gerekiyor bu hafta",
+            "Yarınki toplantı için sunum dosyasını kim hazırlayacak acaba",
+        ]
+        for index, prompt in enumerate(junk_prompts):
+            with self.subTest(prompt=prompt):
+                raw = json.dumps(
+                    {"prompt": prompt, "session_id": f"unrelated-{index}"}
+                )
+                self.assertIsNone(
+                    retrieve.run_hook_stdin(
+                        raw, db_path=self.db, state_dir=self.state, environ={}
+                    )
+                )
+
+    def test_concept_with_one_metadata_overlap_stays_ungated_by_body(self) -> None:
+        # A concept keeps the metadata-only rule even though this vault now
+        # also has a hand passage whose body richly overlaps most queries --
+        # the carve-out in token_overlap() must not leak past SOURCE_HAND.
+        self.write_note(
+            "bahce-konusu",
+            title="Bahçe konusu",
+            tags=("bahce",),
+            body=(
+                "Tarih ne zaman değişti, ayrıntılı bilgi burada yazıyor "
+                "konu hakkında çok şey var."
+            ),
+        )
+        self.build()
+
+        prompt = "Bahçe tarih ne zaman değişti"
+        tokens = retrieve.gate_tokens(prompt)
+        concept_hit = next(
+            hit
+            for hit in retrieve.search(prompt, db_path=self.db, vault_root=self.root)
+            if hit.name == "bahce-konusu"
+        )
+
+        self.assertEqual(retrieve.token_overlap(tokens, concept_hit), ("bahçe",))
+
+        raw = json.dumps({"prompt": prompt, "session_id": "one-overlap-concept"})
+        output = retrieve.run_hook_stdin(
+            raw, db_path=self.db, state_dir=self.state, environ={}
+        )
+
+        # Nothing else in the vault is about "bahçe" either, so the whole
+        # prompt is refused -- the one overlapping concept never gets in.
+        self.assertIsNone(output)
+
+
 if __name__ == "__main__":
     unittest.main()

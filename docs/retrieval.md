@@ -393,6 +393,18 @@ chosen above the strongest measured junk top-1 hit). The gate is **opt-in**:
 `context_pack.py` and the MCP `memory_search` tool ask an explicit question
 and keep the raw ranking; only the prompt-submit hook turns it on.
 
+Hand-layer passages (`source = el-katmani`) get one exception to the
+body-is-excluded rule, because their "title" is just a heading typed in the
+moment and their tags are only whatever wikilinks or bold lead words happen
+to appear in the section — a passage can squarely answer a question and still
+share a single content word with it. For `el-katmani` hits only, `token_overlap()`
+also runs the first `GATE_HAND_BODY_CHAR_CAP` (400) characters of the
+passage's own body through `gate_tokens()` (the same fold/stopword/path-chunk/
+length rules the query already went through) and folds the result into the
+metadata pool before counting overlap. Concept notes are unaffected — their
+title/aliases/tags are written on purpose at compile time, so they keep the
+metadata-only rule and the anti-junk behaviour it buys.
+
 | Variable | Default | Effect |
 |---|---|---|
 | `BEYIN_RETRIEVE_MIN_SCORE` | `0.0` | Floor on positive `-bm25()` relevance, applied before the gate |

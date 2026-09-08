@@ -159,6 +159,16 @@ HOOK_HEADER = (
 GATE_SCAN_LIMIT = 25
 GATE_MIN_TOKEN_OVERLAP = 2
 GATE_MIN_TOKEN_LEN = 4
+# Hand-layer passages are heading-scoped Companion sections (lane C): their
+# title is a heading typed in the moment ("Randevu güncellemesi") and their
+# tags come only from wikilinks/bold lead words, so a passage can be squarely
+# about the answer and still share just one metadata token with the question.
+# A concept note earns its title/tags deliberately at compile time and stays
+# on the metadata-only rule; for SOURCE_HAND only, the gate also looks at the
+# passage's own body -- capped, so one long passage cannot buy overlap on
+# every possible query -- run through the exact same gate_tokens() rules
+# (fold, stopword-drop, path-chunk-drop, length floor) the query itself uses.
+GATE_HAND_BODY_CHAR_CAP = 400
 # Floor, DELIBERATELY NON-BINDING by default.  The brief asked for a measured
 # score threshold that keeps >=90% of memory-worthy hits and rejects >=80% of
 # the rest; the measurement says no such value exists on this corpus (the two
@@ -439,12 +449,28 @@ def query_signature(value: str) -> str:
 def token_overlap(tokens: Sequence[str], hit: SearchHit) -> tuple[str, ...]:
     """Which of ``tokens`` occur in the hit's own title/aliases/tags.
 
-    The body is deliberately excluded: a 1,500-character note mentions a lot of
-    words in passing, and "the note is *about* this" is what we are testing.
-    Matching runs over the same F5-expanded token stream the index stores, so
-    Turkish inflection folds the same way it does at query time.
+    The body is deliberately excluded for concept notes: a 1,500-character
+    note mentions a lot of words in passing, and "the note is *about* this" is
+    what we are testing, and concept title/aliases/tags are written on purpose
+    at compile time to say what the note is about.
+
+    Hand-layer passages (``SOURCE_HAND``) are different: their "title" is a
+    heading typed in the moment and their tags are only whatever wikilinks or
+    bold lead words happened to appear, so a passage can answer the question
+    and still carry almost no metadata about it. For those, and only those,
+    the gate also credits overlap against the passage's own body -- capped to
+    ``GATE_HAND_BODY_CHAR_CAP`` characters and run through :func:`gate_tokens`
+    (the same fold/stopword/path-chunk/length rules the query tokens already
+    went through) before being folded into the metadata pool. Matching runs
+    over the same F5-expanded token stream the index stores, so Turkish
+    inflection folds the same way it does at query time.
     """
-    meta = set(expanded_tokens(" ".join((hit.title, hit.aliases, hit.tags))))
+    meta_text = " ".join((hit.title, hit.aliases, hit.tags))
+    if hit.source == SOURCE_HAND and hit.body:
+        body_tokens = gate_tokens(hit.body[:GATE_HAND_BODY_CHAR_CAP])
+        if body_tokens:
+            meta_text = f"{meta_text} {' '.join(body_tokens)}"
+    meta = set(expanded_tokens(meta_text))
     return tuple(
         token
         for token in tokens
