@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-08
+
 ### Added
 
 <!-- yazan: codex · gpt-5.6-sol -->
@@ -50,6 +52,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deliberately left at `HAND_PASSAGE_CAP = 1,200`: re-indexing at 600 or 800
   characters shifts corpus-wide BM25 statistics and lowers the ceiling to
   108 / 109.
+
+<!-- yazan: claude · opus-5 -->
+- **The hook's relevance gate now credits a hand passage's own body, and only
+  a hand passage's (Phase 1 follow-up I2).** `hook_result(...,
+  require_overlap=True)` admits a candidate only when two content words of the
+  prompt (three for long prompts) appear in the hit's own title, aliases or
+  tags. A Companion passage's "title" is a heading typed in the moment and its
+  tags are only whatever wikilinks or bold lead words happened to appear, so it
+  can answer the question squarely and still share one metadata token with it:
+  measured on the live vault, *"Speaking için yeni tarih alındı mı ve ücret kaç
+  euro?"* ranked the `Threads.md` passage first through the CLI but injected
+  only the stale concept note (40 euro, 2 Ağustos), because the passage's
+  metadata overlap was just `speaking`. For `source = el-katmani` hits only,
+  `token_overlap()` now folds the first `GATE_HAND_BODY_CHAR_CAP` (400)
+  characters of the passage body through the same `gate_tokens()`
+  fold/stopword/path-chunk/length rules the query already went through, and
+  adds the result to the metadata pool. The cap is the point: one long passage
+  cannot buy overlap on every possible query. Concept notes keep the
+  metadata-only rule, so lane C's anti-junk behaviour is unchanged
+  (`test_retrieve_hand_layer.py::HandLayerBodyOverlapGateTests`;
+  `docs/retrieval.md` documents the exception).
 
 ### Fixed
 
@@ -116,6 +139,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`hooks/zamanli-flush-kur.ps1` registered a repetition that could stop.**
   The trigger was left with `StopAtDurationEnd = True` and an empty duration;
   it is now set to `$false` explicitly, so the 8-hourly repetition never ends.
+
+<!-- yazan: claude · opus-5 -->
+- **The sweep was summarising its own summariser (Phase 1 follow-up I4).**
+  Moving the summariser backend to Claude gave every flush, ingest and `kaydet`
+  call a `claude -p` transcript of its own under `~/.claude/projects`, written
+  from the temporary working directory those calls run in
+  (`…Temp-beyin-flush-*`, `-beyin-claude-*`, `-beyin-ingest-*`,
+  `-beyin-kaydet-*`, `-beyin-compile-*`). The next sweep treated each one as a
+  human session: a self-feeding loop, first seen at 19:30 on 2026-09-08, which
+  produced 21 junk blocks before it was caught (they have been archived out of
+  the daily log). `SWEEP_EXCLUDED_DIR_MARKERS` now carries those markers
+  alongside `stage-compile`, so the mechanism's own transcripts never reach
+  `_flush_once` and are counted under `disarida` like the subagent ones
+  (`test_flush_tara.py::MechanismOwnTranscriptExclusionTests` pins both
+  directions: the temp dirs are excluded, a real project dir still passes).
+- **The call-site purpose scan failed on a working checkout.** The repo-wide
+  grep test that requires every `record_call` site to declare a `purpose` walked
+  untracked dot-directory copies of the tree living inside the checkout —
+  benchmark end-to-end vaults, gate copies, worktrees — and reported their
+  call sites as violations. It now skips untracked dot directories.
+
 ### Added
 
 <!-- yazan: claude · opus-5 -->
@@ -188,6 +232,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back only when its session id is still named in the rewritten note; the rest
   are dropped and counted as `info:capa-dusuruldu:<slug>:<n>` in health's skip
   list.
+
+<!-- yazan: claude · opus-5 -->
+- **The session summariser runs on Claude Haiku again; the local 8B is a manual
+  fallback (owner decision, 2026-09-08).** The 2026-08-30 decision to summarise
+  locally is reversed. Measured on the same sessions, the fabrication/junk rate
+  was 14.5% for the local 8B (`qwen3:8b`), 8.8% for the local 30B and 5.9% for
+  Haiku, and the flagged case that triggered the review failed 3/3 locally.
+  `hooks/flush-launch.ps1` therefore sets `BEYIN_MODEL_BACKEND = 'claude'`;
+  `flush.py` asks the claude backend for `model='haiku'` and `claude_runner`
+  resolves that to `claude-haiku-4-5-20251001`. The Ollama model, context and
+  timeout variables stay in the launcher untouched, so falling back offline or
+  with quota closed is a one-line edit — automatic fallback is Phase 1 work and
+  is **not** in this release. The compiler backend pin inside `flush.py` (the
+  A4 seal) is unaffected.
 
 ## [0.6.0] - 2026-09-07
 
