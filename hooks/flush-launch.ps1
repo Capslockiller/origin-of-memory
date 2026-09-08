@@ -1,7 +1,11 @@
 param([string]$Reason = 'sessionend', [switch]$Tara)
-# Oturum ozetleme yerel modelde kosar (Master karari 2026-08-30); derleyici
-# backend'i flush.py icindeki pin ile 'claude' kalir (A4 muhru).
-$env:BEYIN_MODEL_BACKEND = 'ollama'
+# Ozetleyici: Haiku birincil (Master karari 2026-09-08, 59. oturum - deney:
+# qwen3:8b %14,5 uydurma vs Haiku %5,9; bayrak vakasinda yerel 3/3 basarisiz).
+# 2026-08-30 'yerel' karari geri alindi. Yerel 8B yalnizca cevrimdisi/kota-kapali
+# YEDEK icin duruyor (otomatik dusme Faz 1 isi; simdilik yedek elle: backend'i
+# 'ollama' yap). flush.py claude backend'de model='haiku' ister; claude_runner
+# onu claude-haiku-4-5-20251001'e cozer.
+$env:BEYIN_MODEL_BACKEND = 'claude'
 $env:BEYIN_OLLAMA_MODEL_FAST = 'qwen3:8b'
 $env:BEYIN_OLLAMA_MODEL_SMART = 'qwen3:30b-a3b-instruct-2507-q4_K_M'
 $env:BEYIN_OLLAMA_NUM_CTX = '16384'   # Ollama sessiz 4k kirpmasi (44. oturum teshisi)
