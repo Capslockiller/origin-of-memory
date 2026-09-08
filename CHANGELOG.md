@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<!-- yazan: codex · gpt-5.6-sol -->
+- **SessionStart now protects current context under pressure.** Journal (then a
+  future Threads body) yields before the root-map and daily-tail floors; the
+  volatile time/quota suffix comes last; same-second, same-cwd duplicate starts
+  receive a minimal notice; and `enjeksiyon.jsonl` now records `session_id`,
+  `cwd`, `cift`, and the names of trimmed sections.
+
 <!-- yazan: claude · opus-5 -->
 - **The timed sweep lost memory three ways; all three are closed.** (1) The
   `--since-hours` window was applied to every transcript, so a sweep that ran

@@ -683,18 +683,32 @@ comparison, never `lower()`/`upper()`, which are locale-dependent.
 Resets `.state/session_start_time` and `.state/prompt_count`, then assembles the
 injection block:
 
-- **Fixed sections, never truncated:** a `needs_reflection` warning if one is
+- **Protected sections, never truncated:** a `needs_reflection` warning if one is
   pending (then deleted); up to 49 lines of `Last-Session.md` from `## Session:`
   to `## Previous`; up to 12 `### `/`**Status:**` lines from the `## Active`
-  region of `Threads.md`; the first 60 lines of `Kurallar.md`; the last `##` entry
-  of `Journal.md` plus nine lines.
-- **Elastic sections:** the first 150 lines of `knowledge/index.md` (the root map),
-  then the last 25 lines of today's `daily/` file, falling back to yesterday's.
+  region of `Threads.md`; and the first 60 lines of `Kurallar.md`.
+- **Elastic sections:** the last `##` entry of `Journal.md` plus nine lines (then
+  any future emitted Threads body), followed by the first 150 lines of
+  `knowledge/index.md` (the root map) and the last 25 lines of today's `daily/`
+  file, falling back to yesterday's.
 
-The total is capped at 16,000 characters. The knowledge block shrinks first, the
-daily tail second, and a truncated block is marked
-`[not: indeks kirpildi - beyin-doktor calistir]`. The companion directory is found
-by globbing `*850-Companion`; if it is absent those sections are simply empty.
+The total, including its measurement line, is capped at 16,000 characters.
+Journal and then a Threads body yield before the root map or daily tail. The root
+map retains at least `BEYIN_ACILIS_INDEKS_TABAN` characters (default `800`) and
+the daily tail retains at least `BEYIN_ACILIS_DAILY_TABAN` characters (default
+`800`) whenever that source is at least that long; an invalid value uses the
+default. A truncated section carries a `[not: ... kirpildi ...]` notice and the
+injection ledger records `kirpik` plus `kirpildi` section names.
+
+The reflection warning remains first. `[ZAMAN]` and the optional quota line are
+placed after the daily tail so the memory prefix is stable between otherwise
+identical starts. The ledger additionally records payload `session_id`, `cwd`,
+and `cift`. `BEYIN_INVOKED_BY` remains the deterministic helper-session guard.
+Desktop helper starts have no documented payload discriminator, so a cheap
+fallback treats a same-second record with the same non-empty `cwd` as duplicate:
+it injects only `[ZAMAN]` and a duplicate notice, and logs `cift: true`.
+The companion directory is found by globbing `*850-Companion`; if it is absent
+those sections are simply empty.
 
 ### 7.2 `UserPromptSubmit` → `retrieve.py hook`
 

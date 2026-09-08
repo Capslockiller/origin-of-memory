@@ -33,6 +33,8 @@ $hook = $null
 if ($stdin) { try { $hook = $stdin | ConvertFrom-Json } catch {} }
 $sid = if ($hook) { "$($hook.session_id)" } else { '' }
 if (($sid -notmatch '^[A-Za-z0-9_.-]{1,128}$') -or ($sid -eq '.') -or ($sid -eq '..')) { $sid = '' }
+$cwd = if ($hook -and $null -ne $hook.cwd) { "$($hook.cwd)" } else { '' }
+if ($cwd.Length -gt 2048) { $cwd = '' }
 $vault = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $memDir = (Get-ChildItem -Path $vault -Directory -Filter '*850-Companion' | Select-Object -First 1).FullName
 $state = Join-Path $PSScriptRoot '.state'
@@ -212,14 +214,6 @@ if (Test-Path $rf) {
   Remove-Item $rf -Force
 }
 
-# Fixed sections are never truncated; knowledge shrinks first, then daily tail.
-$fixed = ''
-if ($zaman)       { $fixed += "[ZAMAN]`n$zaman`n`n" }
-if ($reflection)  { $fixed += $reflection + "`n`n" }
-if ($lastSession) { $fixed += "[Memory - Last Session]`n$lastSession`n`n" }
-if ($threads)     { $fixed += "[Memory - Active Threads]`n$threads`n`n" }
-if ($kurallar)    { $fixed += "[Hafiza - Kurallar]`n$kurallar`n`n" }
-if ($journal)     { $fixed += "[Hafiza - Son Journal]`n$journal`n`n" }
 # Kota satiri (Master karari 2026-08-29): kota.py --hizli tek satir doner;
 # dusen/yavas kalirsa sessizce atlanir (fail-quiet: kota bilgisi kritik degil).
 $kota = ''
@@ -233,8 +227,6 @@ try {
   }
   Remove-Job $kotaJob -Force -ErrorAction SilentlyContinue
 } catch {}
-if ($kota) { $fixed += $kota }
-
 # Harcama defteri (Master karari 2026-08-29): arkada sessiz biriktirir,
 # enjeksiyonu bloklamaz; dusen kosum sonraki oturumda telafi olur.
 try {
@@ -245,35 +237,135 @@ try {
 
 $closing = "[Memory] Continuity is your job. Read '850-Companion/Core.md' for who you are to this user. Hafiza protokolu zorunludur."
 
+# A6-2: Current material is protected before the root map or daily tail shrink.
+# Floors name content characters, not section headers.  Invalid values fall back
+# to the safe default so a malformed environment cannot silently remove them.
+function Get-BeyinFloor {
+  param([string]$Name)
+  $raw = [Environment]::GetEnvironmentVariable($Name)
+  $value = 800
+  if ($raw -match '^\d{1,6}$') {
+    try { $value = [int]$raw } catch { $value = 800 }
+  }
+  return $value
+}
+function Limit-BeyinBlock {
+  param([string]$Block, [int]$Allow, [bool]$KeepTail, [string]$Name)
+  if ($Block.Length -le $Allow) { return $Block }
+  if ($Allow -le 0) { return '' }
+  $suffix = "`n[not: $Name kirpildi - beyin-doktor calistir]`n`n"
+  $keep = $Allow - $suffix.Length
+  if ($keep -le 0) { return '' }
+  if ($KeepTail) { return $suffix + $Block.Substring($Block.Length - $keep, $keep) }
+  return $Block.Substring(0, $keep) + $suffix
+}
+function Test-CiftAcilis {
+  param([string]$Path, [string]$Stamp, [string]$CurrentCwd)
+  if (-not $CurrentCwd -or -not (Test-Path -LiteralPath $Path)) { return $false }
+  try {
+    foreach ($line in @(Get-Content -LiteralPath $Path -Encoding UTF8 -Tail 32)) {
+      if (-not $line) { continue }
+      try {
+        $old = $line | ConvertFrom-Json
+        if ("$($old.ts)" -eq $Stamp -and "$($old.cwd)" -eq $CurrentCwd) { return $true }
+      } catch {}
+    }
+  } catch {}
+  return $false
+}
+
+$stamp = $now.ToString('yyyy-MM-ddTHH:mm:sszzz')
+$ledgerPath = Join-Path $state 'enjeksiyon.jsonl'
+# Desktop helper starts have no documented payload discriminator.  A same-second,
+# same-cwd record is nevertheless deterministic and cheap to suppress.
+if (Test-CiftAcilis $ledgerPath $stamp $cwd) {
+  $ciftCtx = "[ZAMAN]`n$zaman`n(cift acilis - tam paket ilk acilisa basildi)"
+  try {
+    $ciftRec = @{ ts = $stamp; cwd = $cwd; session_id = $sid; toplam = $ciftCtx.Length; sabit = 0; zaman = $zaman.Length; threads = 0; lastsession = 0; kurallar = 0; journal = 0; indeks = 0; daily = 0; kirpik = 0; kirpildi = @(); cift = $true } | ConvertTo-Json -Compress
+    Add-Content -Path $ledgerPath -Value $ciftRec -Encoding UTF8
+  } catch {}
+  $out = @{ hookSpecificOutput = @{ hookEventName = 'SessionStart'; additionalContext = $ciftCtx } } | ConvertTo-Json -Compress -Depth 4
+  [Console]::Out.WriteLine($out)
+  exit 0
+}
+
+$dailyFloor = Get-BeyinFloor 'BEYIN_ACILIS_DAILY_TABAN'
+$indexFloor = Get-BeyinFloor 'BEYIN_ACILIS_INDEKS_TABAN'
 $cap = 16000
-$note = "`n[not: indeks kirpildi - beyin-doktor calistir]"
-$budget = $cap - $fixed.Length - $closing.Length - 80
-if ($budget -lt 0) { $budget = 0 }
+$fixed = ''
+# Reflection stays first when present.  Time and quota deliberately come last:
+# their values are volatile, while the prefix is stable across identical starts.
+if ($reflection)  { $fixed += $reflection + "`n`n" }
+if ($lastSession) { $fixed += "[Memory - Last Session]`n$lastSession`n`n" }
+if ($threads)     { $fixed += "[Memory - Active Threads]`n$threads`n`n" }
+if ($kurallar)    { $fixed += "[Hafiza - Kurallar]`n$kurallar`n`n" }
+$jBlock = ''
+if ($journal) { $jBlock = "[Hafiza - Son Journal]`n$journal`n`n" }
+# The current reader only emits thread headings/status lines; they are protected.
+# Keep a separate elastic block so any future emitted thread body follows Journal.
+$tBodyBlock = ''
 $kBlock = ''
 if ($knowledge) { $kBlock = "[Bilgi Tabani - Indeks]`n$knowledge`n`n" }
 $dBlock = ''
 if ($dailyTail) { $dBlock = "[Bugunun Logu]`n$dailyTail`n`n" }
 $kirpik = 0
-if (($kBlock.Length + $dBlock.Length) -gt $budget) {
-  $kirpik = 1
-  $kAllow = $budget - $dBlock.Length
-  if ($kAllow -lt 0) { $kAllow = 0 }
-  if ($kBlock.Length -gt $kAllow) {
-    if ($kAllow -gt 40) { $kBlock = $kBlock.Substring(0, $kAllow) + $note + "`n`n" } else { $kBlock = '' }
+$kirpildi = @()
+$zamanBlock = if ($zaman) { "[ZAMAN]`n$zaman`n`n" } else { '' }
+$kotaBlock = $kota
+
+# Reserve enough room for the measurement line, then trim elastic content in
+# priority order.  Journal and a future Threads body yield before protected
+# current material.  The final loop accounts for the exact measurement length.
+$reserve = 512
+$available = $cap - $fixed.Length - $closing.Length - $zamanBlock.Length - $kotaBlock.Length - $reserve
+if ($available -lt 0) { $available = 0 }
+foreach ($item in @('journal', 'threads')) {
+  $totalElastic = $jBlock.Length + $tBodyBlock.Length + $kBlock.Length + $dBlock.Length
+  if ($totalElastic -le $available) { break }
+  if ($item -eq 'journal' -and $jBlock) {
+    $allow = [Math]::Max(0, $jBlock.Length - ($totalElastic - $available))
+    $jBlock = Limit-BeyinBlock $jBlock $allow $false 'journal'
+    $kirpik = 1; $kirpildi += 'journal'
   }
-  if (($kBlock.Length + $dBlock.Length) -gt $budget) {
-    $dAllow = $budget - $kBlock.Length
-    if ($dAllow -gt 40) { $dBlock = $dBlock.Substring(0, $dAllow) + $note + "`n`n" } else { $dBlock = '' }
+  if ($item -eq 'threads' -and $tBodyBlock) {
+    $totalElastic = $jBlock.Length + $tBodyBlock.Length + $kBlock.Length + $dBlock.Length
+    $allow = [Math]::Max(0, $tBodyBlock.Length - ($totalElastic - $available))
+    $tBodyBlock = Limit-BeyinBlock $tBodyBlock $allow $false 'threads'
+    $kirpik = 1; $kirpildi += 'threads'
+  }
+}
+foreach ($item in @('indeks', 'daily')) {
+  $totalElastic = $jBlock.Length + $tBodyBlock.Length + $kBlock.Length + $dBlock.Length
+  if ($totalElastic -le $available) { break }
+  if ($item -eq 'indeks' -and $kBlock) {
+    $minimum = [Math]::Min($kBlock.Length, $indexFloor + "[Bilgi Tabani - Indeks]`n`n".Length + "`n[not: indeks kirpildi - beyin-doktor calistir]`n`n".Length)
+    $allow = [Math]::Max($minimum, $kBlock.Length - ($totalElastic - $available))
+    $kBlock = Limit-BeyinBlock $kBlock $allow $false 'indeks'
+    $kirpik = 1; $kirpildi += 'indeks'
+  }
+  if ($item -eq 'daily' -and $dBlock) {
+    $totalElastic = $jBlock.Length + $tBodyBlock.Length + $kBlock.Length + $dBlock.Length
+    $minimum = [Math]::Min($dBlock.Length, $dailyFloor + "[Bugunun Logu]`n`n".Length + "`n[not: daily kirpildi - beyin-doktor calistir]`n`n".Length)
+    $allow = [Math]::Max($minimum, $dBlock.Length - ($totalElastic - $available))
+    $dBlock = Limit-BeyinBlock $dBlock $allow $true 'daily'
+    $kirpik = 1; $kirpildi += 'daily'
   }
 }
 
 # Olcum satiri (M2): enjeksiyonun bilesimi hem baglama hem .state/enjeksiyon.jsonl'e yazilir.
-$ctx = $fixed + $kBlock + $dBlock + $closing
-$olcum = "[enjeksiyon] toplam=" + $ctx.Length + " sabit=" + $fixed.Length + " threads=" + $threads.Length + " lastsession=" + $lastSession.Length + " kurallar=" + $kurallar.Length + " indeks=" + $kBlock.Length + " daily=" + $dBlock.Length + " kirpik=$kirpik"
-$ctx = $ctx + "`n" + $olcum
+$ctxBase = $fixed + $jBlock + $tBodyBlock + $kBlock + $dBlock + $closing
+$olcum = "[enjeksiyon] toplam=" + $ctxBase.Length + " sabit=" + $fixed.Length + " threads=" + $threads.Length + " lastsession=" + $lastSession.Length + " kurallar=" + $kurallar.Length + " indeks=" + $kBlock.Length + " daily=" + $dBlock.Length + " kirpik=$kirpik"
+$ctx = $ctxBase + "`n" + $olcum + "`n" + $zamanBlock + $kotaBlock
+while ($ctx.Length -gt $cap -and ($jBlock -or $tBodyBlock)) {
+  if ($jBlock) { $jBlock = ''; if ($kirpildi -notcontains 'journal') { $kirpildi += 'journal' }; $kirpik = 1 }
+  elseif ($tBodyBlock) { $tBodyBlock = ''; if ($kirpildi -notcontains 'threads') { $kirpildi += 'threads' }; $kirpik = 1 }
+  $ctxBase = $fixed + $jBlock + $tBodyBlock + $kBlock + $dBlock + $closing
+  $olcum = "[enjeksiyon] toplam=" + $ctxBase.Length + " sabit=" + $fixed.Length + " threads=" + $threads.Length + " lastsession=" + $lastSession.Length + " kurallar=" + $kurallar.Length + " indeks=" + $kBlock.Length + " daily=" + $dBlock.Length + " kirpik=$kirpik"
+  $ctx = $ctxBase + "`n" + $olcum + "`n" + $zamanBlock + $kotaBlock
+}
 try {
-  $rec = @{ ts = $now.ToString('yyyy-MM-ddTHH:mm:sszzz'); toplam = $ctx.Length; sabit = $fixed.Length; zaman = $zaman.Length; threads = $threads.Length; lastsession = $lastSession.Length; kurallar = $kurallar.Length; journal = $journal.Length; indeks = $kBlock.Length; daily = $dBlock.Length; kirpik = $kirpik } | ConvertTo-Json -Compress
-  Add-Content -Path (Join-Path $state 'enjeksiyon.jsonl') -Value $rec -Encoding UTF8
+  $rec = @{ ts = $stamp; cwd = $cwd; session_id = $sid; toplam = $ctx.Length; sabit = $fixed.Length; zaman = $zaman.Length; threads = $threads.Length; lastsession = $lastSession.Length; kurallar = $kurallar.Length; journal = $jBlock.Length; indeks = $kBlock.Length; daily = $dBlock.Length; kirpik = $kirpik; kirpildi = @($kirpildi); cift = $false } | ConvertTo-Json -Compress
+  Add-Content -Path $ledgerPath -Value $rec -Encoding UTF8
 } catch {}
 
 $out = @{ hookSpecificOutput = @{ hookEventName = 'SessionStart'; additionalContext = $ctx } } | ConvertTo-Json -Compress -Depth 4
