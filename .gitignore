@@ -1,20 +1,22 @@
-.state/
-.stage/
-notes.db
-*.lock
+# .NET
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+publish/
+
+# bench (Python measurement tools, not shipped)
 __pycache__/
 *.pyc
 .pytest_cache/
-.import/
+bench/.data/
+bench/.versions/
+bench/.out/
+bench/.out-*/
+bench/.e2e/
 
-# Inno Setup build output - a 2 MB binary does not belong in the repo.
-installer/output/
-
-# Compiled launcher - a binary does not belong in the repo.
-LocalBrain.exe
-
-tools/benchmark/.data/
-tools/benchmark/.versions/
-tools/benchmark/.out/
-tools/benchmark/.out-*/
-tools/benchmark/.e2e/
+# local state never belongs in the repo
+.state/
+*.db
+*.lock

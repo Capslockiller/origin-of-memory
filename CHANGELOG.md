@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+<!-- yazan: claude · fable-5.1 -->
+- **`main` is now the 2.0 line (owner decision 2026-09-09).** The v0 Python/PowerShell
+  mechanism moved unchanged to branch `v0` (last release v0.7.0, tag kept). `main` carries
+  the C# solution skeleton (`src/Oom`, `tests/Oom.Tests`, .NET 9 until the .NET 10 LTS SDK
+  is installed), the gold-set benchmark tools moved from `tools/benchmark/` to `bench/`,
+  and the release history. Everything else is rebuilt from the 2.0 spec; v0 code is read,
+  never copied.
+
 ## [0.7.0] - 2026-09-08
 
 ### Added
