@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+<!-- yazan: claude · opus-5 -->
+- **The timed sweep lost memory three ways; all three are closed.** (1) The
+  `--since-hours` window was applied to every transcript, so a sweep that ran
+  late skipped sessions it had never seen — the age cutoff now applies only to
+  a transcript that already carries a stamp in `.state/flush-tara.json`, and
+  one with no stamp is flushed however old it is (the per-session turn cursor
+  still prevents a second summary). (2) Every `.jsonl` under the projects root
+  was treated as a session, so 15 subagent transcripts
+  (`<session-id>/subagents/agent-*.jsonl`) and 2 of the pipeline's own
+  `claude -p` transcripts (project directory name contains `stage-compile`)
+  were summarised into the daily log as if a person had had those
+  conversations; they are now counted under a new `disarida` counter — in the
+  ledger line and the printed summary — and never reach `_flush_once`.
+  (3) Sweep entries were stamped with the sweep's own clock, which put a
+  6 September 15:25 session into `daily/2026-09-07.md` at "02:00"; the sweep
+  path now derives the event time from the transcript's last turn, falling back
+  to the file stamp and only then to the sweep moment. The hook path
+  (`SessionEnd`, `PreCompact`) keeps using the hook's event time.
+- **`hooks/zamanli-flush-kur.ps1` registered a repetition that could stop.**
+  The trigger was left with `StopAtDurationEnd = True` and an empty duration;
+  it is now set to `$false` explicitly, so the 8-hourly repetition never ends.
+
 ## [0.6.0] - 2026-09-07
 
 ### Added

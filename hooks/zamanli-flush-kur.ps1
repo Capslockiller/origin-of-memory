@@ -103,6 +103,12 @@ $start = $now.Date.AddHours($now.Hour + 1)
 $trigger = New-ScheduledTaskTrigger -Once -At $start `
   -RepetitionInterval ([TimeSpan]::FromHours(8))
 
+# Omitting the duration leaves StopAtDurationEnd = True with an empty duration,
+# which some Windows builds read as "stop at the end of a zero-length window" -
+# the repetition then never fires again. Say it explicitly instead; the
+# property lives on the CIM trigger object and is settable on PS 5.1.
+if ($trigger.Repetition) { $trigger.Repetition.StopAtDurationEnd = $false }
+
 # Logged-on only: the sweep needs the user's Ollama and CLI. Interactive means
 # no stored password and no service-session surprises.
 $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) `

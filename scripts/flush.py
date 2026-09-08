@@ -59,6 +59,15 @@ PROJECTS_DIR_ENV = "BEYIN_CLAUDE_PROJECTS"
 DEFAULT_SWEEP_SINCE_HOURS = 8.0
 SESSION_FILE_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 
+# Süpürge dışı transkriptler: `projects` altındaki her `.jsonl` bir oturum
+# değildir. Alt ajanların `<oturum>/subagents/agent-*.jsonl` dosyaları ve
+# derleyicinin kendi `claude -p` transkriptleri (proje dizini adında
+# `stage-compile` geçer) kullanıcı oturumu gibi özetlenirse günlük, hiç
+# yaşanmamış "oturumlar"la dolar (2026-09-08: 15 alt ajan + 2 derleyici).
+SWEEP_EXCLUDED_PATH_PARTS = frozenset({"subagents"})
+SWEEP_EXCLUDED_DIR_MARKERS = ("stage-compile",)
+SWEEP_EXCLUDED_STEM_PREFIXES = ("agent-",)
+
 # Teslimat defteri (A5): her flush denemesi — başarı dahil — buraya bir satır
 # bırakır. `health.json` yalnız son durumu taşır; defter ise "bu oturum hiç
 # yakalanmadı" sorusunu geçmişe dönük cevaplayabilen tek kayıttır.
@@ -1319,6 +1328,83 @@ def _cwd_from_transcript(path: Path) -> str | None:
     return None
 
 
+def _is_excluded_transcript(path: Path) -> bool:
+    """True for transcripts that are not a user session at all.
+
+    Subagent transcripts live under ``<session-id>/subagents/agent-*.jsonl``
+    and the pipeline's own ``claude -p`` calls land in a project directory
+    whose name carries ``stage-compile``. Both look exactly like a session to
+    a filename-based walk, and both were summarised into the daily log.
+    """
+    parts = path.parts
+    if any(part in SWEEP_EXCLUDED_PATH_PARTS for part in parts):
+        return True
+    if any(path.stem.startswith(prefix) for prefix in SWEEP_EXCLUDED_STEM_PREFIXES):
+        return True
+    return any(
+        marker in part
+        for part in parts[:-1]
+        for marker in SWEEP_EXCLUDED_DIR_MARKERS
+    )
+
+
+def _parse_transcript_timestamp(value: Any) -> dt.datetime | None:
+    """ISO 8601 (``...Z`` included) → an aware datetime in local time."""
+    if not isinstance(value, str) or not value:
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed.astimezone()
+
+
+def _transcript_event_time(
+    path: Path,
+    fallback: dt.datetime,
+    *,
+    mtime: float | None = None,
+) -> dt.datetime:
+    """When the session this transcript belongs to actually happened.
+
+    A sweep runs hours after the fact, so stamping its entries with the sweep
+    moment put a 15:25 session into the next day's log at 02:00. The last turn
+    the transcript carries is the session's own clock; the file stamp, then the
+    sweep moment, are only fallbacks.
+    """
+    latest: dt.datetime | None = None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                if not raw_line.strip():
+                    continue
+                try:
+                    record = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                moment = _parse_transcript_timestamp(record.get("timestamp"))
+                if moment is not None and (latest is None or moment > latest):
+                    latest = moment
+    except (OSError, ValueError):
+        latest = None
+    if latest is not None:
+        return latest
+    if mtime is None:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return fallback
+    try:
+        return dt.datetime.fromtimestamp(mtime).astimezone()
+    except (OSError, OverflowError, ValueError):
+        return fallback
+
+
 def record_sweep(
     state_dir: Path,
     counts: dict[str, int],
@@ -1337,6 +1423,7 @@ def record_sweep(
             "degisen": int(counts.get("degisen", 0)),
             "ozetlenen": int(counts.get("ozetlenen", 0)),
             "atlanan": int(counts.get("atlanan", 0)),
+            "disarida": int(counts.get("disarida", 0)),
             "hatali": int(counts.get("hatali", 0)),
         }
         state_dir = Path(state_dir)
@@ -1380,6 +1467,7 @@ def sweep(
         "degisen": 0,
         "ozetlenen": 0,
         "atlanan": 0,
+        "disarida": 0,
         "hatali": 0,
     }
     cutoff = (
@@ -1404,14 +1492,25 @@ def sweep(
         session_id = path.stem
         if not SESSION_FILE_NAME.fullmatch(session_id):
             continue
+        if _is_excluded_transcript(path):
+            counts["disarida"] += 1
+            continue
         counts["taranan"] += 1
         key = str(path)
         stamp = {"mtime": details.st_mtime, "size": details.st_size}
         previous = known.get(key)
-        if cutoff is not None and details.st_mtime < cutoff:
+        # The age window exists to stop the FIRST sweep from summarising the
+        # whole archive, not to abandon sessions. A transcript this sweep has
+        # never seen is flushed however old it is — a sweep that ran late used
+        # to drop the sessions it was supposed to rescue (2026-09-08). The
+        # per-session turn cursor still prevents a second summary.
+        if (
+            cutoff is not None
+            and previous is not None
+            and details.st_mtime < cutoff
+        ):
             counts["atlanan"] += 1
-            if previous is not None:
-                fresh[key] = previous
+            fresh[key] = previous
             continue
         if not _fingerprint_changed(previous, details.st_mtime, details.st_size):
             counts["atlanan"] += 1
@@ -1427,11 +1526,16 @@ def sweep(
         cwd = _cwd_from_transcript(path)
         if cwd:
             payload["cwd"] = cwd
+        # The hook path keeps the hook's own event time; the sweep runs long
+        # after the session ended, so its entries are dated by the session.
+        session_time = _transcript_event_time(
+            path, event_time, mtime=details.st_mtime
+        )
         outcome: dict[str, Any] = {}
         try:
             _flush_once(
                 argparse.Namespace(hook_input=None, reason=SWEEP_REASON),
-                event_time,
+                session_time,
                 hook_input=payload,
                 lock_blocking=False,
                 dry_run=dry_run,
@@ -1474,7 +1578,8 @@ def sweep(
 
     print(
         "[beyin] tara: taranan={taranan} degisen={degisen} "
-        "ozetlenen={ozetlenen} atlanan={atlanan} hatali={hatali}".format(**counts)
+        "ozetlenen={ozetlenen} atlanan={atlanan} disarida={disarida} "
+        "hatali={hatali}".format(**counts)
         + (" (kuru)" if dry_run else "")
     )
     return counts

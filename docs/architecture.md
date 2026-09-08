@@ -200,14 +200,22 @@ yoksa çalışmasın."*
 session id from each filename, and runs **the same per-session path as the
 hook** — it builds the hook payload in memory (`session_id`,
 `transcript_path`, `cwd` from the transcript's first record, reason `tara`) and
-calls `_flush_once`. "Nothing changed → do nothing" is enforced by two cheap
-gates before any model is reachable:
+calls `_flush_once`. Not every `.jsonl` under that root is a session: subagent
+transcripts (`<session-id>/subagents/agent-*.jsonl`) and the pipeline's own
+`claude -p` transcripts (project directory name contains `stage-compile`) are
+counted as `disarida` and never flushed. The entry is dated by the transcript's
+last turn — the file stamp, then the sweep moment, are only fallbacks — so a
+sweep hours later still writes the session into its own day and hour.
+"Nothing changed → do nothing" is enforced by two cheap gates before any model
+is reachable:
 
 1. **File stamp.** `.state/flush-tara.json` keeps `son_tarama_ts` and a
    `{mtime, size}` per transcript. An unchanged stamp is skipped without the
    file being opened. `--since-hours` (default 8, `0` lifts it) additionally
-   ignores anything older than the window, which is what keeps the *first*
-   sweep from summarising the entire archive.
+   ignores anything older than the window — but **only for a transcript that
+   already has a stamp**: one the sweep has never seen is flushed however old
+   it is, so a sweep that runs late cannot drop the sessions it exists to
+   rescue. The window still keeps a *re-scan* of the archive cheap.
 2. **Turn cursor.** A transcript whose stamp moved but whose turns did not
    (tool results, metadata) hits the existing `last_turn_index` cursor and
    records `flush:no-new-turns` — no model call.
@@ -221,7 +229,7 @@ sweep retries it. One bad transcript is counted, never fatal.
 
 The sweep closes by calling `maybe_trigger_compile()` once and appending one
 summary line to the delivery ledger:
-`{ts, reason:"tara", taranan, degisen, ozetlenen, atlanan, hatali}`. The same
+`{ts, reason:"tara", taranan, degisen, ozetlenen, atlanan, disarida, hatali}`. The same
 line is printed to stdout. `--dry-run` performs the walk and the cursor check
 and writes nothing at all — no lock file, no state, no ledger, no model — which
 is how the change was measured against the live archive before it shipped

@@ -42,7 +42,19 @@ class SweepHarness(unittest.TestCase):
         self.calls: list[str] = []
 
     # --- fikstürler ---------------------------------------------------
-    def _write_turns(self, count: int, *, offset: int = 0) -> None:
+    def _write_turns(
+        self,
+        count: int,
+        *,
+        offset: int = 0,
+        when: dt.datetime = MOMENT,
+        path: Path | None = None,
+    ) -> None:
+        stamp = (
+            when.astimezone(dt.timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
         lines = []
         for index in range(offset, offset + count):
             role = "user" if index % 2 == 0 else "assistant"
@@ -50,11 +62,13 @@ class SweepHarness(unittest.TestCase):
                 json.dumps(
                     {
                         "cwd": "E:\\Proje",
+                        "timestamp": stamp,
                         "message": {"role": role, "content": f"tur {index}"},
                     }
                 )
             )
-        with self.transcript.open("a", encoding="utf-8") as handle:
+        target = path or self.transcript
+        with target.open("a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
 
     def _append_noise(self) -> None:
@@ -129,8 +143,14 @@ class SweepHarness(unittest.TestCase):
             return {}
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def _daily_blocks(self) -> list[str]:
-        daily = self.root / "daily" / f"{MOMENT.strftime('%Y-%m-%d')}.md"
+    def _daily_path(self, when: dt.datetime = MOMENT) -> Path:
+        # Süpürge artık girdiyi oturumun son turuna göre tarihler; beklenen
+        # dosya yerel saate göre seçilir (makinenin saat dilimi ne olursa).
+        local = when.astimezone()
+        return self.root / "daily" / f"{local.strftime('%Y-%m-%d')}.md"
+
+    def _daily_blocks(self, when: dt.datetime = MOMENT) -> list[str]:
+        daily = self._daily_path(when)
         if not daily.exists():
             return []
         return daily.read_text(encoding="utf-8").split("### Oturum ")[1:]
@@ -229,8 +249,10 @@ class SweepTests(SweepHarness):
         # Kilitli oturumun damgası yazılmaz: bir sonraki süpürge yeniden dener.
         self.assertEqual(self._sweep_state()["transkriptler"], {})
 
-    def test_transcripts_older_than_the_window_are_not_opened(self) -> None:
+    def test_a_known_transcript_older_than_the_window_is_not_opened(self) -> None:
+        """Yaş penceresi yalnız damgası bilinen transkriptler için geçerli."""
         self._write_turns(4)
+        self._sweep()  # damga yazılır
         self._age(hours=10)
 
         counts = self._sweep(since_hours=8.0)
@@ -238,7 +260,38 @@ class SweepTests(SweepHarness):
         self.assertEqual(counts["taranan"], 1)
         self.assertEqual(counts["degisen"], 0)
         self.assertEqual(counts["atlanan"], 1)
-        self.assertEqual(self.calls, [])
+        self.assertEqual(len(self.calls), 1, "ikinci süpürge model çağırmamalı")
+        self.assertEqual(len(self._daily_blocks()), 1)
+
+    def test_a_never_seen_transcript_ignores_the_age_window(self) -> None:
+        """Geç kalan süpürge, hiç görülmemiş oturumu düşürmez (2026-09-08)."""
+        self._write_turns(4)
+        self._age(hours=30)
+
+        counts = self._sweep(since_hours=8.0)
+
+        self.assertEqual(counts["taranan"], 1)
+        self.assertEqual(counts["degisen"], 1)
+        self.assertEqual(counts["ozetlenen"], 1)
+        self.assertEqual(counts["atlanan"], 0)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self._daily_blocks()), 1)
+
+    def test_a_never_seen_but_flushed_transcript_is_not_summarised_twice(
+        self,
+    ) -> None:
+        """Yaş kapısı kalktı; ikinci özeti hâlâ tur imleci engelliyor."""
+        self._write_turns(4)
+        self._age(hours=30)
+        self._sweep(since_hours=8.0)
+
+        # Damga yazıldı ama dosyaya dokunulmadı: ikinci süpürge onu açmaz.
+        counts = self._sweep(since_hours=0)
+
+        self.assertEqual(counts["ozetlenen"], 0)
+        self.assertEqual(counts["atlanan"], 1)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self._daily_blocks()), 1)
 
     def test_zero_since_hours_lifts_the_time_bound(self) -> None:
         self._write_turns(4)
@@ -268,6 +321,7 @@ class SweepTests(SweepHarness):
         self.assertEqual(summary["degisen"], 1)
         self.assertEqual(summary["ozetlenen"], 1)
         self.assertEqual(summary["atlanan"], 0)
+        self.assertEqual(summary["disarida"], 0)
         self.assertEqual(summary["hatali"], 0)
 
     def test_a_rejected_summary_is_retried_on_the_next_sweep(self) -> None:
@@ -310,12 +364,120 @@ class SweepTests(SweepHarness):
         self.assertEqual(counts["hatali"], 1)
         self.assertEqual(counts["ozetlenen"], 1)
 
+    def test_subagent_and_compile_stage_transcripts_stay_outside(self) -> None:
+        """`projects` altındaki her .jsonl bir oturum değildir (2026-09-08)."""
+        subagents = self.projects / SESSION / "subagents"
+        subagents.mkdir(parents=True)
+        self._write_turns(4, path=subagents / "agent-ae1b1e29.jsonl")
+        stage = self.projects.parent / "E--Proje--stage-compile-stage-9ppa1d16"
+        stage.mkdir()
+        self._write_turns(4, path=stage / f"{SESSION[:-1]}9.jsonl")
+
+        counts = self._sweep()
+
+        self.assertEqual(counts["disarida"], 2)
+        self.assertEqual(counts["taranan"], 0)
+        self.assertEqual(counts["degisen"], 0)
+        self.assertEqual(self.calls, [], "alt ajan/derleyici modele gitmez")
+        self.assertEqual(self._daily_blocks(), [])
+        self.assertEqual(self._sweep_state()["transkriptler"], {})
+        self.assertEqual(self._ledger()[-1]["disarida"], 2)
+
+    def test_a_real_session_beside_the_excluded_ones_is_still_flushed(
+        self,
+    ) -> None:
+        self._write_turns(4)
+        subagents = self.projects / SESSION / "subagents"
+        subagents.mkdir(parents=True)
+        self._write_turns(4, path=subagents / "agent-ae1b1e29.jsonl")
+
+        counts = self._sweep()
+
+        self.assertEqual(counts["disarida"], 1)
+        self.assertEqual(counts["taranan"], 1)
+        self.assertEqual(counts["ozetlenen"], 1)
+        self.assertEqual(len(self._daily_blocks()), 1)
+
+    def test_the_entry_is_dated_by_the_sessions_last_turn(self) -> None:
+        """Süpürge saati değil, oturumun kendi saati (2026-09-08)."""
+        session_moment = dt.datetime(2026, 9, 6, 12, 25, tzinfo=dt.timezone.utc)
+        self._write_turns(2, when=session_moment - dt.timedelta(hours=2))
+        self._write_turns(2, offset=2, when=session_moment)
+        self._age(hours=35)
+        local = session_moment.astimezone()
+
+        counts = self._sweep(since_hours=8.0)
+
+        self.assertEqual(counts["ozetlenen"], 1)
+        self.assertEqual(self._daily_blocks(MOMENT), [], "süpürge günü değil")
+        blocks = self._daily_blocks(session_moment)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].startswith(f"({local.strftime('%H:%M')})"))
+        daily = self._daily_path(session_moment).read_text(encoding="utf-8")
+        self.assertIn(flush.session_anchor(SESSION, local), daily)
+        self.assertIn(f"ts:{local.isoformat(timespec='seconds')}", daily)
+
+    def test_a_transcript_without_timestamps_falls_back_to_the_file_stamp(
+        self,
+    ) -> None:
+        self.transcript.write_text(
+            json.dumps({"message": {"role": "user", "content": "merhaba"}})
+            + "\n",
+            encoding="utf-8",
+        )
+        self._age(hours=30)
+        expected = (MOMENT - dt.timedelta(hours=30)).astimezone()
+
+        counts = self._sweep(since_hours=8.0)
+
+        self.assertEqual(counts["ozetlenen"], 1)
+        blocks = self._daily_blocks(expected)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].startswith(f"({expected.strftime('%H:%M')})"))
+
     def test_an_empty_projects_directory_is_a_no_op(self) -> None:
         counts = self._sweep()
 
         self.assertEqual(counts["taranan"], 0)
         self.assertEqual(self.calls, [])
         self.assertEqual(self._sweep_state()["transkriptler"], {})
+
+
+class HookPathDateTests(SweepHarness):
+    """Kanca yolu değişmedi: girdi kancanın kendi saatiyle tarihlenir."""
+
+    def test_the_hook_still_dates_the_entry_with_the_event_time(self) -> None:
+        session_moment = dt.datetime(2026, 9, 6, 12, 25, tzinfo=dt.timezone.utc)
+        self._write_turns(4, when=session_moment)
+        payload = {
+            "session_id": SESSION,
+            "transcript_path": str(self.transcript),
+            "reason": "sessionend",
+        }
+
+        patches = [
+            mock.patch.object(flush, "STATE_DIR", self.state_dir),
+            mock.patch.object(flush, "VAULT_ROOT", self.root),
+            mock.patch.dict(flush.os.environ, {}, clear=True),
+            mock.patch.object(flush, "_run_claude", return_value=(GOOD_SUMMARY, None)),
+            mock.patch.object(flush, "maybe_trigger_compile", return_value=False),
+        ]
+        with _nested(patches):
+            flush._flush_once(
+                flush.argparse.Namespace(hook_input=None, reason="sessionend"),
+                MOMENT,
+                hook_input=payload,
+            )
+
+        # Kanca yolunda tarih de saat de kancanın kendi damgasından gelir —
+        # yerel saate çevrilmez, süpürgedeki gibi transkriptten okunmaz.
+        daily = (
+            self.root / "daily" / f"{MOMENT.strftime('%Y-%m-%d')}.md"
+        ).read_text(encoding="utf-8")
+        blocks = daily.split("### Oturum ")[1:]
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].startswith(f"({MOMENT.strftime('%H:%M')})"))
+        self.assertIn(flush.session_anchor(SESSION, MOMENT), daily)
 
 
 class ProjectsDirTests(unittest.TestCase):
