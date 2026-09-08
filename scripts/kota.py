@@ -1,57 +1,59 @@
 #!/usr/bin/env python3
-"""Kota okuyucu — Claude harcaması + Codex resmî yüzdeleri, tek satır.
+"""Kota okuyucu — Codex + Claude resmî yüzdeleri, HER ÇAĞRIDA CANLI, tek satır.
 
-Master kararı 2026-08-29 (39. oturum): "bu yolları hemen kullanmaya başlayalım".
-Kaynaklar (Ham-Araştırma/2026-08-29-kota-okuma.md):
-  - Codex: ~/.codex/sessions/**/rollout-*.jsonl içindeki token_count
-    olaylarının SON rate_limits alanı — RESMÎ yüzde (bu makinede ölçüldü:
-    1.172 olayda alan dolu). 5s = primary (300 dk), hafta = secondary (10080 dk).
-  - Claude, katman 1 (statusline): ~/.claude/projects üzerinden statusline
-    köprüsünün düşürdüğü rate_limits önbelleği (claude-kota.json) — RESMÎ,
-    ama yalnız statusline hook'u tetiklenmişse dolar; bu makinede hiç
-    yazılmamıştı (2026-08-29 itibarıyla).
-  - Claude, katman 2 (oauth — bu ekleme): topluluk kaynaklı belgesiz uç
+Master kararı 2026-09-08 (60. oturum): "sürekli sıfırdan bilgi çek, eski
+bilgiyi okumak hata." Her iki kaynak da her çağrıda ağdan/süreçten taze
+okunur; okuma başarısızsa SAYI BASILMAZ — satır "canlı okuma başarısız"
+der ve bant `bilinmiyor` olur. Önbellek dosyaları yalnız TANI kaydıdır.
+
+Kaynaklar:
+  - Codex: `codex app-server` (stdio JSON-RPC) → `account/rateLimits/read`.
+    Resmî uç, jeton harcamaz, ~1,6 s. `primary` = 5 saat (300 dk),
+    `secondary` = hafta (10080 dk); ayrıca `credits`, `planType`,
+    `rateLimitReachedType` ve `rateLimitResetCredits.availableCount`.
+    Sıfırlama kredisi YALNIZ GÖSTERİLİR — betik `resetCredit/consume`
+    ya da durum değiştiren başka bir çağrı ASLA yapmaz.
+  - Claude: topluluk kaynaklı belgesiz uç
     https://api.anthropic.com/api/oauth/usage — Claude Code'un kendi
     /usage komutunu besleyen SUNUCU TARAFI veri. Kaynak: topluluk
     (github.com/ohugonnot/claude-code-statusline; anthropics/claude-code
     issue #31021, #45133). ~/.claude/.credentials.json içindeki
     accessToken ile Bearer + User-Agent: claude-code/<sürüm> +
     anthropic-beta: oauth-2025-04-20 başlıklarıyla GET edilir; yanlış/eksik
-    başlık agresif 429 kovasına düşürür. Yanıt disk önbelleğine
-    (.state\\claude-kota-oauth.json) yazılır, TABAN 300 sn — bu süreden
-    taze önbellek varsa AĞA HİÇ ÇIKILMAZ. Uç BELGESİZ ve her an
+    başlık agresif 429 kovasına düşürür. Uç BELGESİZ ve her an
     kaldırılabilir/şekli değişebilir; ayrıştırıcı savunmacı yazıldı, HER
-    hata (ağ/HTTP/JSON) yutulur ve zincir sessizce bir alt katmana düşer.
+    hata (ağ/HTTP/JSON) yutulur ve satır sayı yerine hatayı basar.
     Jeton YENİLEME asla denenmez (yalnız erişim jetonu geçerliyse GET
-    edilir); jetonun kendisi hiçbir zaman yazdırılmaz/önbelleklenmez —
-    önbellekte yalnız SUNUCU YANITI durur.
-  - Claude, katman 3 (harcama): ~/.claude/projects/**/*.jsonl usage
-    blokları — KESİN harcama (ccusage deseni), resmî yüzde yoksa son çare.
-Zincir: statüsline önbelleği → oauth ucu → yerel harcama dökümü.
+    edilir); jetonun kendisi hiçbir zaman yazdırılmaz/önbelleklenmez.
+    `.state\\claude-kota-oauth.json` son yanıt + son hata/HTTP kodunu
+    saklar; beyin-doktor bunu okur, GÖSTERİM buradan BESLENMEZ.
+  - `claude_harcama()`: ~/.claude/projects/**/*.jsonl usage blokları —
+    yerel jeton dökümü, yalnız `--detay`/`--json` için; kota yüzdesi DEĞİL.
 ToS-riskli yollar (ChatGPT token'ını belgesiz uca göndermek) bilinçli DIŞARIDA.
 
-BAYAT KAYNAK (Astra A8, 2026-09-06): her pencere, yüzdenin geldiği gözlemin
-zaman damgasını (`gozlem`) da taşır — OAuth önbelleğinin yazılma anı, Codex
-rollout dosyasının mtime'ı. Gözlem `BEYIN_KOTA_BAYAT_DK` dakikadan (varsayılan
-120) eskiyse o pencerenin bantı `bilinmiyor` olur ve satırda `[? bayat 2050dk]`
-görünür; `bilinmiyor` asla "serbest" diye okunmaz. Ayrıntı: kota_hiz docstring'i.
-Bu yaş kuralı YALNIZ yoklanan kaynağa (Claude/OAuth önbelleği) işler. Codex'in
-kaynağı rollout dosyasının mtime'ıdır ve yalnız Codex koştukça ilerler: Codex
-çalışmadıysa kullanım da değişmez, gözlem bayat değildir. Codex pencereleri
-`kota_hiz.KURAL_RESET` ile değerlendirilir — gözlem `resets_at`'e kadar
-geçerlidir, reset geçtikten sonra yeni rollout yoksa `bilinmiyor` olur.
-Kaçış kapağı: `BEYIN_KOTA_CODEX_BAYAT_DK` (varsayılan 0 = kapalı).
+Tarihçe (kısa): 2026-08-29'da Codex yüzdesi rollout-*.jsonl dosyalarından,
+Claude yüzdesi statusline önbelleğinden okunuyordu; 2026-09-06'da gözlem yaşı
+(`gozlem`) eklendi, bayat kaynak "serbest" sayılmasın diye. 2026-09-07'de
+rollout için reset kuralı (`KURAL_RESET`) getirildi. 2026-09-08'de üçü de
+kaldırıldı: rollout 20:03'te durmuşken canlı uç %100 · rate_limit_reached
+gösteriyordu. Artık tek kural `kota_hiz.KURAL_YAS`; gözlem zaten her zaman
+"az önce"dir, `BEYIN_KOTA_BAYAT_DK` yalnız emniyet kemeridir.
 
 Kullanım:  python kota.py            # tek satır (SessionStart enjeksiyonu için)
            python kota.py --detay    # çok satırlı döküm
            python kota.py --json     # makine okur
+           python kota.py --hizli    # kanca yolu (iki kaynak paralel)
 """
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import datetime as dt
 import io
+import shutil
+import subprocess
 import sys
+import threading
 
 # Git Bash / boru altinda cp1254 stdout'u Turkce isaretlerde cakiliyordu;
 # cikis her zaman UTF-8'e sabitlenir (Windows konsolu da bunu basar).
@@ -65,47 +67,166 @@ from pathlib import Path
 
 import kota_hiz
 
-CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 SAAT_5 = 5 * 3600
 GUN_7 = 7 * 86400
 
+# ---------------------------------------------------------------------------
+# Codex: canlı app-server okuması (stdio JSON-RPC) — rollout taraması KALDIRILDI
+# ---------------------------------------------------------------------------
 
-def codex_resmi() -> dict | None:
-    """En taze rollout dosyalarından son dolu rate_limits alanını döndür."""
-    if not CODEX_SESSIONS.exists():
+CODEX_ZAMAN_ASIMI_SN = 6.0
+# Son okuma denemesinin nedeni; satır sayı basamayınca burayı yazar.
+CODEX_SON_HATA: str | None = None
+
+
+def _codex_komut() -> list[str] | None:
+    """`codex app-server`i başlatacak argv; bulunamazsa None.
+
+    Windows'ta PATH'teki `codex` bir npm sarmalayıcısıdır (`.cmd`, ya da Git
+    Bash'te uzantısız kabuk betiği); `Popen` onu doğrudan çalıştıramaz
+    (WinError 2/193). Bu durumda yanındaki gerçek giriş noktası
+    `node_modules/@openai/codex/bin/codex.js` `node` ile koşulur. Gerçek bir
+    ikili (`.exe` / POSIX) ise doğrudan çalıştırılır.
+    """
+    yol = shutil.which("codex")
+    if not yol:
         return None
-    dosyalar = sorted(
-        CODEX_SESSIONS.rglob("rollout-*.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )[:12]
-    for dosya in dosyalar:
-        son = None
+    p = Path(yol)
+    if p.suffix.lower() in ("", ".cmd", ".bat"):
+        js = p.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+        if js.exists():
+            return ["node", str(js), "app-server"]
+        if p.suffix.lower() != "":
+            return None
+    return [str(p), "app-server"]
+
+
+def _codex_normalize(ham: dict, kredi: int | None) -> dict:
+    """`result.rateLimits` → tek_satir()/pencereler()'in tükettiği ortak şekil."""
+    def pencere(anahtar: str, vars_dk: int) -> dict:
+        blok = ham.get(anahtar)
+        if not isinstance(blok, dict):
+            blok = {}
+        return {
+            "used_percent": blok.get("usedPercent"),
+            "window_minutes": blok.get("windowDurationMins") or vars_dk,
+            "resets_at": blok.get("resetsAt"),
+        }
+
+    krediler = ham.get("credits")
+    if not isinstance(krediler, dict):
+        krediler = {}
+    simdi = int(dt.datetime.now(dt.timezone.utc).timestamp())
+    return {
+        "primary": pencere("primary", 300),
+        "secondary": pencere("secondary", 10080),
+        "credits": {
+            "has_credits": bool(krediler.get("hasCredits")),
+            "unlimited": bool(krediler.get("unlimited")),
+            "balance": krediler.get("balance"),
+        },
+        "plan_type": ham.get("planType"),
+        "rate_limit_reached_type": ham.get("rateLimitReachedType"),
+        "_kaynak": "app-server",
+        # Canlı okuma: gözlem anı = ŞİMDİ. Bayatlık burada yapısal olarak yok.
+        "_gozlem": simdi,
+        "_dosya_zamani": dt.datetime.fromtimestamp(simdi).isoformat(timespec="minutes"),
+        # Yalnız GÖSTERİM: ücretsiz tam sıfırlama kredisi sayısı. Betik
+        # `account/rateLimits/resetCredit/consume` çağrısını ASLA yapmaz.
+        "_reset_kredisi": kredi,
+    }
+
+
+def _sessiz_oldur(surec) -> None:
+    if surec is None:
+        return
+    try:
+        surec.kill()
+    except (OSError, ValueError):
+        pass
+
+
+def _codex_canli_ic() -> tuple[dict | None, str | None]:
+    argv = _codex_komut()
+    if not argv:
+        return None, "codex bulunamadı"
+    surec = None
+    try:
+        surec = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, ValueError) as hata:
+        return None, "süreç başlatılamadı:" + type(hata).__name__
+    # `readline` bloklar; süreci zamanında öldüren bir bekçi olmazsa zaman
+    # aşımı döngüsü hiç dönmez (kanca 8 s bütçesini yakar).
+    bekci = threading.Timer(CODEX_ZAMAN_ASIMI_SN, _sessiz_oldur, args=(surec,))
+    bekci.daemon = True
+    bekci.start()
+    try:
+        istekler = [
+            {"id": 1, "method": "initialize",
+             "params": {"clientInfo": {"name": "beyin-kota", "version": "0.1"}}},
+            {"method": "initialized"},
+            {"id": 2, "method": "account/rateLimits/read", "params": None},
+        ]
         try:
-            with dosya.open(encoding="utf-8", errors="replace") as h:
-                for satir in h:
-                    if '"token_count"' not in satir:
-                        continue
-                    try:
-                        veri = json.loads(satir)
-                    except json.JSONDecodeError:
-                        continue
-                    rl = (veri.get("payload") or {}).get("rate_limits")
-                    if rl:
-                        son = rl
-        except OSError:
-            continue
-        if son:
-            mtime = dosya.stat().st_mtime
-            son["_kaynak"] = dosya.name
-            son["_dosya_zamani"] = dt.datetime.fromtimestamp(mtime).isoformat(
-                timespec="minutes"
-            )
-            # Gözlem anı = rollout dosyasının mtime'ı; bayatlık ölçüsü buradan.
-            son["_gozlem"] = int(mtime)
-            return son
-    return None
+            surec.stdin.write("".join(json.dumps(i) + "\n" for i in istekler))
+            surec.stdin.flush()
+        except OSError as hata:
+            return None, "yazılamadı:" + type(hata).__name__
+
+        son = dt.datetime.now(dt.timezone.utc).timestamp() + CODEX_ZAMAN_ASIMI_SN
+        yanit: dict | None = None
+        while dt.datetime.now(dt.timezone.utc).timestamp() < son:
+            satir = surec.stdout.readline()
+            if not satir:
+                break
+            try:
+                veri = json.loads(satir)
+            except (json.JSONDecodeError, ValueError):
+                continue  # bildirim/gürültü satırı
+            if isinstance(veri, dict) and veri.get("id") == 2:
+                yanit = veri
+                break
+        if yanit is None:
+            return None, "yanıt yok (zaman aşımı %.0fs)" % CODEX_ZAMAN_ASIMI_SN
+        if yanit.get("error"):
+            kod = (yanit.get("error") or {}).get("code")
+            return None, f"uç hata {kod}"
+        sonuc = yanit.get("result")
+        if not isinstance(sonuc, dict):
+            return None, "yanıt çözülemedi"
+        rl = sonuc.get("rateLimits")
+        if not isinstance(rl, dict):
+            return None, "rateLimits alanı yok (oturum açık mı?)"
+        krediler = sonuc.get("rateLimitResetCredits")
+        kredi = krediler.get("availableCount") if isinstance(krediler, dict) else None
+        return _codex_normalize(rl, kredi if isinstance(kredi, int) else None), None
+    finally:
+        bekci.cancel()
+        _sessiz_oldur(surec)
+
+
+def codex_canli() -> dict | None:
+    """Codex resmî yüzdeleri, app-server'dan CANLI. ASLA çökmez; hata → None.
+
+    Başarısızlık nedeni ``CODEX_SON_HATA``'ya yazılır; satır sayı yerine onu
+    basar (eski sayı asla gösterilmez — Master kuralı 2026-09-08).
+    """
+    global CODEX_SON_HATA
+    try:
+        veri, neden = _codex_canli_ic()
+    except Exception as hata:  # pragma: no cover — savunma amaçlı
+        veri, neden = None, "beklenmedik:" + type(hata).__name__
+    CODEX_SON_HATA = neden
+    return veri
 
 
 def _claude_kayit_zamani(veri: dict) -> float | None:
@@ -164,40 +285,17 @@ def claude_harcama(hizli: bool = False) -> dict:
     return toplam
 
 
-CLAUDE_KOTA_CACHE = Path(r"E:\OdenaOS\.claude\scripts\.state\claude-kota.json")
-
-
-def claude_resmi() -> dict | None:
-    """Statusline köprüsünün düşürdüğü resmî rate_limits önbelleği (varsa)."""
-    try:
-        veri = json.loads(CLAUDE_KOTA_CACHE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    yazilma = veri.get("yazilma")
-    try:
-        yas = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(yazilma)
-    except (TypeError, ValueError):
-        return None
-    if yas.total_seconds() > 6 * 3600:
-        return None  # bayat — yanlış güven vermektense sus
-    rl = veri.get("rate_limits")
-    if isinstance(rl, dict):
-        rl = dict(rl)
-        rl["_yas_dk"] = int(yas.total_seconds() // 60)
-        rl["_gozlem"] = int(dt.datetime.fromisoformat(yazilma).timestamp())
-        rl["_kaynak"] = "statusline"
-        return rl
-    return None
-
-
 # ---------------------------------------------------------------------------
-# Katman 2: OAuth kullanım ucu (belgesiz, topluluk kaynaklı — bkz. docstring)
+# Claude: OAuth kullanım ucu (belgesiz, topluluk kaynaklı — bkz. docstring)
+#
+# 2026-09-08: statusline önbelleği katmanı (claude-kota.json, 6 saat tolerans)
+# gösterim zincirinden ÇIKARILDI. `statusline_kota.py` o dosyayı yazmaya devam
+# eder, kota.py artık okumaz.
 # ---------------------------------------------------------------------------
 
 CLAUDE_OAUTH_CACHE = Path(r"E:\OdenaOS\.claude\scripts\.state\claude-kota-oauth.json")
 CLAUDE_CRED_PATH = Path.home() / ".claude" / ".credentials.json"
 OAUTH_URL = "https://api.anthropic.com/api/oauth/usage"
-OAUTH_CACHE_TABAN_SN = 300  # bu süreden taze önbellek varsa ağa çıkılmaz
 OAUTH_UA_VARSAYILAN = "claude-code/2.1.245"
 
 
@@ -276,22 +374,6 @@ def _oauth_tani_oku() -> dict:
     }
 
 
-def _oauth_cache_oku() -> tuple[dt.datetime, dict] | None:
-    ham = _oauth_ham_oku()
-    if not ham:
-        return None
-    veri = ham.get("veri")
-    if not isinstance(veri, dict):
-        return None
-    try:
-        yaz_zaman = dt.datetime.fromisoformat(ham.get("yazilma"))
-    except (TypeError, ValueError):
-        return None
-    if yaz_zaman.tzinfo is None:
-        yaz_zaman = yaz_zaman.replace(tzinfo=dt.timezone.utc)
-    return yaz_zaman, veri
-
-
 def _oauth_atomik_yaz(ham: dict) -> None:
     try:
         CLAUDE_OAUTH_CACHE.parent.mkdir(parents=True, exist_ok=True)
@@ -303,7 +385,10 @@ def _oauth_atomik_yaz(ham: dict) -> None:
 
 
 def _oauth_cache_yaz(veri: dict) -> None:
-    """Atomik yaz: geçici dosya + os.replace. Yalnız SUNUCU YANITI durur — jeton asla."""
+    """Son yanıtı TANI KAYDI olarak diske düşürür (gösterim kaynağı DEĞİL).
+
+    Atomik: geçici dosya + os.replace. Yalnız SUNUCU YANITI durur — jeton asla.
+    """
     _oauth_atomik_yaz({
         "yazilma": dt.datetime.now(dt.timezone.utc).isoformat(),
         "veri": veri,
@@ -314,11 +399,11 @@ def _oauth_cache_yaz(veri: dict) -> None:
 
 
 def _oauth_tani_yaz(hata: str, http_status: int | None = None) -> None:
-    """Başarısız yenileme denemesini önbelleğe iliştirir (Astra A-borç 4).
+    """Başarısız okuma denemesini tanı dosyasına iliştirir (Astra A-borç 4).
 
-    ``yazilma`` ve ``veri`` KORUNUR: gözlem yaşı denemeyle sıfırlanmaz, yoksa
-    36 saatlik bayat bir yüzde taze görünürdü. Denetimde görülen hata tam da
-    sessiz düşüştü — yenileme yolu çöküyor, satır bunu hiç söylemiyordu.
+    ``yazilma`` ve ``veri`` KORUNUR — beyin-doktor son BAŞARILI yanıtı da
+    görebilsin diye. Gösterim bu dosyadan beslenmediği için eski yüzdenin
+    taze görünme riski artık yapısal olarak yok.
     """
     ham = _oauth_ham_oku()
     ham["son_deneme"] = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -353,53 +438,32 @@ def claude_oauth() -> dict | None:
 
 
 def _claude_oauth_ic() -> dict | None:
+    """Her çağrıda AĞA çıkar; başarısızsa None döner (eski sayı ASLA dönmez)."""
     simdi = dt.datetime.now(dt.timezone.utc)
-    onbellek = _oauth_cache_oku()
-    _, _, abone, oran_katmani = _kimlik_oku()
+    token, bitis_ms, abone, oran_katmani = _kimlik_oku()
 
-    def etiketle(sozluk: dict, yas_sn: float, bayat: bool = False) -> dict:
+    def etiketle(sozluk: dict) -> dict:
         sozluk = dict(sozluk)
         sozluk["_kaynak"] = "oauth"
-        sozluk["_yas_dk"] = int(yas_sn // 60)
-        # Gözlem anı = önbelleğin yazıldığı an (sunucu yanıtının alındığı an).
-        sozluk["_gozlem"] = int(simdi.timestamp() - yas_sn)
+        sozluk["_yas_dk"] = 0
+        # Canlı okuma: gözlem anı = yanıtın alındığı an (şimdi).
+        sozluk["_gozlem"] = int(dt.datetime.now(dt.timezone.utc).timestamp())
         if abone:
             sozluk["_subscriptionType"] = abone
         if oran_katmani:
             sozluk["_rateLimitTier"] = oran_katmani
-        if bayat:
-            sozluk["_bayat"] = True
-        tani = _oauth_tani_oku()
-        if tani.get("son_hata"):
-            sozluk["_oauth_hata"] = tani["son_hata"]
-            sozluk["_oauth_http"] = tani.get("http_status")
-            sozluk["_oauth_son_deneme"] = tani.get("son_deneme")
         return sozluk
 
-    if onbellek:
-        yaz_zaman, ham_veri = onbellek
-        yas_sn = (simdi - yaz_zaman).total_seconds()
-        if 0 <= yas_sn < OAUTH_CACHE_TABAN_SN:
-            return etiketle(_oauth_normalize(ham_veri), yas_sn)
-
-    def bayat_donus() -> dict | None:
-        if onbellek:
-            yaz_zaman, ham_veri = onbellek
-            yas_sn = max((simdi - yaz_zaman).total_seconds(), 0)
-            return etiketle(_oauth_normalize(ham_veri), yas_sn, bayat=True)
-        return None
-
-    token, bitis_ms, _, _ = _kimlik_oku()
     if not token or not bitis_ms:
         _oauth_tani_yaz("kimlik-dosyasi-okunamadi")
-        return bayat_donus()
+        return None
     if bitis_ms <= simdi.timestamp() * 1000:
         # Erişim jetonu süresi dolmuş — YENİLEME DENENMEZ (jeton yenilemek
         # CLI'nin işidir, kota okuyucusunun değil). 2026-09-06 teşhisi: uç
         # gerçekten 401 "OAuth access token has expired" veriyor; çözüm
         # sahibin Claude Code'da yeniden oturum açmasıdır.
         _oauth_tani_yaz("jeton-suresi-doldu", 401)
-        return bayat_donus()
+        return None
 
     yanit_kodu: int | None = None
     try:
@@ -419,23 +483,20 @@ def _claude_oauth_ic() -> dict | None:
         yeni_veri = json.loads(govde)
     except urllib.error.HTTPError as hata:
         _oauth_tani_yaz("http-hatasi", getattr(hata, "code", None))
-        return bayat_donus()
+        return None
     except (urllib.error.URLError, TimeoutError, OSError) as hata:
         _oauth_tani_yaz("ag-hatasi:" + type(hata).__name__, yanit_kodu)
-        return bayat_donus()
+        return None
     except (json.JSONDecodeError, ValueError) as hata:
         _oauth_tani_yaz("yanit-cozulemedi:" + type(hata).__name__, yanit_kodu)
-        return bayat_donus()
+        return None
 
     _oauth_cache_yaz(yeni_veri)
-    return etiketle(_oauth_normalize(yeni_veri), 0)
+    return etiketle(_oauth_normalize(yeni_veri))
 
 
 def resmi_zinciri() -> dict | None:
-    """Claude resmî % çözünürlük sırası: statusline önbelleği → oauth ucu."""
-    resmi = claude_resmi()
-    if resmi:
-        return resmi
+    """Claude resmî %: yalnız CANLI OAuth okuması. Zincir/yedek katman yok."""
     return claude_oauth()
 
 
@@ -502,9 +563,9 @@ def pencereler(codex: dict | None, resmi: dict | None, simdi: float | None = Non
                           "pencere_sn": int(blok.get("window_minutes") or vars_dk) * 60,
                           "gozlem": codex_gozlem,
                           "gozlem_yas_dk": _yas_dk(codex_gozlem, simdi),
-                          # Rollout mtime'ı yalnız Codex koştukça ilerler; yaş
-                          # bayatlık ölçüsü değil, gözlem reset'e kadar geçerli.
-                          "bayat_kurali": kota_hiz.KURAL_RESET})
+                          # Artık Codex de YOKLANAN bir kaynak (app-server her
+                          # çağrıda canlı okunur) → tek kural: yaş.
+                          "bayat_kurali": kota_hiz.KURAL_YAS})
     if resmi:
         gozlem = resmi.get("_gozlem")
         yas = _yas_dk(gozlem, simdi)
@@ -512,8 +573,7 @@ def pencereler(codex: dict | None, resmi: dict | None, simdi: float | None = Non
             yas = resmi["_yas_dk"]
         bes = resmi.get("five_hour") or {}
         hafta = resmi.get("seven_day") or {}
-        # OAuth önbelleği YOKLANIR (300 sn taban): tazelenmiyorsa değer donmuş
-        # olabilir, yaş gerçek bir bayatlıktır → yaş kuralı.
+        # Canlı okuma → yaş ~0; yaş kuralı yalnız emniyet kemeri olarak durur.
         liste.append({"id": "claude-5s", "used": bes.get("used_percentage"),
                       "resets_at": bes.get("resets_at"), "pencere_sn": SAAT_5,
                       "gozlem": gozlem, "gozlem_yas_dk": yas,
@@ -550,19 +610,6 @@ def hizlar(codex: dict | None, resmi: dict | None, kaydet: bool = True) -> dict[
     return sonuc
 
 
-def _oauth_hata_eki(resmi: dict) -> str:
-    """`[oauth 2158dk bayat · 401]` — bayatlığın NEDENİ satırda durur.
-
-    Yenileme sessizce düşerse okuyucu yalnız "bayat" görür ve nedenini aramak
-    zorunda kalır; denetimde 36 saat böyle geçti (Astra A-borç 4).
-    """
-    hata = resmi.get("_oauth_hata")
-    if not hata:
-        return ""
-    http = resmi.get("_oauth_http")
-    return f" · {http}" if http else f" · {hata}"
-
-
 OAUTH_COZUM = {
     "jeton-suresi-doldu": (
         "Claude Code'da /login ile yeniden oturum aç — erişim jetonunun süresi "
@@ -575,15 +622,58 @@ OAUTH_COZUM = {
 }
 
 
-def oauth_tani_satirlari(resmi: dict) -> list[str]:
-    """``--detay`` için son yenileme denemesinin dökümü (boşsa boş liste)."""
+OAUTH_HATA_KISA = {
+    "jeton-suresi-doldu": "401 → /login",
+    "kimlik-dosyasi-okunamadi": "kimlik yok → /login",
+}
+
+
+def _canli_etiket(gozlem: int | None) -> str:
+    """`[canlı 23:07]` — gözlem saati, YEREL. Canlı okumanın imzası."""
+    if not gozlem:
+        return "[canlı ?]"
+    return "[canlı " + dt.datetime.fromtimestamp(int(gozlem)).strftime("%H:%M") + "]"
+
+
+def claude_hata_metni() -> str:
+    """Canlı OAuth okuması düşünce satıra girecek NEDEN (sayı yerine)."""
+    tani = _oauth_tani_oku()
+    hata = tani.get("son_hata")
+    http = tani.get("http_status")
+    if not hata:
+        return "neden bilinmiyor"
+    kisa = OAUTH_HATA_KISA.get(str(hata))
+    if kisa:
+        return kisa
+    if hata == "http-hatasi":
+        if http == 401:
+            return "401 → /login"
+        if http == 429:
+            return "429 (uç kısıtladı)"
+        return f"HTTP {http}" if http else "http-hatasi"
+    if str(hata).startswith("ag-hatasi"):
+        return "ağ"
+    return str(hata)
+
+
+def oauth_tani_satirlari(resmi: dict | None = None) -> list[str]:
+    """``--detay`` için son okuma denemesinin dökümü (boşsa boş liste).
+
+    ``resmi`` verilmezse tanı dosyasından okunur — canlı okuma düştüğünde
+    elde bir ``resmi`` sözlüğü kalmadığı için varsayılan yol budur.
+    """
+    if resmi is None:
+        tani = _oauth_tani_oku()
+        resmi = {"_oauth_hata": tani.get("son_hata"),
+                 "_oauth_http": tani.get("http_status"),
+                 "_oauth_son_deneme": tani.get("son_deneme")}
     hata = resmi.get("_oauth_hata")
     if not hata:
         return []
     http = resmi.get("_oauth_http")
     deneme = resmi.get("_oauth_son_deneme") or "?"
     satirlar = [
-        "  oauth yenileme: BAŞARISIZ · {}{} · son deneme {}".format(
+        "  oauth okuma: BAŞARISIZ · {}{} · son deneme {}".format(
             hata, f" · HTTP {http}" if http else "", deneme
         )
     ]
@@ -596,32 +686,38 @@ def oauth_tani_satirlari(resmi: dict) -> list[str]:
 
 
 def tek_satir(codex: dict | None, claude: dict, resmi: dict | None = None,
-              hiz: dict[str, dict] | None = None) -> str:
+              hiz: dict[str, dict] | None = None, codex_hata: str | None = None) -> str:
+    """Tek satırlık özet. Canlı okunamayan kaynak SAYI BASMAZ, nedeni basar."""
     if hiz is None:
         hiz = hizlar(codex, resmi)
     parcalar = []
     if codex:
         p = codex.get("primary") or {}
         s = codex.get("secondary") or {}
+        isaretler = ""
+        if (codex.get("credits") or {}).get("has_credits"):
+            isaretler += " ⚠kredi"
+        if codex.get("rate_limit_reached_type"):
+            isaretler += " ⚠limit doldu"
+        kredi = codex.get("_reset_kredisi")
+        if isinstance(kredi, int) and kredi > 0:
+            # Yalnız bilgi: krediyi harcamak Master'ın kararı, betiğin değil.
+            isaretler += f" (sıfırlama kredisi: {kredi})"
         parcalar.append(
-            "Codex 5s %{:.0f}{} (reset {}) · hafta %{:.0f}{} (reset {}){}".format(
+            "Codex 5s %{:.0f}{} (reset {}) · hafta %{:.0f}{} (reset {}){} {}".format(
                 p.get("used_percent") or 0, kota_hiz.kisa_metin(hiz.get("codex-5s")),
                 _reset_metni(p.get("resets_at")),
                 s.get("used_percent") or 0, kota_hiz.kisa_metin(hiz.get("codex-hafta")),
                 _reset_metni(s.get("resets_at")),
-                " ⚠kredi" if (codex.get("credits") or {}).get("has_credits") else "",
+                isaretler,
+                _canli_etiket(codex.get("_gozlem")),
             )
         )
     else:
-        parcalar.append("Codex: rollout verisi yok")
-    if resmi is None:
-        resmi = resmi_zinciri()
+        neden = codex_hata or CODEX_SON_HATA or "neden bilinmiyor"
+        parcalar.append(f"Codex: canlı okuma başarısız ({neden})")
     if resmi:
-        if resmi.get("_kaynak") == "oauth":
-            bayat_ek = " bayat" if resmi.get("_bayat") else ""
-            etiket = f"[oauth {resmi.get('_yas_dk', '?')}dk{bayat_ek}{_oauth_hata_eki(resmi)}]"
-        else:
-            etiket = f"[{resmi.get('_yas_dk', '?')}dk önce]"
+        etiket = _canli_etiket(resmi.get("_gozlem"))
         bes = resmi.get("five_hour") or {}
         hafta = resmi.get("seven_day") or {}
         satir = "Claude 5s %{:.0f}{} (reset {}) · hafta %{:.0f}{} (reset {})".format(
@@ -641,14 +737,11 @@ def tek_satir(codex: dict | None, claude: dict, resmi: dict | None = None,
             satir += " ⚠aşım açık (önbellek 5dk)"
         parcalar.append(satir + " " + etiket)
     else:
-        c5 = claude.get("5s", {})
-        istek = sum(v["istek"] for v in c5.values())
-        cikti = sum(v["cikti"] for v in c5.values())
-        parcalar.append(
-            f"Claude 5s: {istek} istek / ~{cikti//1000}k çıktı-jetonu (resmî % henüz düşmedi)"
-        )
+        parcalar.append(f"Claude: canlı okuma başarısız ({claude_hata_metni()})")
     yon = kota_hiz.yonetici(hiz.values())
-    if yon:
+    if not yon:
+        parcalar.append(f"bant: {kota_hiz.BANT_BILINMIYOR} (kaynak yok)")
+    else:
         if yon["bant"] == kota_hiz.BANT_BILINMIYOR:
             # A8: bilinmiyor "serbest" diye okunamaz; nedeni de satırda durur.
             neden = "bayat" if yon.get("bayat") else (yon.get("not") or "doğrulanmadı")
@@ -658,15 +751,35 @@ def tek_satir(codex: dict | None, claude: dict, resmi: dict | None = None,
     return "[kota] " + " | ".join(parcalar)
 
 
+def kaynak_satiri(codex: dict | None, resmi: dict | None) -> str:
+    """``--detay`` başındaki kaynak künyesi — her okumanın nereden geldiği."""
+    if resmi:
+        c = "claude oauth canlı " + _canli_etiket(resmi.get("_gozlem"))[7:-1]
+    else:
+        c = f"claude oauth BAŞARISIZ ({claude_hata_metni()})"
+    if codex:
+        k = "codex app-server canlı " + _canli_etiket(codex.get("_gozlem"))[7:-1]
+    else:
+        k = f"codex app-server BAŞARISIZ ({CODEX_SON_HATA or 'neden bilinmiyor'})"
+    return f"{c} · {k}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--detay", action="store_true")
     parser.add_argument("--hizli", action="store_true", help="yalnız 5s penceresi (kanca için)")
     args = parser.parse_args()
-    codex = codex_resmi()
-    claude = claude_harcama(hizli=args.hizli)
-    resmi = resmi_zinciri()
+    # İki canlı okuma PARALEL: app-server ~1,6 s + OAuth ~1 s ardışık koşarsa
+    # session-start.ps1'in 8 sn'lik job bütçesi daralır (kanca dosyası
+    # DEĞİŞMEZ, uyum bu tarafta sağlanır).
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as havuz:
+        codex_isi = havuz.submit(codex_canli)
+        claude_isi = havuz.submit(resmi_zinciri)
+        codex = codex_isi.result()
+        resmi = claude_isi.result()
+    # Yerel jeton dökümü yalnız döküm yollarında; kota yüzdesi buradan gelmez.
+    claude = claude_harcama(hizli=args.hizli) if (args.detay or args.json) else {"5s": {}, "7g": {}}
     hiz = hizlar(codex, resmi)
     if args.json:
         print(json.dumps(
@@ -676,10 +789,14 @@ def main() -> int:
         return 0
     print(tek_satir(codex, claude, resmi, hiz))
     if args.detay:
+        print("  kaynak: " + kaynak_satiri(codex, resmi))
         for pid, d in hiz.items():
             print(kota_hiz.detay_metni(d, pid))
-        if codex:
-            print(f"  codex kaynak: {codex.get('_kaynak')} ({codex.get('_dosya_zamani')})")
+        if codex and codex.get("plan_type"):
+            print(f"  codex plan: {codex['plan_type']}")
+        if not resmi:
+            for satir in oauth_tani_satirlari():
+                print(satir)
         for pencere in ("5s", "7g"):
             for model, v in sorted(claude.get(pencere, {}).items()):
                 print(

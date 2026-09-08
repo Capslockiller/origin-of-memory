@@ -41,25 +41,14 @@ yani hiçbir şey bilinmezken "serbest" denildi. İki karşı önlem:
      Reset'i geçmiş pencere de, TAZE bir gözlemle desteklenmiyorsa
      ``bilinmiyor``'dur (eskiden koşulsuz "serbest" dönüyordu).
 
-KAYNAĞA GÖRE BAYATLIK (2026-09-07, A8 düzeltmesi). Yukarıdaki yaş kuralı tüm
-kaynaklara aynı uygulanınca yanlış tarafa düştü: 6 Eylül 00:58'de satır
-``Codex 5s %83 [? bayat 124dk] … bant: bilinmiyor (codex-5s bayat)`` bastı,
-oysa %83 hâlâ DOĞRUYDU. İki kaynağın gözlem anı aynı şey demek değil:
-
-  * Claude/OAuth — YOKLANAN bir önbellek. 300 sn'de bir tazelenmesi beklenir;
-    tazelenmiyorsa değer donmuş olabilir, yani yaş gerçek bir bayatlıktır.
-    Kural: ``KURAL_YAS`` (gözlem yaşı > eşik → bilinmiyor).
-  * Codex/rollout — OLAY GÜNLÜĞÜ. Gözlem anı = son rollout dosyasının mtime'ı
-    ve yalnız Codex KOŞTUKÇA ilerler. Codex 2 saattir çalışmadıysa kullanım da
-    değişmemiştir (pencerenin kendi reset'i dışında); ölçüm bayat değil,
-    yalnızca "yeni olay yok"tur. Bu yüzden gözlem, pencerenin ``resets_at``
-    anına kadar GEÇERLİ sayılır; yaş tek başına asla bayat yapmaz. Reset
-    geçtiyse ve reset'ten sonra yeni bir rollout gözlemi yoksa değer eski
-    pencereye aittir → ``bilinmiyor`` (tahmin yürütülmez). Kural:
-    ``KURAL_RESET``.
-
-Kaçış kapağı: ``BEYIN_KOTA_CODEX_BAYAT_DK`` (varsayılan 0 = kapalı) verilirse
-Codex için de yaş kuralı işler (o dakikadan eski gözlem → bilinmiyor).
+TEK KURAL: KURAL_YAS (2026-09-08). Bir ara (2026-09-07) kaynak cinsine göre
+ikinci bir kural vardı: Codex yüzdesi rollout dosyalarından, yani bir OLAY
+GÜNLÜĞÜNDEN okunuyordu ve gözlem yalnız Codex koştukça ilerlediği için yaş
+bayatlık sayılmıyordu (``KURAL_RESET``). O yol 8 Eylül'de kaldırıldı: rollout
+20:03'te durmuşken canlı uç Codex'i %100 · rate_limit_reached gösteriyordu —
+"yeni olay yok" ile "yeni bilgi yok" aynı şey değilmiş. Artık iki kaynak da
+her çağrıda CANLI yoklanıyor, dolayısıyla tek kural ``KURAL_YAS`` ve gözlem
+yaşı normalde ~0'dır; eşik yalnız emniyet kemeri olarak durur.
 """
 from __future__ import annotations
 
@@ -80,10 +69,8 @@ YEDEK_ESIK = 0.10            # pencerenin bu payı geçmeden yedek (used÷elapse
 BANT_ESIK = (0.9, 1.3, 2.0)  # serbest ≤ e0 · dikkat ≤ e1 · karne ≤ e2 · kapalı > e2
 BANT_AD = ("serbest", "dikkat", "karne", "kapalı")
 BANT_BILINMIYOR = "bilinmiyor"  # kaynak bayat/eksik — ölçüm yok, "serbest" DEĞİL
-BAYAT_ESIK_DK = 120          # gözlem bu yaştan büyükse bant bilinmiyor (yoklanan kaynak)
-CODEX_BAYAT_ESIK_DK = 0      # olay günlüğü kaynağında yaş kuralı varsayılan olarak KAPALI
-KURAL_YAS = "yas"            # yoklanan önbellek (Claude/OAuth): yaş > eşik → bilinmiyor
-KURAL_RESET = "reset"        # olay günlüğü (Codex/rollout): gözlem reset'e kadar geçerli
+BAYAT_ESIK_DK = 120          # gözlem bu yaştan büyükse bant bilinmiyor
+KURAL_YAS = "yas"            # tek kural: yaş > eşik → bilinmiyor (bkz. docstring)
 # Yönetici sıralaması: bilinmiyor, dikkat ile karne ARASINDA durur — yani
 # kapalı/karne bir pencere varsa yönetimi o alır, yoksa bilinmiyor kazanır.
 BANT_SIRA = {"serbest": 0.0, "dikkat": 1.0, BANT_BILINMIYOR: 1.5, "karne": 2.0, "kapalı": 3.0}
@@ -104,21 +91,6 @@ def bayat_esik_dk() -> int:
     except (TypeError, ValueError):
         return BAYAT_ESIK_DK
     return deger if deger > 0 else BAYAT_ESIK_DK
-
-
-def codex_bayat_esik_dk() -> int:
-    """Codex/rollout için yaş kuralı eşiği; 0 = kapalı (varsayılan).
-
-    Kaçış kapağı: ``BEYIN_KOTA_CODEX_BAYAT_DK``. Olay günlüğünde yaş normalde
-    bayatlık DEĞİLDİR (bkz. modül docstring'i); yine de yaş sınırı isteyen
-    olursa buradan açılır.
-    """
-    ham = os.environ.get("BEYIN_KOTA_CODEX_BAYAT_DK")
-    try:
-        deger = int(str(ham).strip())
-    except (TypeError, ValueError):
-        return CODEX_BAYAT_ESIK_DK
-    return deger if deger > 0 else CODEX_BAYAT_ESIK_DK
 
 
 # ---------------------------------------------------------------------------
@@ -277,38 +249,23 @@ def degerlendir(pid: str, used: float | None, resets_at: int | None, pencere_sn:
     """Tek pencere için tam değerlendirme; veri eksikse None.
 
     ``gozlem_yas_dk`` = bu yüzdenin geldiği SUNUCU gözleminin yaşı (dakika).
-    ``bayat_kurali`` kaynağın cinsini söyler:
-
-    * ``KURAL_YAS`` (varsayılan, yoklanan önbellek): yaş eşiği aşarsa bant
-      ``bilinmiyor``. Yaş bilinmiyorsa (None) ölçüm yine yapılır, ama reset'i
-      geçmiş pencere için TAZELİK KANITI sayılmaz.
-    * ``KURAL_RESET`` (olay günlüğü, Codex rollout): yaş tek başına bayat
-      YAPMAZ — gözlem ``resets_at``'e kadar geçerlidir; reset geçtiyse ve
-      gözlem reset'ten ESKİYSE ``bilinmiyor``. Kaçış kapağı
-      ``BEYIN_KOTA_CODEX_BAYAT_DK`` açıksa yaş kuralı burada da işler.
+    Yaş eşiği aşarsa bant ``bilinmiyor``. Yaş bilinmiyorsa (None) ölçüm yine
+    yapılır, ama reset'i geçmiş pencere için TAZELİK KANITI sayılmaz.
+    ``bayat_kurali`` yalnız geriye dönük uyum için durur; tek geçerli değer
+    ``KURAL_YAS`` (2026-09-08: her kaynak canlı yoklanıyor).
     """
     if used is None or not resets_at or not pencere_sn:
         return None
     simdi = simdi if simdi is not None else _simdi()
     ornekler = ornekler if ornekler is not None else []
-    if bayat_kurali == KURAL_RESET:
-        kapak = bayat_esik if bayat_esik is not None else codex_bayat_esik_dk()
-        esik_dk = kapak if kapak and kapak > 0 else None
-    else:
-        esik_dk = bayat_esik if bayat_esik is not None else bayat_esik_dk()
+    esik_dk = bayat_esik if bayat_esik is not None else bayat_esik_dk()
     used = float(used)
     kalan = max(0.0, 100.0 - used)
     kalan_saat = (int(resets_at) - simdi) / 3600
     bayat = (esik_dk is not None and gozlem_yas_dk is not None
              and gozlem_yas_dk > esik_dk)
-    if bayat_kurali == KURAL_RESET:
-        # Olay günlüğü: gözlem reset'ten SONRAYSA taze sayılır; yaşın kendisi
-        # ölçü değildir (Codex koşmadıkça mtime ilerlemez, kullanım da değişmez).
-        taze = (gozlem_yas_dk is not None
-                and (simdi - gozlem_yas_dk * 60) >= int(resets_at))
-    else:
-        taze = (esik_dk is not None and gozlem_yas_dk is not None
-                and gozlem_yas_dk <= esik_dk)
+    taze = (esik_dk is not None and gozlem_yas_dk is not None
+            and gozlem_yas_dk <= esik_dk)
     if bayat:
         # Değer donmuş olabilir: %36 da, %99 da aynı görünür. Ölçme, sus.
         return _bilinmiyor(pid, used, kalan, kalan_saat, "bayat", gozlem_yas_dk)
@@ -327,14 +284,7 @@ def degerlendir(pid: str, used: float | None, resets_at: int | None, pencere_sn:
     yanma = yanma_hizi(pid, used, int(resets_at), ornekler, simdi, ufuk_saat=ufuk,
                        en_az_dk=min(EN_AZ_ARALIK_DK, int(ufuk * 30)))
     tahmin = False
-    if (yanma is None and bayat_kurali == KURAL_RESET and gozlem_yas_dk is not None
-            and gozlem_yas_dk * 60 >= ufuk * 3600):
-        # Olay günlüğü ÖLÇÜM UFKU boyunca sessiz: yeni rollout yok demek yeni
-        # kullanım yok demek. Gerçek yanma 0'dır; geriye bakan yedek (used ÷
-        # elapsed) burada pencerenin BAŞINDAKİ yoğunluğu şimdiye yansıtıp
-        # %83'ü "kapalı" gösteriyordu (6 Eylül 00:58 satırı).
-        yanma = 0.0
-    elif yanma is None:
+    if yanma is None:
         # yedek: geriye bakan tempo (used ÷ elapsed) — pencere başı kayan olduğundan tahmindir
         # pencere başında gürültülü (1 saatte %2 → "kapalı" çıkar); pencerenin
         # en az YEDEK_ESIK'i geçmeden yedek de kullanılmaz → R yok, serbest.

@@ -2,11 +2,16 @@
 """Statusline köprüsü — Claude Code'un stdin JSON'undaki resmî rate_limits
 alanını diske düşürür ve kısa bir durum satırı basar.
 
-Master kararı 2026-08-29: "Claude içinde aynısını yap" — resmî yüzde artık
-yerelde birikir; kota.py bu önbelleği okur. Alan belgesiz ve sürümler arası
-kırılgan (issue #45133/#40094): yoksa sessizce yalnız model adı basılır,
-önbellek ellenmez (bayat veri taze verinin üstüne yazılmaz).
-Kaynak: Ham-Araştırma/2026-08-29-kota-okuma.md
+Master kararı 2026-08-29: "Claude içinde aynısını yap" — resmî yüzde yerelde
+birikir. Alan belgesiz ve sürümler arası kırılgan (issue #45133/#40094):
+yoksa sessizce yalnız model adı basılır, önbellek ellenmez.
+
+2026-09-08 (Master, 60. oturum: "eski bilgiyi okumak hata"): kota.py bu
+önbelleği ARTIK OKUMAZ. Kota yüzdeleri her çağrıda canlı okunur (Claude için
+OAuth ucu, Codex için `codex app-server`); okunamazsa satır sayı basmaz.
+Bu dosya yalnız statusline'ın kendi satırını basar ve `claude-kota.json`u
+tanı/tarihçe kaydı olarak yazmayı sürdürür — gösterim zincirinde DEĞİLDİR.
+Kaynak: Ham-Araştırma/2026-08-29-kota-okuma.md · 2026-09-08-kota-canli-okuma.md
 """
 from __future__ import annotations
 
