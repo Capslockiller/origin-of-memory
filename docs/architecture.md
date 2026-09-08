@@ -949,7 +949,9 @@ completely. The environment variables below tune retrieval through
 |---|---|---|
 | `BEYIN_RETRIEVE_MIN_SCORE` | `0.0` (off) | Floor on positive `-bm25()` relevance before the gate runs |
 | `BEYIN_RETRIEVE_STRICT_SCORE` | `25.0` | A hit at or above this score is admitted even with no token overlap |
-| `BEYIN_EL_KATMANI_ORAN` | `0.6` | Hand-first authority threshold relative to the best concept hit |
+| `BEYIN_EL_KATMANI_ORAN` | `1.35` | Hand-first authority threshold relative to the best concept hit |
+| `BEYIN_EL_KATMANI_DOSYALARI` | `Last-Session.md,Threads.md` | Companion files allowed to take hand-first authority |
+| `BEYIN_EL_KATMANI_ONCELIK` | `2` | Cap on hand passages placed ahead of the concepts; `0` means no cap |
 
 Path-like chunks, `.py`/`.md`/`.ps1` names, drive paths, hexadecimal ids of at
 least seven characters, and generic Turkish caller words are removed before
@@ -991,10 +993,16 @@ a half-built index. `meta` records the three hand-file mtimes. **`yenile`**
 automatically on mtime drift. A note with missing or invalid frontmatter raises
 `RetrieveError` rather than being silently indexed wrong.
 
-**Scoped authority.** Search computes ordinary BM25 for both layers. Hand hits
-whose positive score reaches 0.6 of the best concept score (configurable by
-`BEYIN_EL_KATMANI_ORAN`) move before concepts; weaker hand hits do not. Emitted
-hand passages carry `[el katmanı · <file> › <heading> · <date>]`.
+**Scoped authority.** Search computes ordinary BM25 for both layers. A hand hit
+moves before concepts only when it clears three measured tests: it *outscores*
+the best concept by `BEYIN_EL_KATMANI_ORAN` (default `1.35` — a margin, not a
+fraction), it comes from a file in `BEYIN_EL_KATMANI_DOSYALARI` (default
+`Last-Session.md,Threads.md`, so narrative `Journal.md` prose is searchable but
+never hand-first), and it fits under `BEYIN_EL_KATMANI_ONCELIK` (default 2).
+Every other hand hit ranks after the concepts. See
+[`retrieval.md`](retrieval.md) for the I3 measurement table behind those
+defaults. Emitted hand passages carry
+`[el katmanı · <file> › <heading> · <date>]`.
 
 **Correction exclusion.** `Duzeltmeler.md` and its grammar belong to `duzelt.py`
 (§5.9); retrieval parses it with `duzelt.ayristir()` rather than a second regex

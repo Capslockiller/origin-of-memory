@@ -28,6 +28,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regression fixture scores 10/10 at top 3 and pins the hand correction ahead
   of a contradicting stale concept.
 
+### Changed
+
+<!-- yazan: claude · opus-5 -->
+- **Hand-layer authority is now a margin, scoped to the status files and
+  capped (Phase 1 follow-up I3).** Lane C let any Companion passage scoring 60%
+  of the best concept jump every concept note; measured against the live
+  corpus, that pushed the 125-question concept gold set from a 102@3 / 110@5
+  baseline down to 94@3 / 103@5. A hand passage must now (1) *outscore* the best
+  concept by `BEYIN_EL_KATMANI_ORAN`, whose default rises from `0.6` to `1.35`,
+  (2) come from a file listed in `BEYIN_EL_KATMANI_DOSYALARI`, default
+  `Last-Session.md,Threads.md` — `Journal.md` stays indexed and searchable but
+  is narrative prose and never ranks hand-first — and (3) fit under
+  `BEYIN_EL_KATMANI_ONCELIK`, at most 2 hand passages ahead of the concepts.
+  The gold set returns to **103@3 / 110@5**, which is exactly the ceiling the
+  same corpus reaches with authority switched off entirely, while all ten
+  current-fact questions still answer (8/10 once the hook relevance gate also
+  runs, against 9/10 at `0.6` and 3/10 · 2/10 with authority off), and mean
+  injected context per event drops from 2,089 to 1,412 characters. All three knobs stay operator-overridable and
+  degrade to their defaults on junk input. Passage length was measured and
+  deliberately left at `HAND_PASSAGE_CAP = 1,200`: re-indexing at 600 or 800
+  characters shifts corpus-wide BM25 statistics and lowers the ceiling to
+  108 / 109.
+
 ### Fixed
 
 <!-- yazan: claude · opus-5 -->

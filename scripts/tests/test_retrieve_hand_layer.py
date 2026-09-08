@@ -64,6 +64,9 @@ class FixtureVaultTests(unittest.TestCase):
         self.assertIn("40 euro", [hit.body for hit in hits if hit.source == "concept"][0])
 
     def test_hand_injection_has_provenance_and_date_header(self) -> None:
+        # Order is the authority rule's business (tested below); this asserts
+        # only that whatever hand passage is injected carries its file,
+        # heading and date, so the reader can see where the sentence is from.
         result = retrieve.hook_result(
             "Speaking yeni tarih ücret bilgisi",
             db_path=self.db,
@@ -71,13 +74,41 @@ class FixtureVaultTests(unittest.TestCase):
             require_overlap=True,
         )
 
-        self.assertTrue(result["notes"])
+        hand = next(
+            note
+            for note in result["notes"]
+            if note["source"] == retrieve.SOURCE_HAND
+        )
         self.assertTrue(
-            result["notes"][0]["body"].startswith(
+            hand["body"].startswith(
                 "[el katmanı · Threads.md › Active › Speaking sınavı tarih ücret · "
                 "2026-09-18]"
             )
         )
+
+    def test_authority_needs_a_margin_not_mere_competitiveness(self) -> None:
+        # Same passage, same concept, two phrasings of the same question. The
+        # short one leaves the hand passage only ~1.16x the concept's score --
+        # under DEFAULT_HAND_AUTHORITY_RATIO, so it stays behind. The full
+        # question puts it at ~1.57x and it leads. This is the I3 fix: lane C
+        # shipped 0.6, which promoted both, and that is what cost the gold set.
+        near = retrieve.search(
+            "Speaking yeni tarih ücret bilgisi",
+            limit=5,
+            db_path=self.db,
+            vault_root=self.root,
+        )
+        clear = retrieve.search(
+            "Speaking için yeni tarih alındı mı ve ücret kaç euro?",
+            limit=5,
+            db_path=self.db,
+            vault_root=self.root,
+        )
+
+        self.assertEqual(near[0].source, retrieve.SOURCE_CONCEPT)
+        self.assertEqual(near[1].source, retrieve.SOURCE_HAND)
+        self.assertGreater(near[1].score_abs, near[0].score_abs)
+        self.assertEqual(clear[0].source, retrieve.SOURCE_HAND)
 
     def test_audit_machine_prompts_produce_zero_injections(self) -> None:
         prompts = json.loads(
@@ -177,21 +208,127 @@ class HandParserTests(RetrieveHarness):
         self.assertIsNotNone(output)
         self.assertIn("başarılı olarak kaydedildi", output)
 
+    @staticmethod
+    def hand(name: str, score: float, source_file: str = "Threads.md"):
+        return retrieve.SearchHit(
+            name,
+            name.title(),
+            "",
+            score,
+            source=retrieve.SOURCE_HAND,
+            source_file=source_file,
+        )
+
     def test_scoped_authority_ratio_does_not_promote_every_hand_hit(self) -> None:
         hits = [
             retrieve.SearchHit("concept", "Concept", "", -10.0),
-            retrieve.SearchHit(
-                "strong-hand", "Strong", "", -7.0, source=retrieve.SOURCE_HAND
-            ),
-            retrieve.SearchHit(
-                "weak-hand", "Weak", "", -5.0, source=retrieve.SOURCE_HAND
-            ),
+            self.hand("strong-hand", -7.0),
+            self.hand("weak-hand", -5.0),
         ]
 
-        ordered = retrieve._authority_order(hits, ratio=0.6)
+        ordered = retrieve._authority_order(
+            hits, ratio=0.6, files=("Threads.md",)
+        )
 
         self.assertEqual(
             [hit.name for hit in ordered], ["strong-hand", "concept", "weak-hand"]
+        )
+
+    def test_default_ratio_keeps_a_merely_competitive_hand_hit_behind(self) -> None:
+        # 12.0 is 1.2x the best concept: a better match than it, but not by the
+        # measured margin, so the concept still answers the question.
+        hits = [
+            retrieve.SearchHit("concept", "Concept", "", -10.0),
+            self.hand("near-hand", -12.0),
+            self.hand("clear-hand", -20.0),
+        ]
+
+        ordered = retrieve._authority_order(
+            hits,
+            ratio=retrieve.DEFAULT_HAND_AUTHORITY_RATIO,
+            files=retrieve.DEFAULT_HAND_AUTHORITY_FILES,
+        )
+
+        self.assertEqual(
+            [hit.name for hit in ordered], ["clear-hand", "concept", "near-hand"]
+        )
+
+    def test_journal_prose_is_reachable_but_never_precedes_a_concept(self) -> None:
+        # Journal.md is narrative prose, not a status ledger: it is indexed and
+        # searchable, but it never takes authority however well it scores.
+        hits = [
+            retrieve.SearchHit("concept", "Concept", "", -10.0),
+            self.hand("journal-hand", -40.0, source_file="Journal.md"),
+        ]
+
+        ordered = retrieve._authority_order(
+            hits,
+            ratio=retrieve.DEFAULT_HAND_AUTHORITY_RATIO,
+            files=retrieve.DEFAULT_HAND_AUTHORITY_FILES,
+        )
+
+        self.assertEqual([hit.name for hit in ordered], ["concept", "journal-hand"])
+        self.assertNotIn("Journal.md", retrieve.DEFAULT_HAND_AUTHORITY_FILES)
+        self.assertIn("Journal.md", retrieve.HAND_FILES)
+
+    def test_only_the_capped_number_of_hand_hits_goes_ahead(self) -> None:
+        hits = [
+            retrieve.SearchHit("concept", "Concept", "", -10.0),
+            self.hand("first", -40.0),
+            self.hand("second", -30.0),
+            self.hand("third", -20.0),
+        ]
+
+        ordered = retrieve._authority_order(
+            hits,
+            ratio=retrieve.DEFAULT_HAND_AUTHORITY_RATIO,
+            limit=retrieve.DEFAULT_HAND_AUTHORITY_LIMIT,
+            files=retrieve.DEFAULT_HAND_AUTHORITY_FILES,
+        )
+
+        self.assertEqual(retrieve.DEFAULT_HAND_AUTHORITY_LIMIT, 2)
+        self.assertEqual(
+            [hit.name for hit in ordered],
+            ["first", "second", "concept", "third"],
+        )
+
+    def test_zero_cap_means_no_cap(self) -> None:
+        hits = [
+            retrieve.SearchHit("concept", "Concept", "", -10.0),
+            self.hand("first", -40.0),
+            self.hand("second", -30.0),
+            self.hand("third", -20.0),
+        ]
+
+        ordered = retrieve._authority_order(
+            hits, ratio=1.35, limit=0, files=("Threads.md",)
+        )
+
+        self.assertEqual(
+            [hit.name for hit in ordered],
+            ["first", "second", "third", "concept"],
+        )
+
+    def test_operator_env_knobs_override_the_measured_defaults(self) -> None:
+        self.assertEqual(retrieve._authority_limit({}), 2)
+        self.assertEqual(
+            retrieve._authority_limit({retrieve.ENV_HAND_AUTHORITY_LIMIT: "1"}), 1
+        )
+        self.assertEqual(
+            retrieve._authority_limit({retrieve.ENV_HAND_AUTHORITY_LIMIT: "sifir"}), 2
+        )
+        self.assertEqual(
+            retrieve._authority_files({}), retrieve.DEFAULT_HAND_AUTHORITY_FILES
+        )
+        self.assertEqual(
+            retrieve._authority_files(
+                {retrieve.ENV_HAND_AUTHORITY_FILES: "Journal.md, Threads.md"}
+            ),
+            ("Journal.md", "Threads.md"),
+        )
+        self.assertEqual(
+            retrieve._authority_files({retrieve.ENV_HAND_AUTHORITY_FILES: "  "}),
+            retrieve.DEFAULT_HAND_AUTHORITY_FILES,
         )
 
     def test_hand_only_refresh_stays_under_one_second_at_roughly_110_kb(self) -> None:
@@ -536,9 +673,7 @@ class HandLayerBodyOverlapGateTests(RetrieveHarness):
         )
         self.build()
 
-    def test_sparse_metadata_hand_passage_injects_via_hook_ahead_of_concept(
-        self,
-    ) -> None:
+    def test_sparse_metadata_hand_passage_injects_via_hook(self) -> None:
         # Metadata alone gives exactly one overlap ("speaking"): title
         # "Threads › Active › Randevu güncellemesi" and tag "Speaking" share
         # nothing else with the question's content words.
@@ -582,15 +717,12 @@ class HandLayerBodyOverlapGateTests(RetrieveHarness):
         context = payload["hookSpecificOutput"]["additionalContext"]
         self.assertIn("[el katmanı · Threads.md", context)
         self.assertIn("18 Eylül 2026", context)
-        hand_index = context.index("--- Companion/Threads.md ---")
-        concept_index = context.index(
-            "--- knowledge/concepts/speaking-plan.md ---"
-        )
-        self.assertLess(
-            hand_index,
-            concept_index,
-            "the hand passage must precede the concept in the injected context",
-        )
+        # The I2 gate decides ADMISSION; the I3 authority rule decides ORDER.
+        # This passage's metadata is deliberately sparse, so it does not clear
+        # the authority margin over the concept and lands second -- but it is
+        # in the context at all, which before I2 it never was.
+        self.assertIn("--- Companion/Threads.md ---", context)
+        self.assertIn("--- knowledge/concepts/speaking-plan.md ---", context)
 
     def test_unrelated_prompts_still_inject_nothing(self) -> None:
         junk_prompts = [

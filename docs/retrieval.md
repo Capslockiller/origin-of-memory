@@ -51,13 +51,63 @@ same floor from `BEYIN_RETRIEVE_MIN_SCORE` (default `0.0`, i.e. off) and
 layers a separate relevance gate on top; see [§9](#9-the-hook-relevance-gate)
 below.
 
-### Scoped hand authority
+### Authority: when a hand passage may precede a concept
 
-The strongest concept BM25 score is the reference for each query. A hand hit
-moves before concept hits only when its positive relevance is at least
-`BEYIN_EL_KATMANI_ORAN` times that reference (default `0.6`). Qualifying hand
-hits come first, concept hits fill the remaining result/body budget, and weaker
-hand hits remain after them. If no concept matches, hand hits rank normally.
+The strongest concept BM25 score is the reference for each query. A hand
+passage takes authority — moves ahead of every concept hit — only when it
+clears **all three** of the following. Otherwise it keeps its place *behind*
+the concepts, still reachable, still injectable, just not first.
+
+| Test | Knob | Default | What it means |
+|---|---|---|---|
+| Margin | `BEYIN_EL_KATMANI_ORAN` | `1.35` | The passage's positive relevance must be at least this multiple of the best concept's. Above `1.0` this is a margin: the passage has to be a *clearly better* match, not merely a competitive one. |
+| Scope | `BEYIN_EL_KATMANI_DOSYALARI` | `Last-Session.md,Threads.md` | Only these Companion files may take authority. `Journal.md` is narrative prose — indexed and searchable, never hand-first. |
+| Cap | `BEYIN_EL_KATMANI_ONCELIK` | `2` | At most this many hand passages go ahead of the concepts; the rest queue behind them. `0` means no cap. |
+
+Qualifying hand hits come first, concept hits fill the remaining result/body
+budget, and every other hand hit remains after them. If no concept matches at
+all, hand hits rank normally.
+
+**Why a margin and not a fraction.** Lane C shipped `0.6`, unscoped and
+uncapped: a passage only had to reach 60% of the best concept's score to jump
+every concept. Long, topically-mixed Journal and Threads passages then outranked
+the right concept note on generic topic questions, and the 125-question concept
+gold set fell from a 102@3 / 110@5 baseline to 94@3 / 103@5 while the ten
+current-fact (episodic) questions rose from 1/10 to 10/10. The two metrics were
+pulling against each other, and the balance was on the wrong side.
+
+Re-measured in Phase 1 follow-up I3 against a private index of the same live
+corpus, one knob at a time and then combined:
+
+| Configuration | gold@3 | gold@5 | episodic (query) | episodic (hook) | mean chars/event |
+|---|---|---|---|---|---|
+| `0.6`, all files, no cap (lane C) | 94/125 | 103/125 | 10/10 | 9/10 | 2,089 |
+| `1.0`, all files, no cap | 102/125 | 109/125 | 10/10 | 8/10 | 1,555 |
+| `0.6`, no Journal, no cap | 99/125 | 105/125 | 10/10 | 9/10 | 2,193 |
+| `0.6`, all files, cap 1 | 100/125 | 107/125 | 8/10 | 7/10 | 1,200 |
+| **`1.35`, no Journal, cap 2 (default)** | **103/125** | **110/125** | **10/10** | **8/10** | **1,412** |
+| authority off entirely | 103/125 | 110/125 | 3/10 | 2/10 | 146 |
+
+"episodic (query)" is `search()`, the path the acceptance measurement used;
+"episodic (hook)" is the same ten questions through `hook_result()` with the
+relevance gate on, which is what a live `UserPromptSubmit` actually injects.
+
+The last row is the ceiling: with the hand layer indexed but never allowed
+ahead of a concept, this corpus scores 103@3 / 110@5. The tuned default reaches
+that ceiling exactly — authority now costs the concept layer **nothing** — and
+still answers all ten current-fact questions on the query path, eight of them
+through the hook gate (against nine at `0.6`). Read the ±1-question
+differences with [§5 of `evaluation.md`](evaluation.md) in hand: at n = 125 a
+single flipped question is far under the significance floor. The knobs were
+chosen from the middle of a plateau — `gold@5 = 110` holds for every ratio
+from 1.28 up, and episodic holds at 10/10 · 8/10 through 1.40 before dropping
+at 1.45 — not from the single value that maximised a score.
+
+Passage length was measured too and left alone. Re-indexing the hand layer at
+600 / 800 / 1,600 / 2,400 characters instead of `HAND_PASSAGE_CAP = 1,200`
+changes corpus-wide BM25 statistics and *lowers* the ceiling (108 and 109 at
+600 and 800); nothing above 1,200 beats it on injected volume.
+
 Each emitted hand passage starts with visible provenance:
 
 ```text
@@ -243,7 +293,9 @@ a nightly no-op cannot grow the file without bound. Current reasons:
 | Variable | Default | Effect |
 |---|---|---|
 | `BEYIN_COMPILE_MIN_INTERVAL_HOURS` | `20` | Minimum gap after a successful compile; `0` disables the gate |
-| `BEYIN_EL_KATMANI_ORAN` | `0.6` | Minimum hand-hit/best-concept relevance ratio for hand-first authority |
+| `BEYIN_EL_KATMANI_ORAN` | `1.35` | Hand-hit/best-concept relevance ratio a hand passage must clear to rank first |
+| `BEYIN_EL_KATMANI_DOSYALARI` | `Last-Session.md,Threads.md` | Companion files allowed to take authority at all |
+| `BEYIN_EL_KATMANI_ONCELIK` | `2` | How many hand passages may precede the concepts; `0` means no cap |
 
 Every one of these degrades to its default on junk input rather than raising.
 These run inside hooks, and a hook that crashes takes the session's turn with it.
@@ -409,7 +461,9 @@ metadata-only rule and the anti-junk behaviour it buys.
 |---|---|---|
 | `BEYIN_RETRIEVE_MIN_SCORE` | `0.0` | Floor on positive `-bm25()` relevance, applied before the gate |
 | `BEYIN_RETRIEVE_STRICT_SCORE` | `25.0` | A hit at or above this score is admitted without token overlap |
-| `BEYIN_EL_KATMANI_ORAN` | `0.6` | Hand-first threshold relative to the best concept score |
+| `BEYIN_EL_KATMANI_ORAN` | `1.35` | Hand-first threshold relative to the best concept score |
+| `BEYIN_EL_KATMANI_DOSYALARI` | `Last-Session.md,Threads.md` | Companion files allowed to take authority |
+| `BEYIN_EL_KATMANI_ONCELIK` | `2` | Cap on hand passages placed ahead of concepts |
 
 `gate_tokens()` also drops path-shaped chunks (slashes, drive paths, `.py`,
 `.md`, `.ps1`), hexadecimal ids of seven or more characters, and one shared

@@ -180,10 +180,28 @@ DEFAULT_MIN_SCORE = 0.0
 # Escape hatch for a single-distinctive-token query with a dominant match:
 # above the strongest junk top-1 hit measured (20.9).
 DEFAULT_STRICT_SCORE = 25.0
-DEFAULT_HAND_AUTHORITY_RATIO = 0.6
+# Authority defaults, all three measured together in Phase 1 follow-up I3
+# (docs/retrieval.md, "authority: when a hand passage may precede a concept").
+# Lane C shipped 0.6 with no file scope and no cap: a hand passage only had to
+# reach 60% of the best concept's score to jump every concept, so long
+# topically-mixed Journal/Threads passages outranked the right concept note on
+# generic topic questions and the 125-question gold set fell to 94@3 / 103@5
+# from a 102/110 baseline. Re-measured against the live corpus, a private index
+# and both scorers:
+#   ratio 0.6 / no scope / no cap  -> gold 94@3 103@5, episodic 10/10
+#   ratio 1.35 / no Journal / cap 2 -> gold 103@3 110@5, episodic 10/10
+# 110@5 is the ceiling: with authority off entirely the same corpus scores
+# 103@3 110@5 and episodic 3/10, so the tuned default costs the concept layer
+# nothing at all and still answers every one of the ten current-fact
+# questions (8/10 once the hook relevance gate also runs, against 9/10 at 0.6).
+DEFAULT_HAND_AUTHORITY_RATIO = 1.35
+DEFAULT_HAND_AUTHORITY_LIMIT = 2
+DEFAULT_HAND_AUTHORITY_FILES = ("Last-Session.md", "Threads.md")
 ENV_MIN_SCORE = "BEYIN_RETRIEVE_MIN_SCORE"
 ENV_STRICT_SCORE = "BEYIN_RETRIEVE_STRICT_SCORE"
 ENV_HAND_AUTHORITY_RATIO = "BEYIN_EL_KATMANI_ORAN"
+ENV_HAND_AUTHORITY_LIMIT = "BEYIN_EL_KATMANI_ONCELIK"
+ENV_HAND_AUTHORITY_FILES = "BEYIN_EL_KATMANI_DOSYALARI"
 LEDGER_MAX_DECISIONS = 50
 
 REASON_INTERNAL = "skip:internal"
@@ -1146,23 +1164,43 @@ def _correction_hit(hit: SearchHit, correct: str) -> SearchHit:
 
 
 def _authority_order(
-    hits: Sequence[SearchHit], ratio: float
+    hits: Sequence[SearchHit],
+    ratio: float,
+    limit: int = DEFAULT_HAND_AUTHORITY_LIMIT,
+    files: Sequence[str] = DEFAULT_HAND_AUTHORITY_FILES,
 ) -> list[SearchHit]:
-    """Promote only hand hits competitive with the strongest concept hit.
+    """Promote only hand hits that clearly beat the strongest concept hit.
 
-    Scoped, not unconditional: the hand layer wins when it is *about* the
-    question too, and a hand passage that BM25 ranks far below the best concept
-    keeps its place behind the concepts. Partitioning is done by position, not
-    by value, because two hits can compare equal (same score, same empty body)
-    and must still both survive the split.
+    Scoped, not unconditional, on three axes measured in Phase 1 follow-up I3
+    (docs/retrieval.md, "authority: when a hand passage may precede a
+    concept"):
+
+    * ``ratio`` -- a hand passage must score at least ``ratio`` times the
+      strongest concept hit. Below that it keeps its place behind concepts.
+    * ``files`` -- only passages from these Companion files may take authority
+      at all. ``Journal.md`` is narrative prose: it is indexed and reachable,
+      but never jumps a concept note.
+    * ``limit`` -- at most this many hand passages are placed ahead of the
+      concepts; the rest queue behind them. ``0`` means no cap.
+
+    Partitioning is done by position, not by value, because two hits can
+    compare equal (same score, same empty body) and must still both survive
+    the split.
     """
     concept_hits = [hit for hit in hits if hit.source != SOURCE_HAND]
     hand_hits = [hit for hit in hits if hit.source == SOURCE_HAND]
     if not concept_hits:
         return hand_hits
+    allowed = set(files)
     floor = max(hit.score_abs for hit in concept_hits) * ratio
-    qualified = [hit for hit in hand_hits if hit.score_abs >= floor]
-    weak = [hit for hit in hand_hits if hit.score_abs < floor]
+    qualified: list[SearchHit] = []
+    weak: list[SearchHit] = []
+    for hit in hand_hits:
+        eligible = hit.score_abs >= floor and hit.source_file in allowed
+        if eligible and (limit <= 0 or len(qualified) < limit):
+            qualified.append(hit)
+        else:
+            weak.append(hit)
     return qualified + concept_hits + weak
 
 
@@ -1254,12 +1292,40 @@ def search(
             authority_ratio,
             env,
         )
-        if not 0 <= ratio <= 1:
+        if ratio < 0:
             ratio = DEFAULT_HAND_AUTHORITY_RATIO
-        return _authority_order(raw_hits, ratio)[:limit]
+        return _authority_order(
+            raw_hits,
+            ratio,
+            _authority_limit(env),
+            _authority_files(env),
+        )[:limit]
     finally:
         if owns_connection:
             connection.close()
+
+
+def _authority_limit(environ: dict[str, str] | None = None) -> int:
+    """How many hand passages may sit ahead of the concepts; junk is ignored."""
+    env = os.environ if environ is None else environ
+    raw = (env.get(ENV_HAND_AUTHORITY_LIMIT) or "").strip()
+    if not raw:
+        return DEFAULT_HAND_AUTHORITY_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_HAND_AUTHORITY_LIMIT
+    return value if value >= 0 else DEFAULT_HAND_AUTHORITY_LIMIT
+
+
+def _authority_files(environ: dict[str, str] | None = None) -> tuple[str, ...]:
+    """Which Companion files may take authority; junk is ignored."""
+    env = os.environ if environ is None else environ
+    raw = (env.get(ENV_HAND_AUTHORITY_FILES) or "").strip()
+    if not raw:
+        return tuple(DEFAULT_HAND_AUTHORITY_FILES)
+    names = tuple(part.strip() for part in raw.split(",") if part.strip())
+    return names or tuple(DEFAULT_HAND_AUTHORITY_FILES)
 
 
 def _env_float(
