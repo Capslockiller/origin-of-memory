@@ -98,8 +98,13 @@ class SummaryContractTests(unittest.TestCase):
             "## Öğrenilenler\nd\n## Yapılacaklar\ne\n"
         )
         self.assertFalse(flush.validate_summary(reordered))
+        # Faz 1 A-I1: a preamble is now tolerated. It used to be fatal, and on
+        # 2026-09-08 that cost 6 of 20 sweep summaries — Haiku prefixes a
+        # sentence of its own intermittently, and the same session validated on
+        # retry. The five sections and their order are still the contract; see
+        # test_flush_ozet_semasi.py for the full tolerance matrix.
         preamble = "Şöyle özetledim:\n" + GOOD_SUMMARY
-        self.assertFalse(flush.validate_summary(preamble))
+        self.assertTrue(flush.validate_summary(preamble))
 
     def test_short_session_is_bos_without_model_call(self) -> None:
         calls: list[str] = []

@@ -15,8 +15,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   volatile time/quota suffix comes last; same-second, same-cwd duplicate starts
   receive a minimal notice; and `enjeksiyon.jsonl` now records `session_id`,
   `cwd`, `cift`, and the names of trimmed sections.
+- **Flush commits exact, contiguous ranges instead of discarding capped
+  prefixes (Astra A1-1C).** Oldest-first chunks carry deterministic daily
+  range/fragment markers, survive append-before-state crashes without duplicate
+  blocks, drain under three-chunk/180-second defaults, and park the same failed
+  chunk after three attempts without advancing `kapsanan`.
+- **Hourly reconciliation is now the authoritative capture signal (Astra
+  A1-3R).** The sweep observes a 20-minute quiet window with a four-hour oldest
+  turn override, then writes `.state/mutabakat.json`; `durum.py` reports
+  uncovered sessions and oldest source age. Hook launch records now include
+  child PID/start status, Python writes PID-addressed capped stderr logs, and
+  reconciliation warns about ingress with no matching delivery evidence.
 
 <!-- yazan: claude · opus-5 -->
+- **The summary validator rejected summaries that were fine.** On 2026-09-08 a
+  sweep threw away 6 of 20 Haiku summaries as `summary-schema-invalid`, and the
+  same sessions validated on retry: the model intermittently prefixes a
+  sentence of its own, demotes the five sections to `###` under a document
+  title, or bolds the heading text. `validate_summary()` now drops a preamble,
+  normalises `###` to `##`, and strips bold, trailing whitespace and closed-ATX
+  hashes from heading text, while a missing section, a reordered one, and any
+  contract heading that appears before `Bağlam` stay fatal. A rejection is no
+  longer a verdict with no evidence — the raw output is written to
+  `.state/red/<session>-<ts>.md` (newest 50 kept) and the delivery ledger's
+  `flush:rejected` line names the file.
+
 - **The timed sweep lost memory three ways; all three are closed.** (1) The
   `--since-hours` window was applied to every transcript, so a sweep that ran
   late skipped sessions it had never seen — the age cutoff now applies only to

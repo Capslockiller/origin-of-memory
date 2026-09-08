@@ -39,6 +39,10 @@ LOCAL_MAX_TRANSCRIPT_CHARS = 24_000
 FLUSH_CHUNK_ENV = "BEYIN_FLUSH_CHUNK_CHARS"
 FLUSH_MAX_CHARS_ENV = "BEYIN_FLUSH_MAX_CHARS"
 FLUSH_MAX_TURNS_ENV = "BEYIN_FLUSH_MAX_TURNS"
+FLUSH_MAX_CHUNKS_ENV = "BEYIN_FLUSH_MAX_CHUNKS"
+FLUSH_MAX_SECONDS_ENV = "BEYIN_FLUSH_MAX_SECONDS"
+DEFAULT_FLUSH_MAX_CHUNKS = 3
+DEFAULT_FLUSH_MAX_SECONDS = 180.0
 STALE_HOOK_INPUT_SECONDS = 3_600
 STALE_FLUSH_STATE_SECONDS = 7 * 24 * 60 * 60
 COMPILE_MIN_INTERVAL_ENV = "BEYIN_COMPILE_MIN_INTERVAL_HOURS"
@@ -57,6 +61,17 @@ SWEEP_REASON = "tara"
 SWEEP_STATE_NAME = "flush-tara.json"
 PROJECTS_DIR_ENV = "BEYIN_CLAUDE_PROJECTS"
 DEFAULT_SWEEP_SINCE_HOURS = 8.0
+SWEEP_QUIET_MINUTES_ENV = "BEYIN_TARA_SESSIZLIK_DK"
+SWEEP_MAX_DEFERRAL_HOURS_ENV = "BEYIN_TARA_AZAMI_ERTELEME_SAAT"
+DEFAULT_SWEEP_QUIET_MINUTES = 20.0
+DEFAULT_SWEEP_MAX_DEFERRAL_HOURS = 4.0
+RECONCILE_MIN_TURNS_ENV = "BEYIN_MUTABAKAT_MIN_TURNS"
+DEFAULT_RECONCILE_MIN_TURNS = 5
+RECONCILE_NAME = "mutabakat.json"
+INGRESS_LEDGER_NAME = "hook-girdi.jsonl"
+INGRESS_GRACE_SECONDS = 10 * 60
+STDERR_DIR_ENV = "BEYIN_FLUSH_STDERR_DIR"
+STDERR_MAX_BYTES = 64 * 1024
 SESSION_FILE_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 
 # Süpürge dışı transkriptler: `projects` altındaki her `.jsonl` bir oturum
@@ -73,6 +88,10 @@ SWEEP_EXCLUDED_STEM_PREFIXES = ("agent-",)
 # yakalanmadı" sorusunu geçmişe dönük cevaplayabilen tek kayıttır.
 DELIVERY_LEDGER_NAME = "flush-teslimat.jsonl"
 DELIVERY_LEDGER_MAX_BYTES = 2 * 1024 * 1024
+# Reddedilen özetin ham hali: teşhis edilebilsin diye saklanır, 50 dosyada
+# kapanır. A rejection with nothing to look at is a rejection nobody can fix.
+RED_DIR_NAME = "red"
+RED_MAX_FILES = 50
 
 REASON_OK = "flush:ok"
 REASON_MISSING_TRANSCRIPT = "flush:missing-transcript"
@@ -83,6 +102,8 @@ REASON_REJECTED = "flush:rejected"
 REASON_LOCKED = "flush:locked"
 REASON_BOS = "flush:bos"
 REASON_APPEND_FAILED = "flush:append-failed"
+REASON_PARKED = "flush:parked"
+REASON_STARTED = "flush:started"
 
 # Sessiz kalması yasak olanlar: bunlar `health.json`'a da uyarı düşer.
 # `flush:ok` ve `flush:no-new-turns` normal akıştır — yalnız deftere yazılır.
@@ -94,6 +115,7 @@ WARNING_REASONS = frozenset(
         REASON_REJECTED,
         REASON_BOS,
         REASON_APPEND_FAILED,
+        REASON_PARKED,
     }
 )
 
@@ -264,6 +286,28 @@ def read_transcript(path: Path) -> list[tuple[str, str]]:
     return turns
 
 
+def _read_turn_times(path: Path) -> list[tuple[str, dt.datetime | None]]:
+    """Return eligible turn roles with timestamps aligned to ``read_transcript``."""
+    result: list[tuple[str, dt.datetime | None]] = []
+    with path.open("r", encoding="utf-8") as transcript:
+        for line_number, raw_line in enumerate(transcript, start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                record = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"transcript-jsonl-invalid:{line_number}") from exc
+            if not isinstance(record, dict):
+                continue
+            role, content = _message_parts(record)
+            if role not in {"user", "assistant"}:
+                continue
+            if not re.sub(r"\s+", " ", _text_from_content(content)).strip():
+                continue
+            result.append((role, _parse_transcript_timestamp(record.get("timestamp"))))
+    return result
+
+
 def _turn_line(role: str, text: str) -> str:
     return f"**{'User' if role == 'user' else 'Assistant'}:** {text}"
 
@@ -350,6 +394,91 @@ def resolve_flush_chunk_chars(
     return MAX_TRANSCRIPT_CHARS, warning
 
 
+def _resolve_positive_number(
+    name: str,
+    default: int | float,
+    *,
+    integer: bool,
+    environment: dict[str, str] | None = None,
+) -> tuple[int | float, str | None]:
+    """Resolve one positive numeric bound without letting bad env disable it."""
+    env = os.environ if environment is None else environment
+    if name not in env:
+        return default, None
+    raw = env.get(name) or ""
+    try:
+        value = int(raw) if integer else float(raw)
+    except ValueError:
+        value = 0
+    if value > 0 and (integer or value == value):
+        return value, None
+    return default, f"warn:{name.lower().replace('_', '-')}-invalid:{raw}"
+
+
+def resolve_flush_max_chunks(
+    environment: dict[str, str] | None = None,
+) -> tuple[int, str | None]:
+    value, warning = _resolve_positive_number(
+        FLUSH_MAX_CHUNKS_ENV,
+        DEFAULT_FLUSH_MAX_CHUNKS,
+        integer=True,
+        environment=environment,
+    )
+    return int(value), warning
+
+
+def resolve_flush_max_seconds(
+    environment: dict[str, str] | None = None,
+) -> tuple[float, str | None]:
+    value, warning = _resolve_positive_number(
+        FLUSH_MAX_SECONDS_ENV,
+        DEFAULT_FLUSH_MAX_SECONDS,
+        integer=False,
+        environment=environment,
+    )
+    return float(value), warning
+
+
+def resolve_sweep_quiet_minutes(
+    environment: dict[str, str] | None = None,
+) -> float:
+    env = os.environ if environment is None else environment
+    raw = (env.get(SWEEP_QUIET_MINUTES_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_SWEEP_QUIET_MINUTES
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_SWEEP_QUIET_MINUTES
+    return value if value >= 0 and value == value else DEFAULT_SWEEP_QUIET_MINUTES
+
+
+def resolve_sweep_max_deferral_hours(
+    environment: dict[str, str] | None = None,
+) -> float:
+    env = os.environ if environment is None else environment
+    raw = (env.get(SWEEP_MAX_DEFERRAL_HOURS_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_SWEEP_MAX_DEFERRAL_HOURS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_SWEEP_MAX_DEFERRAL_HOURS
+    return value if value >= 0 and value == value else DEFAULT_SWEEP_MAX_DEFERRAL_HOURS
+
+
+def resolve_reconcile_min_turns(
+    environment: dict[str, str] | None = None,
+) -> int:
+    value, _warning = _resolve_positive_number(
+        RECONCILE_MIN_TURNS_ENV,
+        DEFAULT_RECONCILE_MIN_TURNS,
+        integer=True,
+        environment=environment,
+    )
+    return int(value)
+
+
 def _flush_state_detail(detail: str, chunk_chars: int) -> str:
     chunk_detail = f"flush-chunk-chars:{chunk_chars}"
     return f"{detail};{chunk_detail}" if detail else chunk_detail
@@ -377,15 +506,96 @@ Kalıcı değeri olan hiçbir şey yoksa yalnızca FLUSH_BOS yaz.
 """
 
 
+def _heading_text(raw: str) -> str:
+    """Normalise one heading's text: closing hashes, bold/italic, whitespace."""
+    value = raw.strip()
+    value = re.sub(r"\s*#+\s*\Z", "", value)  # closed-ATX "## Bağlam ##"
+    return value.strip().strip("*_").strip()
+
+
 def validate_summary(summary: str) -> bool:
-    """Require exactly the five v2 headings, once and in contract order."""
+    """Require the five v2 sections, once each and in contract order.
+
+    Tolerant where tolerance costs nothing and strict where the parse depends
+    on it.  The 2026-09-08 sweep had 6 of 20 summaries rejected as
+    ``summary-schema-invalid`` — the same sessions validated on retry — because
+    Haiku intermittently prefixes a sentence of its own ("Şöyle özetledim:"),
+    demotes the sections to ``###`` under a document title, or bolds the
+    heading text.  None of that changes the five sections or their order, which
+    is the only thing the daily parser and the compiler actually read, so the
+    validator now normalises heading level and text and skips a preamble.
+
+    What stays rejected: a missing section, a reordered one, and any summary
+    whose first contract heading is not ``Bağlam`` — so a preamble can never be
+    used to hide a section that came out of order.
+    """
     stripped = summary.strip()
-    matches = list(HEADING.finditer(stripped))
-    expected = [("##", section) for section in EXPECTED_SECTIONS]
-    actual = [(match.group(1), match.group(2)) for match in matches]
-    if actual != expected:
+    normalised: list[tuple[int, str]] = [
+        (len(match.group(1)), _heading_text(match.group(2)))
+        for match in HEADING.finditer(stripped)
+    ]
+    expected = set(EXPECTED_SECTIONS)
+    contract = [
+        text for level, text in normalised if level in (2, 3) and text in expected
+    ]
+    if contract != list(EXPECTED_SECTIONS):
         return False
-    return not stripped[: matches[0].start()].strip()
+    # Everything before the first contract heading is preamble and is dropped,
+    # but only when it carries no contract heading of its own — that case is a
+    # reordering, and it is already excluded by the equality above.
+    return True
+
+
+def _prune_red_store(directory: Path, keep: int = RED_MAX_FILES) -> None:
+    """Keep the newest ``keep`` rejected summaries; drop the rest."""
+    try:
+        entries = [
+            (path.stat().st_mtime, path.name, path)
+            for path in directory.glob("*.md")
+            if path.is_file()
+        ]
+    except OSError:
+        return
+    for _mtime, _name, path in sorted(entries)[: max(0, len(entries) - keep)]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
+def persist_rejected_summary(
+    state_dir: Path,
+    session_id: str,
+    summary: str,
+    when: dt.datetime | None = None,
+) -> str | None:
+    """Write one rejected summary to ``.state/red/`` and return its path.
+
+    The delivery ledger names this path, so `flush:rejected` stops being a
+    verdict with no evidence: the raw model output that failed the schema is
+    still on disk when somebody comes to read it.  Bookkeeping never breaks the
+    flush it books, so every failure here is swallowed and reported as ``None``.
+    """
+    if not summary:
+        return None
+    try:
+        directory = Path(state_dir) / RED_DIR_NAME
+        directory.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(session_id)).strip("-")
+        if not safe:
+            safe = "oturum"
+        moment = when or dt.datetime.now().astimezone()
+        stamp = moment.strftime("%Y%m%dT%H%M%S")
+        path = directory / f"{safe}-{stamp}.md"
+        suffix = 1
+        while path.exists():
+            path = directory / f"{safe}-{stamp}-{suffix}.md"
+            suffix += 1
+        path.write_text(summary, encoding="utf-8")
+        _prune_red_store(directory)
+        return str(path)
+    except (OSError, ValueError):
+        return None
 
 
 def _load_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -418,12 +628,17 @@ def record_delivery(
     transcript: Path | str,
     turns_seen: int = 0,
     turns_sent: int = 0,
+    turns_committed: int = 0,
+    turn_range: Sequence[int] | None = None,
+    fragment: Sequence[int] | None = None,
     chars_sent: int = 0,
     chunks: int = 0,
     ok: bool = False,
     when: dt.datetime | None = None,
+    red: str | None = None,
     ledger_name: str = DELIVERY_LEDGER_NAME,
     max_bytes: int = DELIVERY_LEDGER_MAX_BYTES,
+    pid: int | None = None,
 ) -> None:
     """Append one delivery line for a flush attempt: counts, never content.
 
@@ -441,10 +656,17 @@ def record_delivery(
             "transcript": str(transcript),
             "turns_seen": int(turns_seen),
             "turns_sent": int(turns_sent),
+            "turns_committed": int(turns_committed),
+            "range": [int(value) for value in (turn_range or [])],
             "chars_sent": int(chars_sent),
             "chunks": int(chunks),
             "ok": bool(ok),
+            "pid": int(os.getpid() if pid is None else pid),
         }
+        if fragment is not None:
+            record["fragment"] = [int(value) for value in fragment]
+        if red:
+            record["red"] = str(red)
         state_dir = Path(state_dir)
         state_dir.mkdir(parents=True, exist_ok=True)
         path = state_dir / ledger_name
@@ -463,9 +685,13 @@ def _note_delivery(
     transcript: Path | str,
     turns_seen: int = 0,
     turns_sent: int = 0,
+    turns_committed: int = 0,
+    turn_range: Sequence[int] | None = None,
+    fragment: Sequence[int] | None = None,
     chars_sent: int = 0,
     chunks: int = 0,
     ok: bool = False,
+    red: str | None = None,
     when: dt.datetime | None = None,
 ) -> None:
     """Ledger line for every attempt, plus a health warning for the bad ones."""
@@ -476,33 +702,98 @@ def _note_delivery(
         transcript=transcript,
         turns_seen=turns_seen,
         turns_sent=turns_sent,
+        turns_committed=turns_committed,
+        turn_range=turn_range,
+        fragment=fragment,
         chars_sent=chars_sent,
         chunks=chunks,
         ok=ok,
+        red=red,
         when=when,
     )
     if reason in WARNING_REASONS:
         write_health(state_dir, reason, warning=True, component="flush")
 
 
-def _read_turn_cursor(state_dir: Path, session_id: str) -> int:
-    """How many transcript turns this session has already had summarised.
+def _normalise_ranges(value: Any) -> list[list[int]]:
+    ranges: list[list[int]] = []
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, list) or len(item) != 2:
+                continue
+            start, end = item
+            if (
+                isinstance(start, bool)
+                or isinstance(end, bool)
+                or not isinstance(start, int)
+                or not isinstance(end, int)
+                or start < 0
+                or end <= start
+            ):
+                continue
+            ranges.append([start, end])
+    merged: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
 
-    The cursor replaces the old 60-second duplicate guard: two flushes 33
-    minutes apart on the same unchanged transcript used to sail past that guard
-    and summarise the identical tail twice (`daily/2026-09-04.md`, 14:27 and
-    15:24, both 9,862 model-input chars).
-    """
+
+def _contiguous_cursor(ranges: Sequence[Sequence[int]]) -> int:
+    cursor = 0
+    for start, end in ranges:
+        if start > cursor:
+            break
+        cursor = max(cursor, end)
+    return cursor
+
+
+def _read_flush_progress(state_dir: Path, session_id: str) -> dict[str, Any]:
+    """Read range state, upgrading the old scalar cursor in memory."""
     try:
         state = _load_json_object(_session_state_path(state_dir, session_id), {})
     except (OSError, ValueError, json.JSONDecodeError):
-        return 0
+        state = {}
     if state.get("session_id") != session_id:
-        return 0
-    value = state.get("last_turn_index")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        return 0
-    return value
+        state = {}
+
+    ranges = _normalise_ranges(state.get("kapsanan"))
+    if not ranges:
+        scalar = state.get("last_turn_index", state.get("turn_cursor", 0))
+        if isinstance(scalar, int) and not isinstance(scalar, bool) and scalar > 0:
+            ranges = [[0, scalar]]
+    cursor = _contiguous_cursor(ranges)
+
+    fragment = state.get("parca_siniri")
+    if not isinstance(fragment, dict):
+        fragment = None
+    elif not (
+        fragment.get("tur") == cursor
+        and isinstance(fragment.get("offset"), int)
+        and not isinstance(fragment.get("offset"), bool)
+        and fragment.get("offset", 0) > 0
+    ):
+        fragment = None
+
+    failed = state.get("basarisiz_parca")
+    if not isinstance(failed, dict):
+        failed = None
+    parked = state.get("parked")
+    if not isinstance(parked, dict):
+        parked = None
+    return {
+        "kapsanan": ranges,
+        "cursor": cursor,
+        "parca_siniri": fragment,
+        "basarisiz_parca": failed,
+        "parked": parked,
+    }
+
+
+def _read_turn_cursor(state_dir: Path, session_id: str) -> int:
+    return int(_read_flush_progress(state_dir, session_id)["cursor"])
 
 
 def _write_flush_state(
@@ -513,7 +804,14 @@ def _write_flush_state(
     detail: str = "",
     *,
     turn_cursor: int | None = None,
+    progress: dict[str, Any] | None = None,
 ) -> None:
+    current = dict(progress or _read_flush_progress(state_dir, session_id))
+    if turn_cursor is not None:
+        cursor = max(0, int(turn_cursor))
+        current["kapsanan"] = [[0, cursor]] if cursor else []
+        current["cursor"] = cursor
+        current["parca_siniri"] = None
     payload = {
         "session_id": session_id,
         "ts": int(now_epoch),
@@ -524,12 +822,12 @@ def _write_flush_state(
         # than threading the value through every caller.
         "timeout": claude_runner.resolve_timeout("flush")[0],
     }
-    # A state write that says nothing about the cursor must not erase it.
-    payload["last_turn_index"] = (
-        _read_turn_cursor(state_dir, session_id)
-        if turn_cursor is None
-        else max(0, int(turn_cursor))
-    )
+    payload["kapsanan"] = _normalise_ranges(current.get("kapsanan"))
+    payload["last_turn_index"] = _contiguous_cursor(payload["kapsanan"])
+    for key in ("parca_siniri", "basarisiz_parca", "parked"):
+        value = current.get(key)
+        if isinstance(value, dict):
+            payload[key] = value
     if detail:
         payload["detail"] = detail
     _atomic_write_json(_session_state_path(state_dir, session_id), payload)
@@ -539,6 +837,124 @@ def _write_flush_state(
         write_health(
             state_dir, "last-flush-compat-write-failed", component="flush"
         )
+
+
+def _add_committed_range(progress: dict[str, Any], start: int, end: int) -> None:
+    progress["kapsanan"] = _normalise_ranges(
+        [*progress.get("kapsanan", []), [start, end]]
+    )
+    progress["cursor"] = _contiguous_cursor(progress["kapsanan"])
+
+
+def _select_oldest_chunk(
+    turns: Sequence[tuple[str, str]],
+    progress: dict[str, Any],
+    *,
+    max_turns: int,
+    max_chars: int,
+) -> dict[str, Any] | None:
+    """Return the oldest uncommitted chunk, splitting one large turn by offset."""
+    cursor = int(progress.get("cursor", 0))
+    if cursor >= len(turns):
+        return None
+    role, text = turns[cursor]
+    fragment = progress.get("parca_siniri")
+    offset = int(fragment.get("offset", 0)) if isinstance(fragment, dict) else 0
+    offset = min(max(0, offset), len(text))
+    prefix = f"**{'User' if role == 'user' else 'Assistant'}:** "
+
+    if offset or len(prefix) + len(text) > max_chars:
+        capacity = max_chars - len(prefix)
+        if capacity > 0:
+            end_offset = min(len(text), offset + capacity)
+            rendered = prefix + text[offset:end_offset]
+        else:
+            end_offset = min(len(text), offset + max(1, max_chars))
+            rendered = text[offset:end_offset]
+        return {
+            "turn_start": cursor,
+            "turn_end": cursor + 1,
+            "rendered": rendered,
+            "turns_sent": 1,
+            "fragment": [offset, end_offset, len(text)],
+        }
+
+    lines: list[str] = []
+    end = cursor
+    while end < len(turns) and end - cursor < max_turns:
+        line = _turn_line(*turns[end])
+        candidate_length = len(line) + (1 if lines else 0) + sum(map(len, lines))
+        if candidate_length > max_chars:
+            break
+        lines.append(line)
+        end += 1
+    if not lines:
+        return None
+    return {
+        "turn_start": cursor,
+        "turn_end": end,
+        "rendered": "\n".join(lines),
+        "turns_sent": end - cursor,
+        "fragment": None,
+    }
+
+
+def _range_marker(session_id: str, chunk: dict[str, Any]) -> str:
+    safe_session = re.sub(r"[^A-Za-z0-9_.:-]+", "-", session_id).strip("-")
+    if not safe_session:
+        safe_session = "sha256-" + hashlib.sha256(
+            session_id.encode("utf-8")
+        ).hexdigest()[:32]
+    fragment = chunk.get("fragment")
+    if isinstance(fragment, list):
+        start, end, total = fragment
+        note = f"parca:{chunk['turn_start']}:{start}-{end}/{total}"
+    else:
+        note = f"tur:{chunk['turn_start']}-{chunk['turn_end']}"
+    return f"<!-- flush-range session:{safe_session} {note} -->"
+
+
+def _daily_contains_marker(vault_root: Path, marker: str) -> bool:
+    try:
+        candidates = sorted((Path(vault_root) / "daily").glob("*.md"))
+    except OSError:
+        return False
+    for path in candidates:
+        try:
+            if marker in path.read_text(encoding="utf-8"):
+                return True
+        except (OSError, UnicodeError):
+            continue
+    return False
+
+
+def _commit_chunk(progress: dict[str, Any], chunk: dict[str, Any]) -> int:
+    """Apply one durable daily marker to range state; return full turns committed."""
+    fragment = chunk.get("fragment")
+    committed = 0
+    if isinstance(fragment, list):
+        _start, end, total = fragment
+        if end >= total:
+            _add_committed_range(
+                progress, int(chunk["turn_start"]), int(chunk["turn_end"])
+            )
+            progress["parca_siniri"] = None
+            committed = 1
+        else:
+            progress["parca_siniri"] = {
+                "tur": int(chunk["turn_start"]),
+                "offset": int(end),
+                "toplam": int(total),
+            }
+    else:
+        _add_committed_range(
+            progress, int(chunk["turn_start"]), int(chunk["turn_end"])
+        )
+        progress["parca_siniri"] = None
+        committed = int(chunk["turn_end"]) - int(chunk["turn_start"])
+    progress["basarisiz_parca"] = None
+    progress["parked"] = None
+    return committed
 
 
 def _record_flush_failure(
@@ -627,7 +1043,8 @@ def _append_daily(
     now: dt.datetime,
     suffix: str | None = None,
     anchor: str | None = None,
-) -> None:
+    idempotency_marker: str | None = None,
+) -> bool:
     daily_dir = vault_root / "daily"
     daily_dir.mkdir(parents=True, exist_ok=True)
     date_text = now.strftime("%Y-%m-%d")
@@ -659,8 +1076,16 @@ def _append_daily(
                 f"# Günlük Log: {date_text}\n\n## Oturumlar\n",
                 encoding="utf-8",
             )
+        if idempotency_marker:
+            try:
+                existing = daily_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                existing = ""
+            if idempotency_marker in existing:
+                return False
         with daily_path.open("a", encoding="utf-8") as daily_file:
             daily_file.write(entry)
+    return True
 
 
 def _effective_hour(now: dt.datetime) -> int:
@@ -902,6 +1327,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Zamanlı süpürge: tüm transkriptleri tara, değişenleri flush et.",
     )
+    parser.add_argument(
+        "--mutabakat",
+        action="store_true",
+        help="Transkript/state/daily teslimatini bagimsiz olarak uzlastir.",
+    )
     parser.add_argument("--projects-dir", type=Path, default=None)
     parser.add_argument(
         "--since-hours",
@@ -916,9 +1346,47 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help="Yalnız say: model çağrısı yok, hiçbir yere yazılmaz.",
     )
     args = parser.parse_args(argv)
-    if args.tara == (args.hook_input is not None):
-        parser.error("either --hook-input or --tara, not both")
+    if sum((bool(args.tara), bool(args.mutabakat), args.hook_input is not None)) != 1:
+        parser.error("choose exactly one of --hook-input, --tara, --mutabakat")
     return args
+
+
+def _configure_stderr_capture() -> tuple[Path, Any] | None:
+    """Send launcher-started Python diagnostics to a PID-addressable file."""
+    raw = (os.environ.get(STDERR_DIR_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        directory = Path(raw)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"flush-stderr-{os.getpid()}.log"
+        handle = path.open("w", encoding="utf-8", errors="replace", buffering=1)
+        sys.stderr = handle
+        return path, handle
+    except OSError:
+        return None
+
+
+def _finish_stderr_capture(capture: tuple[Path, Any] | None) -> None:
+    if capture is None:
+        return
+    path, handle = capture
+    try:
+        handle.flush()
+        handle.close()
+        if path.stat().st_size == 0:
+            # The quiet case is every case: an empty log is not evidence, and
+            # one file per launch would bury the ones that say something.
+            path.unlink()
+            return
+        if path.stat().st_size > STDERR_MAX_BYTES:
+            with path.open("rb") as source:
+                source.seek(-STDERR_MAX_BYTES, os.SEEK_END)
+                tail = source.read()
+            with path.open("wb") as target:
+                target.write(tail)
+    except OSError:
+        pass
 
 
 def _flush_once(
@@ -930,13 +1398,7 @@ def _flush_once(
     dry_run: bool = False,
     outcome: dict[str, Any] | None = None,
 ) -> int:
-    """One session's flush. The sweep reuses this path verbatim.
-
-    ``hook_input`` lets a caller hand in the payload the hook would have
-    written, so ``--tara`` walks the same cursor, the same guards and the same
-    ledger as a live ``SessionEnd``. ``outcome`` collects the reason code for
-    the caller, since the return value stays 0 on every branch (hook contract).
-    """
+    """Drain bounded, contiguous chunks for one session, oldest first."""
     now_epoch = event_time.timestamp()
     if hook_input is None:
         hook_input = load_hook_input(args.hook_input)
@@ -954,8 +1416,6 @@ def _flush_once(
     transcript_path = Path(transcript_value).expanduser()
 
     if dry_run:
-        # Read-only probe: no lock file, no state, no ledger, no model. Only
-        # the cursor is consulted, and only by reading it.
         try:
             turns = read_transcript(transcript_path)
         except FileNotFoundError:
@@ -964,23 +1424,30 @@ def _flush_once(
         except (OSError, ValueError):
             report(REASON_UNREADABLE_TRANSCRIPT)
             return 0
-        cursor = _read_turn_cursor(STATE_DIR, session_id)
+        progress = _read_flush_progress(STATE_DIR, session_id)
         if not turns:
             report(REASON_NO_TURNS)
-        elif cursor < len(turns):
+        elif progress.get("parked"):
+            report(REASON_PARKED)
+        elif int(progress["cursor"]) < len(turns):
             report(REASON_OK)
         else:
             report(REASON_NO_NEW_TURNS)
         return 0
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    record_delivery(
+        STATE_DIR,
+        session_id=session_id,
+        reason=REASON_STARTED,
+        transcript=transcript_path,
+        when=event_time,
+    )
     lock_path = _session_lock_path(STATE_DIR, session_id)
     with lock_path.open("a+", encoding="utf-8") as lock_file:
         if lock_blocking:
             _lock_exclusive(lock_file, blocking=True)
         else:
-            # A sweep must never queue behind a live hook flush: that session
-            # is already being delivered, so leave it alone and move on.
             try:
                 _lock_exclusive(lock_file, blocking=False)
             except OSError:
@@ -995,17 +1462,17 @@ def _flush_once(
                 return 0
 
         chunk_chars, chunk_warning = resolve_flush_chunk_chars()
-        if chunk_warning:
-            write_health(
-                STATE_DIR, chunk_warning, warning=True, component="flush"
-            )
-
         max_turns, turns_warning = resolve_flush_max_turns()
-        if turns_warning:
-            write_health(
-                STATE_DIR, turns_warning, warning=True, component="flush"
-            )
-
+        max_chunks, chunks_warning = resolve_flush_max_chunks()
+        max_seconds, seconds_warning = resolve_flush_max_seconds()
+        for warning in (
+            chunk_warning,
+            turns_warning,
+            chunks_warning,
+            seconds_warning,
+        ):
+            if warning:
+                write_health(STATE_DIR, warning, warning=True, component="flush")
         timeout, timeout_warning = claude_runner.resolve_timeout("flush")
         if timeout_warning:
             write_health(
@@ -1024,9 +1491,10 @@ def _flush_once(
             if isinstance(reason, str):
                 report(reason)
 
-        # A transcript we cannot read is the one case the hook used to swallow
-        # whole: `return 0`, no state, no health, no trace. Health never learned
-        # that a session had not been captured (A5).
+        # A transcript we cannot open is the one case the hook used to swallow
+        # whole: `return 0`, no state, no health, no trace (A5). A transcript we
+        # can open but cannot parse still raises, so `main()` keeps reporting the
+        # precise `input:transcript-jsonl-invalid:<line>` that names the line.
         try:
             turns = read_transcript(transcript_path)
         except FileNotFoundError:
@@ -1037,12 +1505,15 @@ def _flush_once(
             return 0
 
         turns_seen = len(turns)
-        cursor = _read_turn_cursor(STATE_DIR, session_id)
-        if cursor > turns_seen:
-            # The transcript shrank (rotated or replaced): resend rather than
-            # trust a cursor that no longer indexes anything.
-            cursor = 0
-        pending = list(turns[cursor:])
+        progress = _read_flush_progress(STATE_DIR, session_id)
+        if int(progress["cursor"]) > turns_seen:
+            progress = {
+                "kapsanan": [],
+                "cursor": 0,
+                "parca_siniri": None,
+                "basarisiz_parca": None,
+                "parked": None,
+            }
         if not turns_seen:
             _write_flush_state(
                 STATE_DIR,
@@ -1050,221 +1521,290 @@ def _flush_once(
                 now_epoch,
                 "ok",
                 _flush_state_detail("below-minimum-turns", chunk_chars),
-                turn_cursor=cursor,
+                progress=progress,
             )
-            note(reason=REASON_NO_TURNS, turns_seen=turns_seen)
+            note(reason=REASON_NO_TURNS, turns_seen=0)
             return 0
-        if not pending:
+        if int(progress["cursor"]) >= turns_seen:
             _write_flush_state(
                 STATE_DIR,
                 session_id,
                 now_epoch,
                 "ok",
                 _flush_state_detail("no-new-turns", chunk_chars),
-                turn_cursor=cursor,
+                progress=progress,
             )
             note(reason=REASON_NO_NEW_TURNS, turns_seen=turns_seen)
             return 0
 
-        transcript, turn_count = format_turns(
-            pending, max_turns=max_turns, max_chars=chunk_chars
-        )
         minimum_turns = 5 if args.reason == "precompact" else 1
-        if turn_count < minimum_turns:
+        if turns_seen - int(progress["cursor"]) < minimum_turns:
             _write_flush_state(
                 STATE_DIR,
                 session_id,
                 now_epoch,
                 "ok",
                 _flush_state_detail("below-minimum-turns", chunk_chars),
-                turn_cursor=cursor,
+                progress=progress,
             )
-            note(
-                reason=REASON_NO_TURNS,
-                turns_seen=turns_seen,
-                turns_sent=turn_count,
-                chars_sent=len(transcript),
-            )
+            note(reason=REASON_NO_TURNS, turns_seen=turns_seen)
             return 0
 
-        _write_flush_state(
-            STATE_DIR,
-            session_id,
-            now_epoch,
-            "inflight",
-            _flush_state_detail("", chunk_chars),
-            turn_cursor=cursor,
-        )
-        # Unicode kapısı (giriş): görünmez karakter hileleri DIRECTIVE_SHAPED
-        # denetiminden ÖNCE temizlenir ki satır-başı çapası atlatılamasın.
-        transcript, unicode_input_hits = unicode_guard.clean(transcript)
-        if unicode_input_hits:
-            write_health(
-                STATE_DIR,
-                "warn:unicode-cleaned-input:" + ",".join(unicode_input_hits),
-                warning=True,
-                component="flush",
-            )
+        started_at = time.monotonic()
+        chunks_done = 0
+        appended_any = False
+        while chunks_done < max_chunks:
+            if chunks_done and time.monotonic() - started_at >= max_seconds:
+                break
+            if int(progress["cursor"]) >= turns_seen:
+                break
+            if (
+                args.reason == "precompact"
+                and turns_seen - int(progress["cursor"]) < minimum_turns
+            ):
+                break
 
-        if DIRECTIVE_SHAPED.search(transcript):
-            write_health(
-                STATE_DIR,
-                "warn:directive-shaped-transcript",
-                warning=True,
-                component="flush",
+            chunk = _select_oldest_chunk(
+                turns,
+                progress,
+                max_turns=max_turns,
+                max_chars=chunk_chars,
             )
+            if chunk is None:
+                break
+            marker = _range_marker(session_id, chunk)
+            turn_range = [int(chunk["turn_start"]), int(chunk["turn_end"])]
+            raw_fragment = chunk.get("fragment")
+            fragment = raw_fragment if isinstance(raw_fragment, list) else None
 
-        # Sır bekçisi (giriş): kimlik bilgisi kalıpları özetçiye hiç gitmesin.
-        transcript, input_hits = secret_guard.redact(transcript)
-        if input_hits:
-            write_health(
-                STATE_DIR,
-                "warn:secret-redacted-input:" + ",".join(input_hits),
-                warning=True,
-                component="flush",
-            )
+            parked = progress.get("parked")
+            if isinstance(parked, dict) and parked.get("marker") == marker:
+                _write_flush_state(
+                    STATE_DIR,
+                    session_id,
+                    now_epoch,
+                    "parked",
+                    _flush_state_detail(str(parked.get("error", "parked")), chunk_chars),
+                    progress=progress,
+                )
+                note(
+                    reason=REASON_PARKED,
+                    turns_seen=turns_seen,
+                    turns_sent=int(chunk["turns_sent"]),
+                    turn_range=turn_range,
+                    fragment=fragment,
+                    chunks=1,
+                )
+                return 0
 
-        # PII kapısı (giriş): yapısal kimlik verisi (TCKN/VKN/IBAN/kart/
-        # telefon/plaka) özetçiye gitmeden maskelenir — sessiz redaksiyon.
-        transcript, pii_input_hits = pii_guard.redact(transcript)
-        if pii_input_hits:
-            write_health(
-                STATE_DIR,
-                "warn:pii-redacted-input:" + ",".join(pii_input_hits),
-                warning=True,
-                component="flush",
-            )
+            def fail_chunk(error: str, reason: str, red: str | None = None) -> None:
+                previous = progress.get("basarisiz_parca")
+                attempts = (
+                    int(previous.get("deneme", 0)) + 1
+                    if isinstance(previous, dict) and previous.get("marker") == marker
+                    else 1
+                )
+                failure = {"marker": marker, "deneme": attempts, "error": error}
+                progress["basarisiz_parca"] = failure
+                terminal_reason = reason
+                status = "fail"
+                if attempts >= 3:
+                    progress["parked"] = dict(failure)
+                    terminal_reason = REASON_PARKED
+                    status = "parked"
+                try:
+                    _write_flush_state(
+                        STATE_DIR,
+                        session_id,
+                        now_epoch,
+                        status,
+                        _flush_state_detail(error, chunk_chars),
+                        progress=progress,
+                    )
+                except OSError:
+                    pass
+                write_health(STATE_DIR, error, component="flush")
+                note(
+                    reason=terminal_reason,
+                    turns_seen=turns_seen,
+                    turns_sent=int(chunk["turns_sent"]),
+                    turn_range=turn_range,
+                    fragment=fragment,
+                    chars_sent=len(str(chunk["rendered"])),
+                    chunks=1,
+                    red=red,
+                )
 
-        chars_sent = len(transcript)
+            if _daily_contains_marker(VAULT_ROOT, marker):
+                committed = _commit_chunk(progress, chunk)
+                try:
+                    _write_flush_state(
+                        STATE_DIR,
+                        session_id,
+                        now_epoch,
+                        "ok",
+                        _flush_state_detail("recovered-marker", chunk_chars),
+                        progress=progress,
+                    )
+                except OSError:
+                    fail_chunk("flush-state-write-failed", REASON_APPEND_FAILED)
+                    return 0
+                note(
+                    reason=REASON_OK,
+                    turns_seen=turns_seen,
+                    turns_sent=int(chunk["turns_sent"]),
+                    turns_committed=committed,
+                    turn_range=turn_range,
+                    fragment=fragment,
+                    chars_sent=len(str(chunk["rendered"])),
+                    chunks=1,
+                    ok=True,
+                )
+                chunks_done += 1
+                continue
 
-        def rejected(error: str) -> None:
-            _record_flush_failure(
-                STATE_DIR, session_id, now_epoch, error, chunk_chars
-            )
-            note(
-                reason=REASON_REJECTED,
-                turns_seen=turns_seen,
-                turns_sent=turn_count,
-                chars_sent=chars_sent,
-                chunks=1,
-            )
-
-        summary, error = _run_claude(
-            build_flush_prompt(transcript), VAULT_ROOT, timeout, purpose="capture"
-        )
-        for backend_warning in claude_runner.last_warnings():
-            write_health(
-                STATE_DIR, backend_warning, warning=True, component="flush"
-            )
-        if error is not None:
-            rejected(error)
-            return 0
-        if not summary:
-            rejected("summary-empty")
-            return 0
-        if summary == "FLUSH_BOS":
-            # The cursor deliberately stays put: an empty verdict is not proof
-            # that these turns are worthless forever, and losing them is worse
-            # than re-offering them alongside whatever comes next.
             _write_flush_state(
                 STATE_DIR,
                 session_id,
                 now_epoch,
-                "ok",
-                _flush_state_detail("flush-bos", chunk_chars),
-                turn_cursor=cursor,
+                "inflight",
+                _flush_state_detail(marker, chunk_chars),
+                progress=progress,
             )
-            note(
-                reason=REASON_BOS,
-                turns_seen=turns_seen,
-                turns_sent=turn_count,
-                chars_sent=chars_sent,
-                chunks=1,
-            )
-            return 0
-        if not validate_summary(summary):
-            rejected("summary-schema-invalid")
-            return 0
+            transcript = str(chunk["rendered"])
+            transcript, unicode_input_hits = unicode_guard.clean(transcript)
+            if unicode_input_hits:
+                write_health(
+                    STATE_DIR,
+                    "warn:unicode-cleaned-input:" + ",".join(unicode_input_hits),
+                    warning=True,
+                    component="flush",
+                )
+            if DIRECTIVE_SHAPED.search(transcript):
+                write_health(
+                    STATE_DIR,
+                    "warn:directive-shaped-transcript",
+                    warning=True,
+                    component="flush",
+                )
+            transcript, input_hits = secret_guard.redact(transcript)
+            if input_hits:
+                write_health(
+                    STATE_DIR,
+                    "warn:secret-redacted-input:" + ",".join(input_hits),
+                    warning=True,
+                    component="flush",
+                )
+            transcript, pii_input_hits = pii_guard.redact(transcript)
+            if pii_input_hits:
+                write_health(
+                    STATE_DIR,
+                    "warn:pii-redacted-input:" + ",".join(pii_input_hits),
+                    warning=True,
+                    component="flush",
+                )
+            chars_sent = len(transcript)
 
-        # Sır bekçisi (çıkış): özetçi girişte kaçanı aynen aktarmış olabilir.
-        summary, output_hits = secret_guard.redact(summary)
-        if output_hits:
-            write_health(
-                STATE_DIR,
-                "warn:secret-redacted-output:" + ",".join(output_hits),
-                warning=True,
-                component="flush",
-            )
-
-        # PII kapısı (çıkış): özetçi girişte kaçanı aynen aktarmış olabilir.
-        summary, pii_output_hits = pii_guard.redact(summary)
-        if pii_output_hits:
-            write_health(
-                STATE_DIR,
-                "warn:pii-redacted-output:" + ",".join(pii_output_hits),
-                warning=True,
-                component="flush",
-            )
-
-        # Unicode kapısı (çıkış): özetçi görünmez karakter üretebilir.
-        summary, unicode_output_hits = unicode_guard.clean(summary)
-        if unicode_output_hits:
-            write_health(
-                STATE_DIR,
-                "warn:unicode-cleaned-output:" + ",".join(unicode_output_hits),
-                warning=True,
-                component="flush",
-            )
-
-        try:
-            _append_daily(
+            summary, error = _run_claude(
+                build_flush_prompt(transcript),
                 VAULT_ROOT,
-                summary,
-                args.reason,
-                event_time,
-                anchor=session_anchor(session_id, event_time),
+                timeout,
+                purpose="capture",
             )
-            # Cursor advances only here, after the daily append has landed. A
-            # crash between the model call and this line costs a repeat, not a
-            # gap — the same turns are simply offered again next time.
-            _write_flush_state(
-                STATE_DIR,
-                session_id,
-                now_epoch,
-                "ok",
-                _flush_state_detail("appended", chunk_chars),
-                turn_cursor=turns_seen,
-            )
-        except OSError:
-            _record_flush_failure(
-                STATE_DIR,
-                session_id,
-                now_epoch,
-                "daily-append-failed",
-                chunk_chars,
-            )
+            for backend_warning in claude_runner.last_warnings():
+                write_health(
+                    STATE_DIR, backend_warning, warning=True, component="flush"
+                )
+            if error is not None:
+                fail_chunk(error, REASON_REJECTED)
+                return 0
+            if not summary:
+                fail_chunk("summary-empty", REASON_REJECTED)
+                return 0
+            if summary == "FLUSH_BOS":
+                fail_chunk("flush-bos", REASON_BOS)
+                return 0
+            if not validate_summary(summary):
+                # Keep the evidence: the raw output is the only way to tell a
+                # model that drifted from a validator that is too strict.
+                fail_chunk(
+                    "summary-schema-invalid",
+                    REASON_REJECTED,
+                    persist_rejected_summary(
+                        STATE_DIR, session_id, summary, event_time
+                    ),
+                )
+                return 0
+
+            summary, output_hits = secret_guard.redact(summary)
+            if output_hits:
+                write_health(
+                    STATE_DIR,
+                    "warn:secret-redacted-output:" + ",".join(output_hits),
+                    warning=True,
+                    component="flush",
+                )
+            summary, pii_output_hits = pii_guard.redact(summary)
+            if pii_output_hits:
+                write_health(
+                    STATE_DIR,
+                    "warn:pii-redacted-output:" + ",".join(pii_output_hits),
+                    warning=True,
+                    component="flush",
+                )
+            summary, unicode_output_hits = unicode_guard.clean(summary)
+            if unicode_output_hits:
+                write_health(
+                    STATE_DIR,
+                    "warn:unicode-cleaned-output:" + ",".join(unicode_output_hits),
+                    warning=True,
+                    component="flush",
+                )
+
+            try:
+                _append_daily(
+                    VAULT_ROOT,
+                    summary,
+                    args.reason,
+                    event_time,
+                    anchor=session_anchor(session_id, event_time) + "\n" + marker,
+                    idempotency_marker=marker,
+                )
+                committed = _commit_chunk(progress, chunk)
+                _write_flush_state(
+                    STATE_DIR,
+                    session_id,
+                    now_epoch,
+                    "ok",
+                    _flush_state_detail("appended", chunk_chars),
+                    progress=progress,
+                )
+            except OSError:
+                fail_chunk("daily-append-or-state-write-failed", REASON_APPEND_FAILED)
+                return 0
+
             note(
-                reason=REASON_APPEND_FAILED,
+                reason=REASON_OK,
                 turns_seen=turns_seen,
-                turns_sent=turn_count,
+                turns_sent=int(chunk["turns_sent"]),
+                turns_committed=committed,
+                turn_range=turn_range,
+                fragment=fragment,
                 chars_sent=chars_sent,
                 chunks=1,
+                ok=True,
             )
-            return 0
+            chunks_done += 1
+            appended_any = True
 
-        note(
-            reason=REASON_OK,
-            turns_seen=turns_seen,
-            turns_sent=turn_count,
-            chars_sent=chars_sent,
-            chunks=1,
-            ok=True,
-        )
-
-        try:
-            maybe_trigger_compile(VAULT_ROOT, event_time)
-        except (OSError, ValueError, json.JSONDecodeError):
-            write_health(STATE_DIR, "compile-trigger-failed", component="flush")
+        if outcome is not None:
+            outcome["chunks"] = chunks_done
+            outcome["remaining"] = max(0, turns_seen - int(progress["cursor"]))
+        if appended_any:
+            try:
+                maybe_trigger_compile(VAULT_ROOT, event_time)
+            except (OSError, ValueError, json.JSONDecodeError):
+                write_health(STATE_DIR, "compile-trigger-failed", component="flush")
     return 0
 
 
@@ -1405,6 +1945,229 @@ def _transcript_event_time(
         return fallback
 
 
+def _turn_is_covered(index: int, ranges: Sequence[Sequence[int]]) -> bool:
+    return any(start <= index < end for start, end in ranges)
+
+
+def _read_jsonl_records(*paths: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        for line in raw.splitlines():
+            try:
+                value = json.loads(line)
+            except (ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict):
+                records.append(value)
+    return records
+
+
+def _unmatched_ingress(event_time: dt.datetime) -> list[dict[str, Any]]:
+    hook_state = VAULT_ROOT / ".claude" / "hooks" / ".state"
+    ingress_path = hook_state / INGRESS_LEDGER_NAME
+    ingress = _read_jsonl_records(
+        ingress_path.with_name(ingress_path.name + ".1"), ingress_path
+    )
+    delivery_path = STATE_DIR / DELIVERY_LEDGER_NAME
+    deliveries = _read_jsonl_records(
+        delivery_path.with_name(delivery_path.name + ".1"), delivery_path
+    )
+    matched_pids = {
+        record.get("pid")
+        for record in deliveries
+        if isinstance(record.get("pid"), int)
+        and str(record.get("reason", "")).startswith("flush:")
+    }
+    unmatched: list[dict[str, Any]] = []
+    cutoff = event_time - dt.timedelta(seconds=INGRESS_GRACE_SECONDS)
+    for record in ingress:
+        # The old entry-before-stdin audit line remains for hook observability;
+        # reconciliation judges only the post-launch accounting record.
+        if record.get("phase") == "entered":
+            continue
+        if "started" not in record:
+            continue
+        try:
+            when = dt.datetime.fromisoformat(str(record.get("ts", "")))
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.astimezone()
+        if when > cutoff:
+            continue
+        pid = record.get("pid")
+        if isinstance(pid, int) and pid in matched_pids:
+            continue
+        unmatched.append(record)
+    return unmatched
+
+
+def _daily_session_ids(vault_root: Path) -> set[str]:
+    result: set[str] = set()
+    try:
+        paths = sorted((Path(vault_root) / "daily").glob("*.md"))
+    except OSError:
+        return result
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        result.update(anchor.session for anchor in retrieve.parse_session_anchors(text))
+    return result
+
+
+def _write_reconcile_warnings(lines: Sequence[str]) -> None:
+    """Replace reconciliation warnings as a set, deduplicated by session id."""
+    path = STATE_DIR / "health.json"
+    try:
+        payload = _load_json_object(path, {})
+    except (OSError, ValueError, json.JSONDecodeError):
+        payload = {}
+    warnings = payload.get("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+    prefixes = ("warn:kapsanmayan-oturum:", "warn:teslimat-eslesmedi:")
+    kept = [
+        item
+        for item in warnings
+        if not (
+            isinstance(item, str)
+            and any(item.startswith(prefix) for prefix in prefixes)
+        )
+    ]
+    deduped: list[str] = []
+    seen_ids: set[str] = set()
+    for line in lines:
+        if line.startswith(prefixes[0]):
+            key = line.split(":", 3)[2]
+        else:
+            key = line
+        if key not in seen_ids:
+            seen_ids.add(key)
+            deduped.append(line)
+    payload.setdefault("error", "")
+    payload.update(
+        {
+            "ts": int(time.time()),
+            "component": "flush",
+            "warnings": (kept + deduped)[-20:],
+            "mutabakat_warnings": deduped,
+        }
+    )
+    try:
+        _atomic_write_json(path, payload)
+    except OSError:
+        pass
+
+
+def reconcile(
+    *,
+    event_time: dt.datetime,
+    projects_dir: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Independently reconcile transcript ranges, daily markers and ingress."""
+    root = resolve_projects_dir(projects_dir)
+    minimum_users = resolve_reconcile_min_turns()
+    daily_sessions = _daily_session_ids(VAULT_ROOT)
+    sessions: list[dict[str, Any]] = []
+    oldest_unprocessed: dt.datetime | None = None
+    try:
+        candidates = sorted(root.rglob("*.jsonl")) if root.is_dir() else []
+    except OSError:
+        candidates = []
+    for path in candidates:
+        try:
+            details = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
+            continue
+        session_id = path.stem
+        if not SESSION_FILE_NAME.fullmatch(session_id) or _is_excluded_transcript(path):
+            continue
+        try:
+            timed_turns = _read_turn_times(path)
+        except (OSError, ValueError):
+            continue
+        user_turns = sum(1 for role, _when in timed_turns if role == "user")
+        if user_turns < minimum_users:
+            continue
+        total = len(timed_turns)
+        progress = _read_flush_progress(STATE_DIR, session_id)
+        ranges = _normalise_ranges(progress.get("kapsanan"))
+        uncovered_indices = [
+            index for index in range(total) if not _turn_is_covered(index, ranges)
+        ]
+        fallback = dt.datetime.fromtimestamp(details.st_mtime).astimezone()
+        last_time = timed_turns[-1][1] if timed_turns else None
+        last_time = last_time or fallback
+        oldest_time: dt.datetime | None = None
+        if uncovered_indices:
+            oldest_time = timed_turns[uncovered_indices[0]][1] or fallback
+            if oldest_unprocessed is None or oldest_time < oldest_unprocessed:
+                oldest_unprocessed = oldest_time
+        entry: dict[str, Any] = {
+            "session_id": session_id,
+            "transcript": str(path),
+            "user_turns": user_turns,
+            "total_turns": total,
+            "last_turn_time": last_time.isoformat(timespec="seconds"),
+            "kapsanan": ranges,
+            "uncovered_turns": len(uncovered_indices),
+            "daily_marker": session_id in daily_sessions,
+        }
+        if isinstance(progress.get("parca_siniri"), dict):
+            entry["parca_siniri"] = progress["parca_siniri"]
+        if oldest_time is not None:
+            entry["oldest_unprocessed_turn_time"] = oldest_time.isoformat(
+                timespec="seconds"
+            )
+        sessions.append(entry)
+
+    uncovered = [entry for entry in sessions if entry["uncovered_turns"] > 0]
+    unmatched = _unmatched_ingress(event_time)
+    manifest = {
+        "schema_version": 1,
+        "ts": event_time.isoformat(timespec="seconds"),
+        "projects_dir": str(root),
+        "min_user_turns": minimum_users,
+        "session_count": len(sessions),
+        "uncovered_session_count": len(uncovered),
+        "oldest_unprocessed_source_time": (
+            oldest_unprocessed.isoformat(timespec="seconds")
+            if oldest_unprocessed is not None
+            else None
+        ),
+        "unmatched_ingress_count": len(unmatched),
+        "unmatched_ingress": unmatched,
+        "sessions": sessions,
+    }
+    if not dry_run:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(STATE_DIR / RECONCILE_NAME, manifest)
+        warning_lines = [
+            "warn:kapsanmayan-oturum:{session_id}:{uncovered_turns}/{total_turns}".format(
+                **entry
+            )
+            for entry in uncovered
+        ]
+        if unmatched:
+            warning_lines.append(f"warn:teslimat-eslesmedi:{len(unmatched)}")
+        _write_reconcile_warnings(warning_lines)
+    print(
+        f"[beyin] mutabakat: oturum={len(sessions)} "
+        f"kapsanmayan={len(uncovered)} teslimat-eslesmedi={len(unmatched)}"
+        + (" (kuru)" if dry_run else "")
+    )
+    return manifest
+
+
 def record_sweep(
     state_dir: Path,
     counts: dict[str, int],
@@ -1512,10 +2275,39 @@ def sweep(
             counts["atlanan"] += 1
             fresh[key] = previous
             continue
-        if not _fingerprint_changed(previous, details.st_mtime, details.st_size):
+        if (
+            not _fingerprint_changed(previous, details.st_mtime, details.st_size)
+            and not (isinstance(previous, dict) and previous.get("complete") is False)
+        ):
             counts["atlanan"] += 1
             fresh[key] = previous
             continue
+
+        # Active-session quiet window: do not summarize the moving tail until
+        # it has been quiet for 20 minutes, except that the oldest uncovered
+        # turn may never wait more than four hours.
+        try:
+            timed_turns = _read_turn_times(path)
+        except (OSError, ValueError):
+            timed_turns = []
+        progress = _read_flush_progress(STATE_DIR, session_id)
+        cursor = int(progress.get("cursor", 0))
+        if timed_turns and cursor < len(timed_turns):
+            fallback = dt.datetime.fromtimestamp(details.st_mtime).astimezone()
+            last_turn = timed_turns[-1][1] or fallback
+            oldest_uncommitted = timed_turns[cursor][1] or fallback
+            quiet_age = max(0.0, (event_time - last_turn).total_seconds())
+            oldest_age = max(
+                0.0, (event_time - oldest_uncommitted).total_seconds()
+            )
+            if (
+                quiet_age < resolve_sweep_quiet_minutes() * 60.0
+                and oldest_age < resolve_sweep_max_deferral_hours() * 3_600.0
+            ):
+                counts["atlanan"] += 1
+                if previous is not None:
+                    fresh[key] = previous
+                continue
 
         counts["degisen"] += 1
         payload = {
@@ -1547,6 +2339,7 @@ def sweep(
                 fresh[key] = previous
             continue
         reason = outcome.get("reason")
+        stamp["complete"] = not bool(outcome.get("remaining", 0))
         if reason == REASON_OK:
             counts["ozetlenen"] += 1
         elif reason in SWEEP_SETTLED_REASONS or reason == REASON_LOCKED:
@@ -1576,6 +2369,14 @@ def sweep(
         except (OSError, ValueError, json.JSONDecodeError):
             write_health(STATE_DIR, "compile-trigger-failed", component="flush")
 
+    # Reconciliation is independent of sweep stamps and is the authoritative
+    # signal that every eligible transcript is represented in state + daily.
+    reconcile(
+        event_time=event_time,
+        projects_dir=root,
+        dry_run=dry_run,
+    )
+
     print(
         "[beyin] tara: taranan={taranan} degisen={degisen} "
         "ozetlenen={ozetlenen} atlanan={atlanan} disarida={disarida} "
@@ -1601,6 +2402,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Only the sweep offers this: a dry measurement must be able to read a
         # copy of the live cursor state without touching the real one.
         STATE_DIR = Path(args.state_dir).expanduser()
+
+    if args.mutabakat:
+        try:
+            reconcile(
+                event_time=_event_now(),
+                projects_dir=args.projects_dir,
+                dry_run=args.dry_run,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            error = str(exc) or exc.__class__.__name__
+            write_health(STATE_DIR, f"mutabakat:{error}", component="flush")
+        return 0
 
     if args.tara:
         try:
@@ -1647,4 +2460,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _stderr_capture = _configure_stderr_capture()
+    try:
+        _exit_code = main()
+    finally:
+        _finish_stderr_capture(_stderr_capture)
+    raise SystemExit(_exit_code)

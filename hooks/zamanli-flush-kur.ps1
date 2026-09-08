@@ -1,11 +1,10 @@
 <#
 .SYNOPSIS
-  Registers (or removes) the 8-hourly OdenaOS flush sweep as a Windows
+  Registers (or removes) the hourly OdenaOS flush sweep as a Windows
   scheduled task.
 
 .DESCRIPTION
-  Master's decision (2026-09-07): "8 saatte bir flush calissin; son flush'tan
-  sonra degisiklik yoksa calismasin." The SessionEnd hook is never delivered
+  The SessionEnd hook is never delivered
   when the app or the machine is killed - session 54 lost 19 hours that way -
   so a periodic sweep runs flush-launch.ps1 -Tara, which walks every transcript
   and lets the per-session turn cursor decide whether any model call is needed
@@ -96,12 +95,12 @@ $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Tara' -f $KancaYol
 $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments `
   -WorkingDirectory (Split-Path -Parent $KancaYolu)
 
-# Next full hour, then every 8 hours forever. No -RepetitionDuration:
+# Next full hour, then hourly forever. No -RepetitionDuration:
 # PS 5.1 on Win 11 rejects a zero duration (PT0S); omitting it means indefinitely.
 $now = Get-Date
 $start = $now.Date.AddHours($now.Hour + 1)
 $trigger = New-ScheduledTaskTrigger -Once -At $start `
-  -RepetitionInterval ([TimeSpan]::FromHours(8))
+  -RepetitionInterval ([TimeSpan]::FromHours(1))
 
 # Omitting the duration leaves StopAtDurationEnd = True with an empty duration,
 # which some Windows builds read as "stop at the end of a zero-length window" -
@@ -125,11 +124,11 @@ $settings.Hidden = $true
 
 Register-ScheduledTask -TaskName $GorevAdi -Action $action -Trigger $trigger `
   -Principal $principal -Settings $settings `
-  -Description 'OdenaOS: 8 saatte bir flush supurgesi (flush.py --tara). Degisiklik yoksa model cagrilmaz.' `
+  -Description 'OdenaOS: saatlik flush supurgesi (flush.py --tara). Sessiz ve degismemis oturumlarda model cagrilmaz.' `
   -Force | Out-Null
 
 Write-Host "[beyin] '$GorevAdi' kaydedildi."
-Write-Host "[beyin] Ilk calisma: $($start.ToString('yyyy-MM-dd HH:mm')) - sonra 8 saatte bir."
+Write-Host "[beyin] Ilk calisma: $($start.ToString('yyyy-MM-dd HH:mm')) - sonra saatte bir."
 Write-Host ''
 Write-Host '[beyin] Orkestratorun calistiracagi tam komut:'
 Write-Host ('powershell -NoProfile -ExecutionPolicy Bypass -File "{0}\zamanli-flush-kur.ps1"' -f (Split-Path -Parent $KancaYolu))

@@ -124,8 +124,9 @@ class LedgerTests(DeliveryHarness):
         self.assertEqual(self._run(), 0)
 
         lines = self._ledger()
-        self.assertEqual(len(lines), 1)
-        entry = lines[0]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0]["reason"], flush.REASON_STARTED)
+        entry = lines[-1]
         self.assertEqual(entry["reason"], flush.REASON_OK)
         self.assertTrue(entry["ok"])
         self.assertEqual(entry["session_id"], self.session_id)
@@ -220,7 +221,11 @@ class TurnCursorTests(DeliveryHarness):
 
         self.assertEqual(len(self._daily_blocks()), 1)
         self.assertEqual(len(self.calls), 1)
-        reasons = [entry["reason"] for entry in self._ledger()]
+        reasons = [
+            entry["reason"]
+            for entry in self._ledger()
+            if entry["reason"] != flush.REASON_STARTED
+        ]
         self.assertEqual(
             reasons,
             [flush.REASON_OK, flush.REASON_NO_NEW_TURNS, flush.REASON_NO_NEW_TURNS],
@@ -247,8 +252,13 @@ class TurnCursorTests(DeliveryHarness):
         for index in range(4, 7):
             self.assertIn(f"tur {index}", self.calls[1])
         self.assertEqual(self._state()["last_turn_index"], 7)
-        seen = [entry["turns_seen"] for entry in self._ledger()]
-        sent = [entry["turns_sent"] for entry in self._ledger()]
+        terminal = [
+            entry
+            for entry in self._ledger()
+            if entry["reason"] != flush.REASON_STARTED
+        ]
+        seen = [entry["turns_seen"] for entry in terminal]
+        sent = [entry["turns_sent"] for entry in terminal]
         self.assertEqual(seen, [4, 7])
         self.assertEqual(sent, [4, 3])
 
@@ -357,14 +367,17 @@ class MaxTurnsAppliedTests(DeliveryHarness):
             self._run(environment={flush.FLUSH_MAX_TURNS_ENV: "2"}), 0
         )
 
-        self.assertNotIn("tur 0", self.calls[0])
-        self.assertIn("tur 5", self.calls[0])
+        self.assertIn("tur 0", self.calls[0])
+        self.assertNotIn("tur 2", self.calls[0])
+        self.assertIn("tur 2", self.calls[1])
+        self.assertIn("tur 5", self.calls[2])
         entry = self._ledger()[-1]
         self.assertEqual(entry["turns_seen"], 6)
         self.assertEqual(entry["turns_sent"], 2)
-        # The cursor still clears the whole transcript: what the caps dropped
-        # is dropped on purpose, and must not be re-offered forever.
+        # The cap now drains oldest-first in contiguous chunks; nothing outside
+        # the selected range is marked committed.
         self.assertEqual(self._state()["last_turn_index"], 6)
+        self.assertEqual(self._state()["kapsanan"], [[0, 6]])
 
 
 if __name__ == "__main__":

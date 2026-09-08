@@ -110,7 +110,11 @@ class SweepHarness(unittest.TestCase):
         patches = [
             mock.patch.object(flush, "STATE_DIR", self.state_dir),
             mock.patch.object(flush, "VAULT_ROOT", self.root),
-            mock.patch.dict(flush.os.environ, {}, clear=True),
+            mock.patch.dict(
+                flush.os.environ,
+                {flush.SWEEP_QUIET_MINUTES_ENV: "0"},
+                clear=True,
+            ),
             mock.patch.object(flush, "_run_claude", side_effect=stub),
             mock.patch.object(flush, "maybe_trigger_compile", return_value=False),
         ]
@@ -245,7 +249,12 @@ class SweepTests(SweepHarness):
         self.assertEqual(counts["atlanan"], 1)
         self.assertEqual(counts["ozetlenen"], 0)
         self.assertEqual(self.calls, [])
-        self.assertEqual(self._ledger()[0]["reason"], flush.REASON_LOCKED)
+        terminal = [
+            entry
+            for entry in self._ledger()
+            if entry.get("reason") != flush.REASON_STARTED
+        ]
+        self.assertEqual(terminal[0]["reason"], flush.REASON_LOCKED)
         # Kilitli oturumun damgası yazılmaz: bir sonraki süpürge yeniden dener.
         self.assertEqual(self._sweep_state()["transkriptler"], {})
 
@@ -622,7 +631,9 @@ class SweepCompileTests(SweepHarness):
         ), mock.patch.object(
             flush, "VAULT_ROOT", self.root
         ), mock.patch.dict(
-            flush.os.environ, {}, clear=True
+            flush.os.environ,
+            {flush.SWEEP_QUIET_MINUTES_ENV: "0"},
+            clear=True,
         ), mock.patch.object(
             flush, "_run_claude", return_value=(GOOD_SUMMARY, None)
         ), mock.patch.object(
@@ -647,7 +658,9 @@ class SweepCompileTests(SweepHarness):
         ), mock.patch.object(
             flush, "VAULT_ROOT", self.root
         ), mock.patch.dict(
-            flush.os.environ, {}, clear=True
+            flush.os.environ,
+            {flush.SWEEP_QUIET_MINUTES_ENV: "0"},
+            clear=True,
         ), mock.patch.object(
             flush, "_run_claude", return_value=(GOOD_SUMMARY, None)
         ), mock.patch.object(

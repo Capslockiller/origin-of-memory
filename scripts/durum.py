@@ -414,6 +414,38 @@ def bekleyen_kaynak(
     }
 
 
+def mutabakat_ozeti(
+    state_dir: Path, now: dt.datetime | None = None
+) -> dict[str, Any]:
+    """Expose authoritative reconciliation coverage without scanning sources."""
+    moment = (now or dt.datetime.now()).astimezone()
+    payload = _read_object(Path(state_dir) / "mutabakat.json")
+    count = payload.get("uncovered_session_count", 0)
+    if isinstance(count, bool) or not isinstance(count, int):
+        count = 0
+    unmatched = payload.get("unmatched_ingress_count", 0)
+    if isinstance(unmatched, bool) or not isinstance(unmatched, int):
+        unmatched = 0
+    oldest = payload.get("oldest_unprocessed_source_time")
+    age: int | None = None
+    if isinstance(oldest, str) and oldest:
+        try:
+            parsed = dt.datetime.fromisoformat(oldest)
+            if parsed.tzinfo is None:
+                parsed = parsed.astimezone()
+            age = max(0, int((moment - parsed).total_seconds()))
+        except ValueError:
+            oldest = None
+    else:
+        oldest = None
+    return {
+        "uncovered_sessions": max(0, count),
+        "oldest_unprocessed_source_time": oldest,
+        "oldest_unprocessed_source_age_seconds": age,
+        "unmatched_ingress": max(0, unmatched),
+    }
+
+
 def build_summary(
     state_dir: Path, now: dt.datetime | None = None, vault_root: Path | None = None
 ) -> dict[str, Any]:
@@ -477,6 +509,7 @@ def build_summary(
         "info_count": len(warnings) - _warning_count(warnings),
         "bekleyen": bekleyen_kaynak(vault_root, compile_state),
         "duzeltme": bekleyen_duzeltme(vault_root, now=moment),
+        "mutabakat": mutabakat_ozeti(state_dir, now=moment),
         "calls": summarize_calls(state_dir, now=moment),
     }
 
@@ -637,6 +670,17 @@ def _print_pending(pending: dict[str, Any]) -> None:
     print(f"bekleyen kaynak: {count} daily uncompiled (oldest {oldest})")
 
 
+def _print_reconciliation(summary: dict[str, Any]) -> None:
+    print()
+    count = int(summary.get("uncovered_sessions", 0))
+    unmatched = int(summary.get("unmatched_ingress", 0))
+    age = _format_age(summary.get("oldest_unprocessed_source_age_seconds"))
+    print(
+        f"mutabakat: {count} uncovered sessions "
+        f"(oldest source {age}; unmatched ingress {unmatched})"
+    )
+
+
 def _print_table(summary: dict[str, Any]) -> None:
     _print_grid(
         ("component", "last status", "last run", "last error/skip", "quarantine"),
@@ -653,6 +697,7 @@ def _print_table(summary: dict[str, Any]) -> None:
     )
     _print_pending(summary.get("bekleyen", {}))
     _print_duzeltme(summary.get("duzeltme", {}))
+    _print_reconciliation(summary.get("mutabakat", {}))
     _print_warnings(summary.get("warnings", []))
     _print_calls(summary["calls"])
 

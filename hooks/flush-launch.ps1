@@ -64,7 +64,14 @@ function Write-BeyinHookError {
 # kanitlar: stdin okunmadan once yazilir, hatasi yutulur, dosya 512 KB'i
 # gecince .1'e devrilir (bakim.py ayni tavanla ayrica devirir).
 function Write-BeyinHookGirdi {
-  param([string]$HookName, [string]$Reason)
+  param(
+    [string]$HookName,
+    [string]$Reason,
+    [string]$SessionId = '',
+    [object]$ChildPid = $PID,
+    [bool]$Started = $false,
+    [string]$Phase = 'entered'
+  )
   try {
     $dir = Join-Path $PSScriptRoot '.state'
     if (-not (Test-Path -LiteralPath $dir)) {
@@ -79,7 +86,10 @@ function Write-BeyinHookGirdi {
       ts = [DateTimeOffset]::Now.ToString('o')
       hook = $HookName
       reason = $Reason
-      pid = $PID
+      session_id = $SessionId
+      pid = $ChildPid
+      started = $Started
+      phase = $Phase
     } | ConvertTo-Json -Compress
     [System.IO.File]::AppendAllText($path, $record + "`n", [System.Text.UTF8Encoding]::new($false))
   } catch {}
@@ -111,12 +121,27 @@ if ($Tara) {
     [Console]::Error.WriteLine('[beyin] flush.py bulunamadi; tara atlandi.')
     exit 0
   }
-  & $python.Path @($python.Prefix) -X utf8 $flush --tara
+  $env:BEYIN_FLUSH_STDERR_DIR = $stateDir
+  try {
+    $process = Start-Process -FilePath $python.Path -WindowStyle Hidden -PassThru `
+      -ArgumentList @($python.Prefix + @('-X', 'utf8', ('"' + $flush + '"'), '--tara'))
+    Write-BeyinHookGirdi 'flush-launch' $Reason '__tara__' $process.Id $true 'launch'
+    $process.WaitForExit()
+  } catch {
+    Write-BeyinHookGirdi 'flush-launch' $Reason '__tara__' $null $false 'launch'
+    Write-BeyinHookError $stateDir 'flush-launch' 'python-launch-failed'
+  }
   exit 0
 }
 
 $stdin = [Console]::In.ReadToEnd()
 if (-not $stdin) { exit 0 }
+$sessionId = ''
+try {
+  if ($stdin -match '"session_id"\s*:\s*"([A-Za-z0-9_.-]{1,128})"') {
+    $sessionId = $Matches[1]
+  }
+} catch {}
 
 $scriptsDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'scripts'
 $stateDir = Join-Path $scriptsDir '.state'
@@ -151,8 +176,15 @@ $flush = Join-Path $scriptsDir 'flush.py'
 if ($py -and (Test-Path $flush)) {
   $flushArgument = '"' + $flush + '"'
   $inputArgument = '"' + $inputPath + '"'
-  Start-Process -FilePath $py -WindowStyle Hidden -ArgumentList @(
-    $pyPrefix + @('-X', 'utf8', $flushArgument, '--hook-input', $inputArgument, '--reason', $Reason))
+  $env:BEYIN_FLUSH_STDERR_DIR = $stateDir
+  try {
+    $process = Start-Process -FilePath $py -WindowStyle Hidden -PassThru -ArgumentList @(
+      $pyPrefix + @('-X', 'utf8', $flushArgument, '--hook-input', $inputArgument, '--reason', $Reason))
+    Write-BeyinHookGirdi 'flush-launch' $Reason $sessionId $process.Id $true 'launch'
+  } catch {
+    Write-BeyinHookGirdi 'flush-launch' $Reason $sessionId $null $false 'launch'
+    Write-BeyinHookError $stateDir 'flush-launch' 'python-launch-failed'
+  }
 } else {
   Write-BeyinHookError $stateDir 'flush-launch' 'flush-script-missing'
   [Console]::Error.WriteLine('[beyin] flush.py bulunamadi; flush atlandi.')

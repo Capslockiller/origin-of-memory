@@ -83,11 +83,16 @@ class MissingTranscriptTests(unittest.TestCase):
             for line in ledger.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        self.assertEqual(len(lines), 1)
-        self.assertEqual(lines[0]["reason"], flush.REASON_MISSING_TRANSCRIPT)
-        self.assertEqual(lines[0]["session_id"], "missing-transcript")
-        self.assertEqual(lines[0]["transcript"], str(missing))
-        self.assertFalse(lines[0]["ok"])
+        # Two lines, not one: A1-3R has Python stamp `flush:started` with its
+        # own PID before it touches anything, so a launch that never reached
+        # Python is distinguishable from one that reached it and found nothing.
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0]["reason"], flush.REASON_STARTED)
+        self.assertEqual(lines[0]["pid"], os.getpid())
+        self.assertEqual(lines[-1]["reason"], flush.REASON_MISSING_TRANSCRIPT)
+        self.assertEqual(lines[-1]["session_id"], "missing-transcript")
+        self.assertEqual(lines[-1]["transcript"], str(missing))
+        self.assertFalse(lines[-1]["ok"])
 
     def test_corrupt_existing_transcript_still_writes_input_error(self) -> None:
         transcript_path = self.root / "corrupt.jsonl"

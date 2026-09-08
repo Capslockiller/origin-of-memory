@@ -118,8 +118,8 @@ returns immediately; the summariser is not on the session-teardown critical path
 2. **Lock per session.** An exclusive lock keyed on `session_id`
    (`fcntl.flock`, or `msvcrt.locking` on Windows). A second flush for the same
    session does not run.
-3. **Read the transcript.** Up to `MAX_TURNS = 30` turns, truncated to the
-   effective live-flush bound. Claude and Antigravity retain
+3. **Read the transcript.** Select the **oldest uncommitted contiguous range**, up
+   to `MAX_TURNS = 30` turns and the effective live-flush bound. Claude and Antigravity retain
    `MAX_TRANSCRIPT_CHARS = 15_000`; Ollama and OpenAI-compatible backends use
    24,000 characters. A positive `BEYIN_FLUSH_CHUNK_CHARS` overrides either.
    The selected value is recorded in the run's state detail.
@@ -131,34 +131,58 @@ returns immediately; the summariser is not on the session-teardown critical path
    sections: `## Bağlam`, `## Önemli Konuşmalar`, `## Alınan Kararlar`,
    `## Öğrenilenler`, `## Yapılacaklar`. If nothing has lasting value the model is
    told to reply `FLUSH_BOS` and nothing is written.
-6. **Validate the shape.** `validate_summary()` requires those five headings,
-   exactly once each, in order, with no preamble. A malformed summary is not
-   appended.
+6. **Validate the shape.** `validate_summary()` requires those five sections,
+   exactly once each and in contract order. It is tolerant about everything the
+   parser does not read: a preamble before the first section is dropped, `###`
+   is normalised to `##`, and bold, trailing whitespace and closed-ATX hashes
+   are stripped from the heading text. A missing section, a reordered one, or a
+   contract heading that appears before `Bağlam` is still fatal, and a
+   malformed summary is not appended. (The strict version rejected 6 of 20
+   summaries on 2026-09-08 — the same sessions passed on retry — because the
+   model decorated the headings it had otherwise produced correctly.) A
+   rejected summary is written verbatim to `.state/red/<session>-<ts>.md`
+   (newest 50 kept) and that path is named in the delivery ledger's
+   `flush:rejected` line, so a rejection can be read rather than guessed at.
 7. **Redact outbound.** `secret_guard.redact()` again, over the summary.
-8. **Append.** `daily/YYYY-MM-DD.md` is created with a `# Günlük Log` header if
-   absent, then a `### Oturum (HH:MM)` block is appended — suffixed
+8. **Append and commit the range.** `daily/YYYY-MM-DD.md` is created with a
+   `# Günlük Log` header if absent, then a `### Oturum (HH:MM)` block is appended — suffixed
    `, compaction öncesi` for a `PreCompact` flush. The old 60-second
-   duplicate guard is gone; see the turn cursor below for what replaced it.
+   duplicate guard is gone; see the range state below for what replaced it.
 9. **Maybe trigger compile.** See below.
 
-**Delivery ledger, turn cursor, honest counts (Astra A5).** Every flush attempt
+**Delivery ledger and contiguous range commits (Astra A1-1C).** Python first
+records `flush:started` with its PID. Every chunk then appends one bounded line
 — successes included — appends one bounded line to
 `.state/flush-teslimat.jsonl` (rotates to `.1` past 2 MB), carrying a reason
 code: `flush:ok`, `flush:missing-transcript`, `flush:unreadable-transcript`,
 `flush:no-turns`, `flush:no-new-turns`, `flush:rejected`, `flush:bos`, or
-`flush:append-failed`. Every reason except `flush:ok` and `flush:no-new-turns`
+`flush:append-failed`; a third failure of the same chunk becomes `flush:parked`.
+Ledger lines carry `pid`, `turns_committed`, `range`, fragment offsets when
+applicable, and `red` — the path of the stored raw output — on a schema
+rejection. Every reason except `flush:started`, `flush:ok`, and `flush:no-new-turns`
 also raises a `health.json` warning, so a missing or unreadable transcript is
 no longer silent. The hook still exits 0 in every case — this is visibility,
 not failure.
 
-The old 60-second duplicate guard is replaced by a per-session turn cursor
-(`last_turn_index`, stored in the existing flush state JSON): a flush
-summarises only the turns after the cursor and advances it only after the
-daily append lands, so a crash mid-flush costs a repeat rather than a gap. A
+The existing per-session state JSON now stores committed half-open ranges as
+`kapsanan: [[a,b], ...]`; `last_turn_index` remains as the contiguous-prefix
+compatibility cursor, and an old scalar cursor is read as `[0,cursor)`. A flush
+advances only across the exact range whose daily block landed. Each block keeps
+the provenance session marker and adds a deterministic `flush-range` comment
+with `tur:a-b` or `parca:turn:start-end/total`. Before append, that marker is
+checked across daily files, so a crash after append but before state write is
+recovered without a duplicate block. A turn larger than the character cap is
+split and its durable offset is stored in `parca_siniri` until the final
+fragment commits the turn. A
 session with nothing new past the cursor calls no model and records
-`flush:no-new-turns`. `format_turns()` now reports the number of turns that
-survived **both** the turn cap and the character cap, instead of the
-pre-character-cap figure. `BEYIN_FLUSH_MAX_TURNS` overrides `MAX_TURNS`;
+`flush:no-new-turns`. `PreCompact`, `SessionEnd`, and the timed sweep all use
+this same oldest-first path.
+
+One process drains at most `BEYIN_FLUSH_MAX_CHUNKS` chunks (default 3) and stops
+after `BEYIN_FLUSH_MAX_SECONDS` wall-clock seconds (default 180); an incomplete
+sweep stamp remains eligible on the next hourly run. Three failures of the same
+marker write `basarisiz_parca`/`parked`, do not advance the range, and surface in
+health and the delivery ledger. `BEYIN_FLUSH_MAX_TURNS` overrides `MAX_TURNS`;
 `BEYIN_FLUSH_MAX_CHARS` overrides the character cap and sits behind the older
 `BEYIN_FLUSH_CHUNK_CHARS` for backward compatibility. Both degrade to the
 shipped default on invalid input.
@@ -189,11 +213,9 @@ any of this; a violation raises rather than proceeding.
 
 ### 4.4 The timed sweep — `flush.py --tara`
 
-`SessionEnd` is a courtesy, not a guarantee: when the app or the machine is
-killed the hook is never delivered, and session 54 lost 19 hours that way. The
-sweep makes the write path independent of session end. Master's decision
-(2026-09-07): *"8 saatte bir flush çalışsın; son flush'tan sonra değişiklik
-yoksa çalışmasın."*
+`SessionEnd` is a courtesy, not a guarantee: long-lived app sessions may never
+deliver it, and Windows hooks can stop after a few hours. The hourly sweep makes
+the write path independent of session end.
 
 `flush.py --tara` walks `~/.claude/projects/**/*.jsonl`
 (`BEYIN_CLAUDE_PROJECTS`, or `--projects-dir`, overrides the root), derives the
@@ -206,7 +228,7 @@ transcripts (`<session-id>/subagents/agent-*.jsonl`) and the pipeline's own
 counted as `disarida` and never flushed. The entry is dated by the transcript's
 last turn — the file stamp, then the sweep moment, are only fallbacks — so a
 sweep hours later still writes the session into its own day and hour.
-"Nothing changed → do nothing" is enforced by two cheap gates before any model
+"Nothing changed → do nothing" is enforced by cheap gates before any model
 is reachable:
 
 1. **File stamp.** `.state/flush-tara.json` keeps `son_tarama_ts` and a
@@ -216,9 +238,14 @@ is reachable:
    already has a stamp**: one the sweep has never seen is flushed however old
    it is, so a sweep that runs late cannot drop the sessions it exists to
    rescue. The window still keeps a *re-scan* of the archive cheap.
-2. **Turn cursor.** A transcript whose stamp moved but whose turns did not
-   (tool results, metadata) hits the existing `last_turn_index` cursor and
+2. **Range state.** A transcript whose stamp moved but whose turns did not
+   (tool results, metadata) has no uncovered range and
    records `flush:no-new-turns` — no model call.
+3. **Quiet window.** A transcript whose last turn is younger than
+   `BEYIN_TARA_SESSIZLIK_DK` (20 minutes) is deferred, unless its oldest
+   uncommitted turn is at least `BEYIN_TARA_AZAMI_ERTELEME_SAAT` (4 hours) old.
+   A bounded drain stamps `complete:false`, so an unchanged backlog remains
+   eligible next hour.
 
 A session already being flushed by a live hook holds its per-session lock; the
 sweep takes that lock **non-blocking**, records `flush:locked` and moves on
@@ -227,7 +254,8 @@ rather than queueing. A transcript is stamped only on a settled outcome
 summary, a failed append or a locked session leaves the stamp alone so the next
 sweep retries it. One bad transcript is counted, never fatal.
 
-The sweep closes by calling `maybe_trigger_compile()` once and appending one
+The sweep closes by calling `maybe_trigger_compile()` once, running the
+independent reconciliation below, and appending one
 summary line to the delivery ledger:
 `{ts, reason:"tara", taranan, degisen, ozetlenen, atlanan, disarida, hatali}`. The same
 line is printed to stdout. `--dry-run` performs the walk and the cursor check
@@ -237,10 +265,22 @@ is how the change was measured against the live archive before it shipped
 
 Registration is `hooks/zamanli-flush-kur.ps1` (idempotent; `-Durum`, `-Kaldir`):
 a `OdenaOS-Flush` scheduled task starting at the next full hour, repeating every
-8 hours, running `flush-launch.ps1 -Tara` **only when the user is logged on** —
+hour, running `flush-launch.ps1 -Tara` **only when the user is logged on** —
 the sweep needs the user's own Ollama service, which does not exist in a service
 session — start-when-available, 30-minute execution limit, no battery
 restrictions.
+
+**Authoritative reconciliation (Astra A1-3R).** `flush.py --mutabakat`, also run
+at the end of every sweep, walks the same candidates and exclusions. For every
+transcript with at least `BEYIN_MUTABAKAT_MIN_TURNS` user turns (default 5), it
+writes `.state/mutabakat.json` with the last turn time, `kapsanan`, uncovered
+turn count, and whether any daily file carries the session marker. Each
+uncovered session produces one ID-deduplicated
+`warn:kapsanmayan-oturum:<id>:<uncovered>/<total>` health line. It also compares
+post-launch `hooks/.state/hook-girdi.jsonl` records older than ten minutes with
+the PID-bearing delivery ledger; unmatched ingress is reported as
+`warn:teslimat-eslesmedi:<n>`. `durum.py` displays the uncovered-session count
+and age of the oldest unprocessed source.
 
 ### 4.5 Model backend dispatch
 
