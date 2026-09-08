@@ -40,6 +40,58 @@ DATE_KEYS = ("created", "updated")
 LIST_KEYS = ("tags", "aliases", "sources")
 REQUIRED_KEYS = TEXT_KEYS + DATE_KEYS + LIST_KEYS
 
+# Faz 1 · A3-1D/A3-2H alanları. Hepsi İSTEĞE BAĞLI: yokluğu bir kusur değildir,
+# varlığı ise doğrulanır. Alanı yazan tek yer ``duzelt.py``dir — yazıcısı
+# olmayan alan, sistemin tutmadığı bir güvence ilan eder.
+#
+# ``superseded_by``  : notu bütünüyle geçersiz kılan kavram slug'ı, ya da
+#                      düzeltmenin kendisini işaret eden ``duzeltme``.
+# ``duzeltildi``     : düzeltmenin uygulandığı an (ISO gün ya da damga).
+# ``guven``          : notun kaynak kalitesi; şimdilik yalnız ``dusuk`` yazılır
+#                      ve yalnız ``yerel-8b`` damgalı bloklardan gelen notlara.
+SUPERSEDED_KEY = "superseded_by"
+DUZELTILDI_KEY = "duzeltildi"
+GUVEN_KEY = "guven"
+OPTIONAL_KEYS = (SUPERSEDED_KEY, DUZELTILDI_KEY, GUVEN_KEY)
+GUVEN_DEGERLERI = ("yuksek", "orta", "dusuk", "belirsiz")
+SUPERSEDED_LITERAL = "duzeltme"
+_SLUG = re.compile(r"\A[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+_ISO_STAMP = re.compile(
+    r"\A\d{4}-\d{2}-\d{2}"
+    r"(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\Z"
+)
+# Yerel yedek özetleyicinin bıraktığı damga. flush/A şeridi bu satırı günlük
+# bloğuna eklediğinde derleyici bu bloklardan doğan notu düşük güvenle işaretler;
+# damga yokken bu yol tamamen sessizdir.
+YEREL_KAYNAK = re.compile(r"kaynak[ \t]*:[ \t]*yerel-8b", re.IGNORECASE)
+
+
+def _is_iso_stamp(value: str) -> bool:
+    """``YYYY-MM-DD`` ya da tam ISO8601 damgası; ikisi de kabul edilir."""
+    if not _ISO_STAMP.match(value):
+        return False
+    head = value[:10]
+    try:
+        dt.date.fromisoformat(head)
+    except ValueError:
+        return False
+    return True
+
+
+def guven_for_blocks(blocks: Iterable[str]) -> str | None:
+    """Bir notun kaynak bloklarına bakıp güven etiketini söyler. Saf fonksiyon.
+
+    Kural tek satır: notun BÜTÜN kaynak blokları yerel 8B damgası taşıyorsa
+    ``dusuk``. Tek bir bulut özeti bile karışıyorsa etiket verilmez — karışık
+    kaynaklı bir notu düşük güvenli ilan etmek, doğrulanmamış bir iddiadır.
+    """
+    seen = [block for block in blocks if str(block).strip()]
+    if not seen:
+        return None
+    if all(YEREL_KAYNAK.search(str(block)) for block in seen):
+        return "dusuk"
+    return None
+
 # How many offending notes the read-only survey names before it stops listing.
 SURVEY_SAMPLE = 5
 
@@ -152,6 +204,29 @@ def validate_concept(text: str, path: Path) -> list[str]:
             problems.append(f"not-a-list:{name}:{key}")
     # List items need no separate string check: both list paths above are
     # built from `_inline_list` and `_unquote`, which only ever yield strings.
+
+    # İsteğe bağlı düzeltme alanları: eksikse sorun değil, bozuksa sorun.
+    superseded = values.get(SUPERSEDED_KEY)
+    if superseded is not None:
+        if (
+            not isinstance(superseded, str)
+            or not superseded.strip()
+            or (
+                superseded.strip() != SUPERSEDED_LITERAL
+                and not _SLUG.match(superseded.strip())
+            )
+        ):
+            problems.append(f"superseded-by-invalid:{name}")
+
+    duzeltildi = values.get(DUZELTILDI_KEY)
+    if duzeltildi is not None:
+        if not isinstance(duzeltildi, str) or not _is_iso_stamp(duzeltildi.strip()):
+            problems.append(f"date-invalid:{name}:{DUZELTILDI_KEY}")
+
+    guven = values.get(GUVEN_KEY)
+    if guven is not None:
+        if not isinstance(guven, str) or guven.strip() not in GUVEN_DEGERLERI:
+            problems.append(f"guven-invalid:{name}")
 
     if not text[match.end() :].strip():
         problems.append(f"body-empty:{name}")

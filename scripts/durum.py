@@ -476,6 +476,7 @@ def build_summary(
         "warning_count": _warning_count(warnings),
         "info_count": len(warnings) - _warning_count(warnings),
         "bekleyen": bekleyen_kaynak(vault_root, compile_state),
+        "duzeltme": bekleyen_duzeltme(vault_root, now=moment),
         "calls": summarize_calls(state_dir, now=moment),
     }
 
@@ -651,8 +652,47 @@ def _print_table(summary: dict[str, Any]) -> None:
         ],
     )
     _print_pending(summary.get("bekleyen", {}))
+    _print_duzeltme(summary.get("duzeltme", {}))
     _print_warnings(summary.get("warnings", []))
     _print_calls(summary["calls"])
+
+
+# --------------------------------------------------------------------------
+# Faz 1 · A3-1D — bekleyen düzeltme satırı.
+# Kendi içinde kapalı bir ek: ``build_summary`` tek anahtar, ``_print_table``
+# tek çağrı ekler. ``duzelt`` tembel içe aktarılır — durum bir rapor yüzeyidir
+# ve defteri okuyamamak raporu düşürmemeli.
+# --------------------------------------------------------------------------
+
+
+def bekleyen_duzeltme(
+    vault_root: Path | None, now: dt.datetime | None = None
+) -> dict[str, Any]:
+    """Uygulanmamış düzeltmeler: sayı ve en eskisinin yaşı.
+
+    Bir düzeltme "bekliyor"da kaldığı sürece bilinen bir yanlış hâlâ kavramda
+    duruyor demektir; bu yüzden bekleyen kaynak satırının hemen yanında durur.
+    """
+    if vault_root is None:
+        return {"count": 0, "oldest": None, "oldest_ts": None, "oldest_age_seconds": None}
+    try:
+        import duzelt
+
+        return duzelt.ozet(vault_root, now=now)
+    except Exception:
+        return {"count": 0, "oldest": None, "oldest_ts": None, "oldest_age_seconds": None}
+
+
+def _print_duzeltme(pending: dict[str, Any]) -> None:
+    # Gövde bilerek ASCII, ``_print_pending`` ile aynı gerekçe.
+    print()
+    count = pending.get("count", 0)
+    if not count:
+        print("bekleyen duzeltme: none pending")
+        return
+    oldest = str(pending.get("oldest") or "?")
+    age = _format_age(pending.get("oldest_age_seconds"))
+    print(f"bekleyen duzeltme: {count} unapplied (oldest {oldest}, {age})")
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

@@ -215,19 +215,20 @@ class CompilerCarriesAnchorTests(unittest.TestCase):
         self.assertEqual(second_touch, [])
         self.assertEqual(path.read_text(encoding="utf-8"), first)
 
-    def test_a_note_without_a_sources_section_gets_one(self) -> None:
+    def test_a_note_that_cites_nothing_gets_no_anchor(self) -> None:
+        """A3-3V: sağlayıcı kapsamı düşer, ama düşen kısım zaten yalandı."""
         path = self._write(
             "eksik.md",
             "---\ntitle: Eksik\naliases: []\ntags: []\n---\n\n# Eksik\n\nGövde.\n",
         )
+        before = path.read_text(encoding="utf-8")
 
-        compile_module.carry_source_anchors(
+        touched = compile_module.carry_source_anchors(
             self.stage, ["knowledge/concepts/eksik.md"], self._daily_body("sid-1")
         )
 
-        text = path.read_text(encoding="utf-8")
-        self.assertIn("## Kaynaklar", text)
-        self.assertEqual(len(retrieve.parse_session_anchors(text)), 1)
+        self.assertEqual(touched, [])
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
 
     def test_only_concept_notes_are_touched(self) -> None:
         (self.stage / "knowledge" / "log.md").write_text("# Log\n", encoding="utf-8")
@@ -261,7 +262,10 @@ class CompilerCarriesAnchorTests(unittest.TestCase):
         hostile = "<!-- session:a--> ts:2026-08-27 source:claude -->"
 
         compile_module.carry_source_anchors(
-            self.stage, ["knowledge/concepts/deneme.md"], hostile
+            self.stage,
+            ["knowledge/concepts/deneme.md"],
+            hostile,
+            daily_name="2026-08-27.md",
         )
 
         text = path.read_text(encoding="utf-8")
@@ -269,7 +273,14 @@ class CompilerCarriesAnchorTests(unittest.TestCase):
         self.assertNotIn("a-->", appended)
         self.assertEqual(len(retrieve.parse_session_anchors(text)), 1)
 
-    def test_restore_keeps_post_call_order_and_only_adds_missing_earlier(self) -> None:
+    def test_restore_drops_an_anchor_the_rewrite_no_longer_references(self) -> None:
+        """A3-3V: bir çıpa iddiadır — toptan geri yükleme yok.
+
+        ``earlier-b`` yeniden yazımda duruyor, ``model-added`` modelin kendi
+        eklediği; ``earlier-a`` ise metinde hiç anılmıyor, o yüzden geri
+        konmaz. Eski davranış onu geri koyardı ve hayalet çıpalar tam bu yolla
+        her yeniden yazımdan sağ çıkıyordu.
+        """
         earlier_a = retrieve.format_session_anchor("earlier-a", "2026-08-25")
         earlier_b = retrieve.format_session_anchor("earlier-b", "2026-08-26")
         model_added = retrieve.format_session_anchor("model-added", "2026-08-27")
@@ -287,11 +298,27 @@ class CompilerCarriesAnchorTests(unittest.TestCase):
         )
 
         parsed = retrieve.parse_session_anchors(path.read_text(encoding="utf-8"))
-        self.assertEqual(touched, ["knowledge/concepts/deneme.md"])
+        self.assertEqual(touched, [])
         self.assertEqual(
-            [item.session for item in parsed],
-            ["earlier-b", "model-added", "earlier-a"],
+            [item.session for item in parsed], ["earlier-b", "model-added"]
         )
+
+    def test_restore_returns_an_anchor_the_rewrite_still_names(self) -> None:
+        earlier = retrieve.format_session_anchor("earlier-a", "2026-08-25")
+        path = self._write("deneme.md", CONCEPT_TEXT + earlier + "\n")
+        before = compile_module.snapshot_source_anchors(self.stage)
+        path.write_text(
+            CONCEPT_TEXT.replace("Gövde.", "Gövde; earlier-a oturumundan."),
+            encoding="utf-8",
+        )
+
+        touched = compile_module.restore_source_anchors(
+            self.stage, ["knowledge/concepts/deneme.md"], before
+        )
+
+        parsed = retrieve.parse_session_anchors(path.read_text(encoding="utf-8"))
+        self.assertEqual(touched, ["knowledge/concepts/deneme.md"])
+        self.assertEqual([item.session for item in parsed], ["earlier-a"])
 
 
 class RetrieveStripsAnchorTests(unittest.TestCase):
@@ -447,13 +474,25 @@ class EndToEndAnchorTests(unittest.TestCase):
                 for injected in result["notes"]:
                     self.assertNotIn("session:", injected["body"])
 
-    def test_model_deleted_earlier_anchor_is_restored_before_promotion(self) -> None:
+    def test_an_anchor_the_rewrite_abandoned_is_not_restored(self) -> None:
+        """A3-3V: modelin sildiği ve artık anmadığı çıpa geri konmaz.
+
+        Eski davranış onu koşulsuz geri koyardı; sağlayıcı böylece notun
+        içeriğiyle bağını koparıp kalıcılaşıyordu. Not bu koşuda günlüğü
+        kaynak gösterdiği için bugünün çıpasını alır, dünkü çıpayı almaz.
+        """
         earlier = retrieve.format_session_anchor(
             "earlier-session", "2026-08-26T09:00:00+00:00", "web"
         )
         note = self.root / "knowledge" / "concepts" / "kalici-bellek.md"
         note.write_text(CONCEPT_TEXT + earlier + "\n", encoding="utf-8")
-        flush._append_daily(self.root, GOOD_SUMMARY, "sessionend", MOMENT)
+        flush._append_daily(
+            self.root,
+            GOOD_SUMMARY,
+            "sessionend",
+            MOMENT,
+            anchor=flush.session_anchor("bugunku", MOMENT),
+        )
 
         def deleting_stub(_prompt: str, stage: Path) -> str | None:
             target = stage / "knowledge" / "concepts" / "kalici-bellek.md"
@@ -469,7 +508,7 @@ class EndToEndAnchorTests(unittest.TestCase):
         parsed = retrieve.parse_session_anchors(note.read_text(encoding="utf-8"))
         self.assertEqual(
             [(item.session, item.source) for item in parsed],
-            [("earlier-session", "web")],
+            [("bugunku", "claude")],
         )
 
 

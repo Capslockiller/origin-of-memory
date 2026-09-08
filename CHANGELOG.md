@@ -37,6 +37,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`hooks/zamanli-flush-kur.ps1` registered a repetition that could stop.**
   The trigger was left with `StopAtDurationEnd = True` and an empty duration;
   it is now set to `$false` explicitly, so the 8-hourly repetition never ends.
+### Added
+
+<!-- yazan: claude · opus-5 -->
+- **A named correction is now an input the compiler is accountable for, and
+  "the file changed" stops counting as proof that it was applied (Phase 1,
+  lane B).** A new `scripts/duzelt.py` owns a plain-text store at
+  `<vault>/🔮 850-Companion/Duzeltmeler.md` — one block per correction, headed
+  by a single-line `<!-- duzeltme kavram=<slug> durum=<bekliyor|uygulandi>
+  ts=<ISO8601> kaynak=<file-or-session> -->` comment followed by `iddia:` and
+  `dogru:` lines (one line each, ≤300 characters, `-->` neutralised). The
+  grammar is fixed and line-oriented on purpose: retrieval reads the same file
+  at query time, without the compiler. `duzelt.py ekle` validates the slug
+  against `knowledge/concepts/` (`--yeni` opts out for a target that does not
+  exist yet), appends the entry as `bekliyor` and records
+  `warn:duzeltme-bekliyor:<slug>`; `liste` prints the ledger; `dogrula`
+  re-opens an applied entry whose claim came back.
+- **`compile.py` reads pending corrections as a separate, high-authority block
+  placed before the daily, and verifies each one after promotion.** The
+  "BAĞLAYICI DÜZELTMELER" block is screened field by field with the same
+  `DIRECTIVE_SHAPED` detector the untrusted blocks get, and prompt instruction
+  11 overrides instruction 6 for it — the wrong sentence must not survive even
+  as a `⚠ çelişki` line. Once the promotion is finalised, `duzeltme_kapanisi()`
+  runs `dogrula` then `uygula_kontrol`: an entry closes only when the `iddia` is
+  gone from the live note **and** the `dogru` has landed, judged by normalised
+  containment plus key tokens (dates, amounts, case codes) — a claim counts as
+  present when all its key tokens share one sentence. Applied entries are
+  rewritten in place (`durum=uygulandi`, original `ts` kept, `uygulandi_ts`
+  added) and stamp `duzeltildi` — plus `superseded_by` for a `--gecersiz`
+  entry — into the note's frontmatter. An unapplied entry stays `bekliyor`,
+  keeps `warn:duzeltme-uygulanmadi:<slug>`, and shows up in `durum.py`'s new
+  `bekleyen duzeltme` row with the age of the oldest entry. A missing or
+  unreadable ledger can never fail a compile: the prompt is then byte-identical
+  to the previous version.
+- **`sema.py` accepts three optional frontmatter keys, each with exactly one
+  writer:** `superseded_by` (an ascii-kebab slug or the literal `duzeltme`),
+  `duzeltildi` (ISO day or full stamp) and `guven`
+  (`yuksek|orta|dusuk|belirsiz`). Malformed values are refused
+  (`superseded-by-invalid:<file>`, `guven-invalid:<file>`,
+  `date-invalid:<file>:duzeltildi`). `sema.guven_for_blocks()` is the rule
+  behind the third, as a pure function: `dusuk` only when every daily block
+  behind a note carries the `kaynak: yerel-8b` marker of the offline fallback
+  summariser. `compile.apply_guven()` wires it up and stamps only notes whose
+  `sources` names that daily and nothing else — inert until something writes
+  the marker.
+- **`compile.py --capa-temizle` retires ghost session anchors into an inactive
+  history comment.** Every `session:agent-*` anchor (plus ids named with
+  `--id`) moves out of the active block into one
+  `<!-- gecmis-capalar: session:<id> ts:<stamp> source:<kind>; ... -->` line,
+  which does not match `retrieve.SESSION_ANCHOR` and therefore can never be
+  returned as provenance again. Idempotent, prints one line per file, and takes
+  `--vault-root` and `--dry-run` so it can be rehearsed on a copy.
+
+### Changed
+
+<!-- yazan: claude · opus-5 -->
+- **A session anchor is now evidence, not decoration applied to everything a
+  run touched (A3-3V).** `carry_source_anchors()` used to append every anchor
+  in the daily to every concept the run changed; the audit found 84 subagent
+  anchors living in six live concepts whose dailies no longer contained them.
+  An anchor is now attached only when the session id is in the daily, is not a
+  ghost (`agent-*`/`subagent-*`, or an id passed in `excluded_ids`), **and** the
+  model's own output cites it — by naming the session id, or by citing the
+  daily in `## Kaynaklar`, which authorises that daily's non-ghost anchors. A
+  note that names specific sessions gets only those; a note that cites nothing
+  gets none. Provenance coverage falls visibly, from a false "every changed note
+  is sourced" to a true and smaller number.
+- **`restore_source_anchors()` no longer restores wholesale.** Putting back
+  every anchor the model removed is how ghost anchors survived rewrite after
+  rewrite. Sentence-level attribution does not exist yet, so an anchor comes
+  back only when its session id is still named in the rewritten note; the rest
+  are dropped and counted as `info:capa-dusuruldu:<slug>:<n>` in health's skip
+  list.
 
 ## [0.6.0] - 2026-09-07
 

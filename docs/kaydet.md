@@ -97,6 +97,13 @@ Kaydet writes a session anchor exactly like a hook flush does, through
 anchor — and is stripped back out of every hit body before anything
 reaches a session, same as every other source.
 
+"Exactly like any other session's anchor" now includes the citation gate in
+[architecture §5.10](architecture.md#510-validated-provenance--what-a-session-anchor-is-allowed-to-claim):
+the anchor reaches a concept note only if that note cites the session or the
+daily it sits in. A kaydet block whose content the compiler did not use leaves
+no anchor behind, which is the point — an anchor is a claim of provenance, and
+an unused note was not the source of anything.
+
 There is **no deduplication**: a note is a note. Saving the same text twice
 produces two blocks with two distinct anchors (distinct timestamps), not
 one block kept and one dropped.

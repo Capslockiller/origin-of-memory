@@ -364,6 +364,12 @@ The prompt (`COMPILE_PROMPT`) carries:
   the whole knowledge directory, and correct rather than duplicate a contradicted
   article.
 
+One block in this prompt is **not** untrusted data: the binding-corrections
+block described in §5.9, assembled by `_duzeltme_girdisi()` and placed
+immediately before the daily so the correction is read before the material that
+produced the error. It is absent — and the prompt byte-identical to the previous
+version — whenever there is no pending correction.
+
 The root map (about 4 KB) plus a compact `name | aliases` registry replaced
 sending the full index on every call. That is the 63% input-base reduction.
 
@@ -563,6 +569,24 @@ Messages carry the filename the way the rest of the pipeline reports
 (`key-missing:<file>:created`, `date-invalid:<file>:updated`, `body-empty:<file>`),
 so a problem list stays readable wherever it is copied.
 
+Three **optional** keys were added for the correction layer (§5.9). Absent, they
+are not a problem; present, they are checked:
+
+| Key | Value | Written by |
+| --- | --- | --- |
+| `superseded_by` | an ascii-kebab concept slug, or the literal `duzeltme` | `duzelt.py`, on a `--gecersiz` correction |
+| `duzeltildi` | `YYYY-MM-DD` or a full ISO 8601 stamp | `duzelt.py`, when a correction is verified as applied |
+| `guven` | `yuksek` \| `orta` \| `dusuk` \| `belirsiz` | `compile.apply_guven()`, and only the value `dusuk` |
+
+A field nothing writes is worse than an absent field — it advertises a guarantee
+the system does not keep — so each of the three has exactly one writer.
+`sema.guven_for_blocks()` is that writer's rule, as a pure function: a note gets
+`guven: dusuk` only when **every** daily block behind it carries the
+`kaynak: yerel-8b` marker of the offline fallback summariser, and only when its
+`sources` names that daily and nothing else. Until something writes that marker
+the path is inert — `guven_for_blocks()` returns `None` and `apply_guven()`
+returns immediately.
+
 It lives in its own module rather than in `beyin_ortak.py` for two reasons: it
 needs rootmap's frontmatter dialect (`_unquote`, `_inline_list`), and
 `beyin_ortak` cannot import `rootmap` without a cycle — putting it there would
@@ -651,6 +675,128 @@ otherwise every default-model ingest call would file itself under flush.
 **Not covered:** `ingest_common._run_codex()` invokes the Codex CLI directly
 rather than through `claude_runner`, so Codex ingest calls do not appear in the
 ledger. Backend comparisons that include Codex have to account for that gap.
+
+### 5.9 `duzelt.py` — the correction store the compiler is accountable for
+
+Before this layer, a human who noticed a false sentence in a concept note could
+only fix the daily and hope. Nothing named the wrong claim, nothing checked
+whether the next rewrite removed it, and a recompiled file was treated as
+evidence that it had. The store closes that: **a named correction is an input
+the compiler must consume, and application is verified, not assumed.**
+
+**The file contract.** `<vault>/🔮 850-Companion/Duzeltmeler.md`, created on
+demand by `duzelt.py ekle`. It is deliberately a plain, line-oriented Markdown
+file with a fixed grammar, because a second reader — retrieval, at query time —
+parses the same file without the compiler:
+
+```markdown
+<!-- duzeltme kavram=<slug> durum=bekliyor ts=<ISO8601> kaynak=<file-or-session> -->
+iddia: <the wrong claim, ≤300 characters, one line>
+dogru: <the correct statement, ≤300 characters, one line>
+not: <optional>
+```
+
+One blank line ends a block. Both fields are collapsed to a single line and
+capped at 300 characters when written **and** when read, and any `-->` inside
+one becomes `->`, so a correction cannot close its own comment. An applied block
+is rewritten in place: `durum=uygulandi`, the original `ts` preserved, and
+`uygulandi_ts=<ISO8601>` appended to the head. `--gecersiz` adds `gecersiz=evet`
+and marks the note obsolete as a whole.
+
+**CLI.**
+
+```bash
+python scripts/duzelt.py ekle --kavram <slug> --iddia "..." --dogru "..." \
+    --kaynak "Threads.md" [--not "..."] [--gecersiz] [--yeni]
+python scripts/duzelt.py liste
+python scripts/duzelt.py dogrula
+```
+
+`ekle` validates the slug against `knowledge/concepts/` (`--yeni` is the
+explicit opt-out for a target that does not exist yet), appends the block with
+`durum=bekliyor`, and records `warn:duzeltme-bekliyor:<slug>` in health.
+
+**What the compiler does with it.** `_duzeltme_girdisi()` renders the pending
+entries into the "BAĞLAYICI DÜZELTMELER" block (§5.2) — screened first with the
+same `DIRECTIVE_SHAPED` detector the untrusted blocks get, per field, so an
+entry shaped like an instruction never reaches the prompt. Prompt instruction 11
+overrides instruction 6 for these entries: the wrong sentence must not survive
+even as a `⚠ çelişki` line.
+
+After the promotion is finalised — the first moment a correction can be checked
+against what a reader would actually get — `duzeltme_kapanisi()` runs, in this
+order:
+
+1. `duzelt.dogrula()` re-opens any `uygulandi` entry whose claim is back in the
+   note, warning `warn:duzeltme-yeniden-acildi:<slug>`. "It was fixed once" is
+   not a standing guarantee.
+2. `duzelt.uygula_kontrol()` checks every pending entry against the live note
+   and closes only those that pass **both** halves: the `iddia` is gone, and the
+   `dogru` has landed. It then stamps `duzeltildi` (and `superseded_by` for a
+   `--gecersiz` entry) into the note's frontmatter. Anything still open keeps
+   `warn:duzeltme-uygulanmadi:<slug>` and appears in `durum.py`'s
+   `bekleyen duzeltme` row with the age of the oldest entry.
+
+The comparison is `duzelt.iddia_kalmis_mi()` / `duzelt.dogru_gecmis_mi()`:
+Turkish-aware case folding and whitespace collapse, then a normalised substring
+match, then a small set of **key tokens** — dates, amounts, case codes — taken
+from the text. A claim counts as still present when all of its key tokens appear
+together **in one sentence**, which catches a reworded claim without flagging a
+note that legitimately kept the fee and dropped the date. A correct statement
+counts as landed when all of its key tokens are present and at least 60% of its
+content words appear. This is containment, not truth: it cannot establish
+booking, payment or negation, and it is not called verification of a fact.
+
+Reading the ledger can never fail a compile. A missing or unreadable file simply
+means nothing binds this run, and the prompt is byte-identical to what it would
+have been.
+
+### 5.10 Validated provenance — what a session anchor is allowed to claim
+
+`flush.py` writes a `<!-- session:<id> ts:<stamp> source:<kind> -->` anchor into
+each daily session block, and the compiler carries it into the notes that block
+produced. An anchor is a **claim of provenance**, so it is evidence — not
+decoration applied to every file a run happened to touch. It used to be the
+latter: `carry_source_anchors()` appended every anchor in the daily to every
+concept the run changed, and `restore_source_anchors()` put back, unread, any
+anchor the model had removed. The audited result was 84 subagent anchors
+(`session:agent-*`) living in six live concepts whose dailies no longer
+contained them.
+
+`carry_source_anchors()` now attaches an anchor only when three gates hold:
+
+1. the session id appears in the daily being compiled;
+2. it is not a ghost id — an `agent-*`/`subagent-*` transcript is never
+   provenance, and stage-compile ids can be passed in `excluded_ids`;
+3. the model's own output cites it: either it names the session id (an inline
+   anchor it kept, or the id written into `## Kaynaklar`), or, failing that, its
+   `## Kaynaklar` cites the daily itself, which authorises that daily's
+   non-ghost anchors. A note that names specific sessions gets only those.
+
+A note that cites nothing gets no anchor. Provenance *coverage* therefore falls,
+visibly — from a false "every changed note is sourced" to a true, smaller
+number. That is the intended trade.
+
+`restore_source_anchors()` no longer restores wholesale. Sentence-level
+attribution does not exist yet, so it takes the conservative rule: an anchor the
+model dropped comes back only if its session id is still named somewhere in the
+rewritten note; the rest are dropped and counted as
+`info:capa-dusuruldu:<slug>:<n>` in health's skip list.
+
+**Migration.** The historical anchors are retired, not deleted:
+
+```bash
+python scripts/compile.py --capa-temizle [--vault-root <path>] [--id <session>] [--dry-run]
+```
+
+Every `session:agent-*` anchor (plus any id named with `--id`) is removed from
+the note's active block and recorded in a single
+`<!-- gecmis-capalar: session:<id> ts:<stamp> source:<kind>; ... -->` line. That
+shape does not match `retrieve.SESSION_ANCHOR`, so the history is readable and
+inactive: it can no longer be returned as provenance, and it cannot come back
+through a rewrite, a restore or an index rebuild. The migration is idempotent
+and prints one line per file. Run it against a copy first — it rewrites concept
+notes in place.
 
 ## 6. `rootmap.py` — the map layer
 
