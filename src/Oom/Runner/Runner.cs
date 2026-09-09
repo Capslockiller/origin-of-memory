@@ -5,6 +5,18 @@ using System.Text.RegularExpressions;
 namespace Oom.Contracts;
 
 /// <summary>
+/// Everything a configured executable knows about its two backends (spec 4.1, 6.6): the
+/// vault the isolation is anchored at, the isolated <c>CLAUDE_CONFIG_DIR</c>, the full model
+/// ids of both endpoints and the per-component backend chain.
+/// </summary>
+public sealed record RunnerProfile(
+    string Vault,
+    string ClaudeConfigDirectory,
+    ClaudeSettings Claude,
+    LocalSettings Local,
+    IReadOnlyDictionary<ComponentKind, IReadOnlyList<string>> Chains);
+
+/// <summary>
 /// The only place the product talks to a model (spec 6.6). Every external
 /// contract that can drift — the Claude CLI's JSON shape, the OpenAI compatible
 /// local endpoint, Windows executable resolution — is isolated here and pinned
@@ -45,10 +57,12 @@ public sealed class Runner
     private readonly State? _state;
     private readonly string _localUrl;
     private readonly bool _configured;
+    private readonly IReadOnlyDictionary<ComponentKind, IReadOnlyList<string>>? _chains;
+    private readonly RunnerProfile? _profile;
 
-    public Runner() : this(null, null, null, null) { }
+    public Runner() : this((IProcessRunner?)null, null, null, null) { }
 
-    public Runner(IProcessRunner? processes, IHttp? http = null, IClock? clock = null, State? state = null, string localUrl = "http://localhost:11434/v1", bool? configured = null)
+    public Runner(IProcessRunner? processes, IHttp? http = null, IClock? clock = null, State? state = null, string localUrl = "http://localhost:11434/v1", bool? configured = null, IReadOnlyDictionary<ComponentKind, IReadOnlyList<string>>? chains = null)
     {
         _processes = processes ?? new WindowsProcessRunner();
         _http = http ?? new HttpTransport();
@@ -56,7 +70,12 @@ public sealed class Runner
         _state = state;
         _localUrl = localUrl;
         _configured = configured ?? VaultPaths.ReadVault() is not null;
+        _chains = chains;
     }
+
+    /// <summary>The configured runner: model ids, isolation directory and chains from <c>oom.json</c>.</summary>
+    public Runner(RunnerProfile profile, IProcessRunner? processes = null, IHttp? http = null, IClock? clock = null, State? state = null)
+        : this(processes, http, clock, state, profile.Local.Url, true, profile.Chains) => _profile = profile;
 
     /// <summary>
     /// Walks the component's backend list and returns the first answer. The list
@@ -73,6 +92,9 @@ public sealed class Runner
         var text = StripMachineEnvelopes(prompt);
         var requestedModel = ModelFor(ClaudeBackend, tier);
         var chain = BackendChain(component);
+        if (chain.Count == 0)
+            return new RunResult(text, "yapılandırma yok (backend listesi boş)", "none", requestedModel, "none");
+
         var started = _clock.Now;
         var backend = chain[^1];
         string? error = null;
@@ -86,6 +108,7 @@ public sealed class Runner
                 Record(candidate, component, tier, attempt.Model, text.Length, attempt.Text.Length, started, "ok", attempt.UsageSource, purpose);
                 return attempt;
             }
+
 
             error = attempt.Error;
         }
@@ -292,8 +315,15 @@ public sealed class Runner
 
     private RunResult CallClaude(string prompt, ModelTier tier, string model)
     {
-        var vault = Path.GetDirectoryName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar)) ?? AppContext.BaseDirectory;
-        var request = BuildClaudeRequest(prompt, model, vault, Path.Combine(AppContext.BaseDirectory, "claude-config"));
+        var vault = _profile?.Vault
+            ?? Path.GetDirectoryName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))
+            ?? AppContext.BaseDirectory;
+        var configDirectory = _profile?.ClaudeConfigDirectory ?? Path.Combine(AppContext.BaseDirectory, "claude-config");
+
+        // First use creates the isolated directory and links this machine's session credential
+        // into it; without that the isolated `claude -p` is unauthenticated (spec 6.6).
+        IsolationState = ClaudeIsolation.Prepare(configDirectory);
+        var request = BuildClaudeRequest(prompt, model, vault, configDirectory);
         var result = RunProcess(request, tier is ModelTier.Fast ? FastTimeout : SmartTimeout);
         if (result.TimedOut || result.ExitCode != 0)
             return new RunResult(string.Empty, $"claude: çıkış {result.ExitCode} {result.StandardError}".Trim(), ClaudeBackend, model);
@@ -309,7 +339,9 @@ public sealed class Runner
                 return new RunResult(string.Empty, "warn:claude-cli-contract", ClaudeBackend, model);
             }
 
-            return new RunResult(answer.GetString() ?? string.Empty, null, ClaudeBackend, ReadUsedModel(root) ?? model);
+            var used = ReadUsedModel(root) ?? model;
+            LastUsage = ReadUsage(root, used);
+            return new RunResult(answer.GetString() ?? string.Empty, null, ClaudeBackend, used);
         }
         catch (JsonException)
         {
@@ -355,16 +387,38 @@ public sealed class Runner
         }
     }
 
+    /// <summary>The tokens the last Claude call actually spent, straight from <c>modelUsage</c> (spec 6.6).</summary>
+    public (long Input, long Output, long CacheRead) LastUsage { get; private set; }
+
     private void Record(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, DateTimeOffset started, string outcome, string usageSource, string purpose) =>
-        _state?.RecordCall(backend, component, tier, model, inputChars, outputChars, (long)(_clock.Now - started).TotalMilliseconds, outcome, usageSource, purpose);
+        _state?.RecordCall(backend, component, tier, model, inputChars, outputChars, (long)(_clock.Now - started).TotalMilliseconds, outcome, usageSource, purpose,
+            LastUsage.Input, LastUsage.Output, LastUsage.CacheRead);
 
-    private static string[] BackendChain(ComponentKind component) =>
-        component is ComponentKind.Compile ? [ClaudeBackend] : [ClaudeBackend, LocalBackend];
-
-    private static string ModelFor(string backend, ModelTier tier) => backend switch
+    private static (long Input, long Output, long CacheRead) ReadUsage(JsonElement root, string model)
     {
-        ClaudeBackend => tier is ModelTier.Fast ? FastModel : SmartModel,
-        _ => tier is ModelTier.Fast ? LocalFastModel : LocalSmartModel
+        if (!root.TryGetProperty("modelUsage", out var usage) || usage.ValueKind is not JsonValueKind.Object
+            || !usage.TryGetProperty(model, out var entry) || entry.ValueKind is not JsonValueKind.Object)
+            return default;
+
+        return (Count(entry, "inputTokens"), Count(entry, "outputTokens"), Count(entry, "cacheReadInputTokens"));
+
+        static long Count(JsonElement element, string name) =>
+            element.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.Number ? value.GetInt64() : 0;
+    }
+
+    /// <summary>The component's chain from <c>oom.json</c> (spec 6.6); the spec 4.1 defaults when unconfigured.</summary>
+    private IReadOnlyList<string> BackendChain(ComponentKind component) =>
+        _chains is not null && _chains.TryGetValue(component, out var configured)
+            ? configured
+            : component is ComponentKind.Compile ? [ClaudeBackend] : [ClaudeBackend, LocalBackend];
+
+    /// <summary>What the isolated config directory did on this run; doctor and the report read it.</summary>
+    public string IsolationState { get; private set; } = "kurulmadı";
+
+    private string ModelFor(string backend, ModelTier tier) => backend switch
+    {
+        ClaudeBackend => tier is ModelTier.Fast ? _profile?.Claude.Fast ?? FastModel : _profile?.Claude.Smart ?? SmartModel,
+        _ => tier is ModelTier.Fast ? _profile?.Local.Fast ?? LocalFastModel : _profile?.Local.Smart ?? LocalSmartModel
     };
 
     private static string? ReadUsedModel(JsonElement root)

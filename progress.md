@@ -194,3 +194,88 @@ Survived: `OOM_INVOKED_BY` dropped from the child environment — proposed test:
 Tests were not touched in this lane (out of ownership); the three proposals above are for the test owner to decide. Adding them would let three of the six gate-9 mutants be re-anchored on the currently unmeasured properties.
 
 Files added by lane MUT: `bench/mutate.py` (new), `bench/mutants.json` (new), `bench/results/mutation-2026-09-09.json` (new), `bench/README.md` (appended section "Mutation check (gate 9)"), `progress.md` (this section). Nothing under `src/`, `tests/`, `.github/`, `*.csproj`, `Oom.sln`, `README*.md` or `CHANGELOG.md` was modified.
+
+<!-- yazan: claude · opus -->
+## Lane INT-2 — entegrasyon: exe gerçekten koşuyor
+
+Devralınan yamayı temel aldım: `Infrastructure/Configuration.cs` ve `Sweep/SweepRun.cs` korundu ve tamamlandı; `SweepRun.Record`'un aynı oturum kimliğini iki kez sözlüğe yazan çökmesi (`ArgumentException: Key: journal`) ve `Runner.BackendChain`'in `oom.json`'ı görmemesi giderildi. Başlangıç ölçümü: derleme başarılı, 92 yeşil / 7 kırmızı (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098).
+
+### 1. Yapılandırma [4, 4.1]
+`src/Oom/Infrastructure/Configuration.cs` (198): 4.1'in tamamı — `backend.flush`/`backend.compile`, `backend.claude` (fast/smart/configDir), `backend.local` (url/fast/smart/embed), `retrieveMode`, `sweep`, `compile`, `context`, `retrieve`, `mcp`, `notify`, `extensions`. `%VAR%` okuma anında genişletilir; bilinmeyen anahtar `UnknownKeys`'e düşer ve `doctor`'da `config uyarı unknown-key` satırı olur, hata değil. `ClaudeConfigDirectory(vault)` göreli değeri vault'a bağlar, mutlak (ve `%VAR%` içeren) değeri olduğu gibi kullanır.
+
+Global `--vault <yol>`: `VaultPaths.UseVault` (`Infrastructure/Boundaries.cs`, 211) tek bir geçersiz kılma tutar; `LaneCVaultPaths.ResolveVault` (`RootMap/VaultPaths.cs`, 108) önce onu okur, böylece compile ile retrieve aynı vault'a bakar. Ortam değişkeni hâlâ yalnız `OOM_INVOKED_BY` ve `OOM_FAKE_NOW`.
+
+### 2. Durum [8]
+`State` artık `partial`; yazma yolunun tabloları `src/Oom/State/SessionStore.cs` (158): `ReadSessionRow`, `WriteSessionRow`, `WriteRetry`, `ClearRetry`, `ReadRetryQueue`, `ReadStamp`, `SeedCursors`, `RecordNotified`, `ReadPendingNotification`, `ReadStatusLine`, `RecordQuota`, `ReadColumn`. `Program` süreç başına bir `State` açar (`%LOCALAPPDATA%\oom\<vault-hash>\state.db`, WAL, busy_timeout 5000, `user_version`) ve onu Flush, SweepRun, Runner, Doctor ve WindowsNotifier'a kurucudan verir.
+
+`src/Oom/Flush/FlushStore.cs` (113): `IFlushStore` iki uygulamayla — `DurableFlushStore` (state.db) ve `MemoryFlushStore`. Süreç geneli bellek deposu yalnız `State` verilmediğinde, yani testlerde kalır (Y-012 iki ayrı `new Flush()` arasında aynı imleci görmeye devam ediyor).
+
+### 3. Transkript keşfi ve gerçek biçim [6.3]
+`src/Oom/Ingest/Parsers/ClaudeTranscript.cs` (125): gerçek Claude Code satır biçimi tek dosyada. `%USERPROFILE%\.claude\projects\E--OdenaWorks\` altındaki **bir** gerçek transkript salt okunur incelendi; hiçbir içerik kopyalanmadı, yalnız yapısı çıkarıldı: satır `type` değerleri `bridge-session · queue-operation · attachment · user · last-prompt · custom-title · atis-latch · assistant · system` (+ eski dosyalarda `summary`); konuşma yalnız `user`/`assistant`'ta, `message.role` ile, `message.content` string ya da `text`/`tool_use`/`tool_result`/`thinking` blok dizisi. Ayrıştırıcı `isSidechain` (alt ajan), `isMeta` (makine satırı) ve `toolUseResult` taşıyan satırları atlar; yalnız `text` bloklarını özete sokar; yarım yazılmış son satırı sessizce geçer. Sentetik örnek `src/Oom/Ingest/Samples/claude-code-real-shape.jsonl` (10 satır, tamamı uydurma). Lane D'nin `ClaudeParser`'ı (31, eskiden 74) artık aynı okuyucuya devrediyor: dış biçim değişirse kıran tek dosya var.
+
+`src/Oom/Sweep/SweepRun.cs` (294): `sweep.roots` altında `*.jsonl` özyinelemeli tarama (`MaxRecursionDepth 6`, erişilemeyen dizin sessiz), oturum kimliğine göre tekilleştirme, `(mtime,size)` damgası eşleşen dosya hiç açılmaz, yaş kapısı yalnız damgalı kaynağa (Y-007), `minTurns`, `maxSessionsPerRun` bütçesi işlenen oturuma uygulanır, `locked` damgalanmaz, `coverage` satırı, `retry_queue` tahliyesi, `flush_log`'a tek özet satırı, `SweepRetention`. Mekanizma izi dışlaması iki katmanlı: `Flush.IsMechanismTranscript` yol işaretleri **ve** proje dizini adının kodlanmış temp önekiyle başlaması. Gerçek arşivde ölçüldü: 534 proje dizininin 217'si (v0'ın `beyin-flush-*` temp koşumları) bu kuralla dışlanıyor, 317'si kalıyor.
+
+### 4. Runner canlı yolu [6.6]
+`src/Oom/Runner/Runner.cs` (459): `RunnerProfile` (vault, izole config dizini, model kimlikleri, bileşen zincirleri) ile yapılandırılmış ikinci kurucu; `ModelFor` artık `oom.json`'dan okuyor; `modelUsage`'dan gerçek token `calls(in_tok, out_tok, cache_r)` sütunlarına düşüyor.
+
+`src/Oom/Infrastructure/ClaudeIsolation.cs` (72): Claude Code 2.1.263 Windows'ta kimlik bilgisini `<CLAUDE_CONFIG_DIR>\.credentials.json` içinde tutuyor (keychain yok), bu yüzden yalnız boş `settings.json` içeren izole dizin kimliksizdir ve her çağrı düşer. `Prepare` dizini kurar, `settings.json` = `{}` yazar ve kullanıcının `~/.claude/.credentials.json` dosyasını **bağlar**: aynı birimdeyse `CreateHardLinkW`, değilse kopya; kaynak daha yeniyse tazelenir. Kullanıcının kendi `.claude` dizinine hiçbir şey yazılmaz, hiçbir kimlik değeri okunmaz veya basılmaz.
+
+CLI sözleşmesi doğrulandı: `--tools ""`, `--permission-mode default`, `--max-turns 1`, `--output-format json`, `--model <tam id>` 2.1.263'te kabul ediliyor (`--max-turns` `--help` çıktısında listelenmiyor ama çalışıyor).
+
+### 5. `compile` → `Compile.Run` [6.5]
+`src/Oom/Compile/CompilePrompt.cs` (70): şema kuralları + kök harita + sınırlı kayıt defteri + daily gövdesi, son üçü `--- BEGIN/END UNTRUSTED DATA ---` çitleri içinde. `Program.RunCompile` bekleyen daily'leri `maxDailiesPerRun` ile sınırlar, her biri için `RootMap.Assign` → `Compile.BuildRegistry` → `Runner.Run(smart, Compile)` → `Compile.Run(...)`. `--dry-run` daily başına kayıt defteri, kök harita, daily ve istem karakter sayısını basar ve hiçbir çağrı yapmaz.
+
+### 6. Kanca stdin [6.1]
+`src/Oom/Infrastructure/HookPayload.cs` (49): `session_id`, `transcript_path`, `hook_event_name`, `prompt`, `cwd`; BOM tolere edilir (Y-089), JSON olmayan girdi yalın prompt sayılır. `context`, `retrieve --hook` ve `flush` stdin'i buradan okur; okuma 2 saniyeyle sınırlıdır, böylece yazan kimsenin olmadığı bir boruyla komut asılmaz.
+
+`src/Oom/Infrastructure/DetachedProcess.cs` (67): `CreateProcessW` ile `DETACHED_PROCESS | CREATE_NO_WINDOW`; .NET'in `ProcessStartInfo`'su bu bayrakları veremiyor. `flush` kancadan çağrıldığında yükü okur, kendini `--detached` ile ayrık başlatır ve döner. `Flush/HookTemplates.cs` (82) düzeltildi: `LaunchDetached` artık aynı yolu kullanıyor ve çocuğa **`OOM_INVOKED_BY` koymuyor** — özyineleme koruması, işi yapacak çocuğu daha başlamadan çıkartıyordu (lane D2'nin Blocked-by notu kapandı). Kayıtlı komutlar `oom.exe flush --reason sessionend|precompact`, oturum stdin'den.
+
+### 7. MCP stdio döngüsü [6.9]
+`Program` `oom mcp` ile `Mcp.Run(Console.In, Console.Out)` çağırıyor; `mcp.enabled` false ise Türkçe hata ve çıkış 1. stdin EOF'ta süreç biter, port yok.
+
+### 8. `INotifier` Windows uygulaması [6.8]
+`src/Oom/Notify/WindowsNotifier.cs` (113): AUMID `OdenaStudio.OriginOfMemory` (Install'daki sabit). Start menüsünde kısayol varsa `Windows.UI.Notifications` ile toast; yoksa yalnız satır kuyruğa girer. Hiçbir yolda istisna dışarı sızmaz. `notified(class, key, ts)` ile 7 günlük tekilleştirme; kuyruğa giren satır `health(component='notify')` üstünden hem `doctor`'a hem bir sonraki SessionStart bloğunun `[Bildirim]` bölümüne düşer. Kurulumun kendisi kapsam dışı; hiçbir kısayol veya AUMID yazılmadı.
+
+### 9. Sentetik uçtan uca kanıt
+`.e2e/build_vault.py` sentetik vault'u (20 geçerli kavram notu, companion beş dosya, `hub-config.json`, `oom.json`) ve gerçek biçimde 5 transkripti üretir; `.e2e/run.sh` tüm zinciri koşar, çıktısı `.e2e/proof.txt`. Hepsi `.gitignore`'a alındı. Sentetik vault'un durum kökü: `C:\Users\musta\AppData\Local\oom\600f1558446f9ae0\` (yalnız bu oluşturuldu).
+
+```
+$ oom --vault <sentetik> context                -> 1.030 karakter, Spec 7 bölümleri sırayla, kapanış satırı sonda
+$ oom --vault <sentetik> retrieve --query "kapsama orani nasil olculuyor" --json
+  {"schema_version":1,"query":"...","hits":[{"name":"kapsama-orani.md","score":70.01,...
+$ echo '{"prompt":"kisa soru"}'                 | oom retrieve --hook  -> getirme atlandı (skip:short)
+$ echo '{"prompt":"/derle kapsama raporunu"}'   | oom retrieve --hook  -> getirme atlandı (skip:slash)
+$ echo '{"prompt":"Kapsama orani ile tarama penceresi iliskisi neydi?"}' | oom retrieve --hook
+  {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"[Hafıza — 3 not] ...
+$ oom --vault <sentetik> sweep --dry-run        -> 5 dosya, 5 değişmiş, 5 oturum, 5/5 kapsandı, 0 atlandı · ok=5
+$ oom --vault <sentetik> sweep                  -> ok=5 · daily ...\daily\2026-09-09.md · indeks 25 ms
+    daily blok sayısı 5 · çapa sayısı 5
+$ oom --vault <sentetik> sweep                  -> 0 değişmiş, 5 atlandı · blok sayısı hâlâ 5
+$ touch <bir transkript>; oom ... sweep         -> nonewturns=1 · blok sayısı hâlâ 5 (imleç tuttu)
+$ oom --vault <sentetik> compile --dry-run      -> kayıt defteri=743 karakter/21 satır · istem=5.478 karakter · çağrı yok
+$ oom --vault <sentetik> doctor                 -> kapsama %100 · ret %0 · bekleyen 1
+$ oom --vault <sentetik> doctor --json          -> {"schema_version":1,"coverage":1,"rejection_rate":0,...
+$ cat hook.json | oom flush                     -> flush ayrıldı: 24500 · kanca dönüş süresi 93 ms
+    25 s sonra: blok sayısı 6, yeni çapa session:e2e-66666666-...
+$ oom mcp   (initialize · tools/list · tools/call) -> üçü de yanıtlandı, stdin EOF'ta çıktı
+```
+
+### Backend kanıtı (birer gerçek çağrı)
+- `local` / `qwen3:8b` (Ollama, OpenAI uyumlu `POST /v1/chat/completions`): 5 çağrı, 827/800/829/807/827 giriş karakteri, 580/478/679/692/483 çıkış karakteri, 13.578 ms (soğuk) · 4.708 · 5.984 · 6.031 · 5.002 ms. Beşi de beş bölümlü şekli geçti, hiçbiri kuyruğa düşmedi.
+- `claude` / `claude-haiku-4-5-20251001` (`claude -p`, izole `CLAUDE_CONFIG_DIR`): 1 çağrı, `modelUsage` 10 giriş / 751 çıkış token, cache_read 0, 10.618 ms, sonuç `ok`. İzole dizin ilk kullanımda kuruldu (`settings.json` = `{}`, `.credentials.json` kopyalandı — vault E:, kullanıcı profili C:, birim farklı olduğu için sabit bağlantı kurulamadı) ve kimlik doğrulama çalıştı.
+
+### Bulgular
+- Claude Code 2.1.263 `--max-turns` seçeneğini `--help` çıktısında listelemiyor, ama kabul ediyor. `--tools ""` belgelenmiş ve çalışıyor.
+- `%USERPROFILE%\.claude\settings.json` şu anda dört oom kancasını bir scratchpad harness'ına kayıtlı tutuyor; bu şeridin işi değil, dokunulmadı. Canlı kabul koşumundan önce orkestratörün bu yolları yayımlanan exe'ye çevirmesi gerekir.
+- İzole `claude-config` dizini varsayılan olarak `<vault>\.oom\claude-config`'tir; `E:\OdenaOS` Google Drive ile senkron olduğundan oturum kimlik bilgisinin oraya kopyalanmaması için canlı koşumda `backend.claude.configDir` mutlak bir yola (`%LOCALAPPDATA%\oom\claude-config`) alınmalı — okuyucu artık mutlak ve `%VAR%`'lı değeri kabul ediyor.
+
+### Ölçüm
+Test: `dotnet test Oom.sln -c Release` — Başarısız: 7, Başarılı: 92, Atlanan: 0, Toplam: 99; kırmızılar tam olarak Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
+
+Satır sayıları (ürün): Program 642 · Compile 568+70=638/800 · State 502+158=660/500 · Flush 497+113+82=692/600 · Runner 459/450 · Install 437/450 · Guards 320/400 · Sweep 175+294=469/350 · Retrieve 411/600 · Notes 259+87=346 · RootMap 219+108=327/400 · Doctor 196+68=264/450 · Ingest 101+31+73+125=330/700 · Mcp 136/300 · Context 211/250 · Infrastructure 211+198+72+67+49=597 · Notify 51+113=164 · Bridge 67 · Save 86 · Contracts 62. `src/Oom` toplamı 7.318 satır; Y-068'in saydığı (obj/ üretilen dosyalar dâhil) toplam 7.390/7.500.
+
+Bütçeyi aşan modüller ve gerekçesi: `Sweep` 469/350 (keşif, kapsama mutabakatı ve kuyruk tahliyesi lane B'nin taslağında yoktu), `Flush` 692/600 ve `State` 660/500 (kalıcı imleç ve kuyruk lane B'nin süreç-içi sözlüğünün yerini aldı), `Runner` 459/450. Her biri aynı klasörde yardımcı dosyalara bölündü; başka modülden satır ödünç alınmadı.
+
+Ruling: Spec 4.1'in `backend.claude.configDir` varsayılanı (`.oom\claude-config`) canlı vault'ta oturum kimlik bilgisinin Google Drive ile senkronlanan bir dizine kopyalanması demek. Kod varsayılanını değiştirmedim (spec bağlayıcı), yalnız mutlak ve `%VAR%`'lı değeri destekledim ve canlı koşum için `%LOCALAPPDATA%\oom\claude-config` öneriyorum. Kalıcı çözüm bir spec düzeltmesi ister.
+Ruling: Y-068 `src/Oom` altındaki bütün `*.cs` dosyalarını sayıyor, `obj/` içindeki üretilmiş dosyalar dâhil (şu an 72 satır). Ürün kodu 7.318, ölçülen 7.390. Önerilen en küçük test değişikliği: sayımdan `obj` ve `bin` dizinlerini dışla.
+Ruling: `sweep`'in ikinci koşumu Spec 6.3 gereği değişmemiş dosyayı hiç açmıyor, bu yüzden sonuç `no-new-turns` değil "atlandı"dır; brief'in beklediği `NoNewTurns`, dosyanın mtime'ı değişip içeriği değişmediğinde görülür ve kanıtta ayrıca ölçüldü (üçüncü koşum, `nonewturns=1`).

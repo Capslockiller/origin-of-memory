@@ -16,6 +16,11 @@ internal static class LaneCVaultPaths
     /// <summary>Vault root from the nearest <c>.oom/vault.json</c>; a local workspace when unconfigured.</summary>
     internal static string ResolveVault()
     {
+        // The one vault the process was told about (`--vault`, or vault.json next to the exe)
+        // wins, so compile and retrieve never disagree about which vault they are serving.
+        if (VaultPaths.ReadVault() is { Length: > 0 } declared)
+            return declared;
+
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
         {
             var manifest = Path.Combine(directory.FullName, ".oom", "vault.json");

@@ -18,6 +18,9 @@ public sealed record RetrieveOptions(
 
 internal sealed record ServedKey(string Entry, string SessionId, string Signature, string Note);
 
+/// <summary>One field's corpus statistics for one query: document count, average length, document frequency per term.</summary>
+internal sealed record FieldStats(int Documents, double Average, IReadOnlyDictionary<string, int> Frequency);
+
 public sealed class Retrieve
 {
     // bm25(notes_fts, 0.0, 8.0, 6.0, 3.0, 1.0): the leading 0.0 belongs to the UNINDEXED
@@ -50,6 +53,9 @@ public sealed class Retrieve
 
     private static readonly string[] EnvelopeMarkers = ["<task-notification", "<system-reminder", "<local-command"];
 
+    private static readonly (string Field, double Weight)[] Weights =
+        [("title", TitleWeight), ("aliases", AliasWeight), ("tags", TagWeight), ("body", BodyWeight)];
+
     private static readonly Dictionary<ServedKey, DateTimeOffset> Served = [];
     private static readonly UTF8Encoding Utf8 = new(false);
     private static string _manifestDigest = string.Empty;
@@ -58,6 +64,8 @@ public sealed class Retrieve
     private readonly TurkishFold _fold;
     private readonly Notes _notes;
     private readonly IClock _clock;
+    private IReadOnlyList<Note>? _corpus;
+    private Dictionary<string, Dictionary<string, string[]>>? _fields;
 
     public Retrieve(RetrieveOptions? options = null, TurkishFold? fold = null, Notes? notes = null, IClock? clock = null)
     {
@@ -145,11 +153,15 @@ public sealed class Retrieve
         if (terms.Length == 0 || notes.Count == 0)
             return [];
 
-        var fields = notes.ToDictionary(note => note.Name, FieldTokens);
+        var fields = ReferenceEquals(notes, _corpus) && _fields is not null ? _fields : notes.ToDictionary(note => note.Name, FieldTokens);
+        if (ReferenceEquals(notes, _corpus))
+            _fields = fields;
+
+        var stats = Statistics(fields, terms);
         var hits = new List<SearchHit>();
         foreach (var note in notes)
         {
-            var score = terms.Sum(term => Score(term, note.Name, fields));
+            var score = terms.Sum(term => Score(term, fields[note.Name], stats));
             if (score <= 0)
                 continue;
 
@@ -257,11 +269,18 @@ public sealed class Retrieve
         return builder.ToString();
     }
 
+    /// <summary>
+    /// The concept corpus, parsed once per instance: re-reading 542 notes for every query cost
+    /// two thirds of a second and blew the 300 ms budget of spec 6.4 on a batch.
+    /// </summary>
     private IReadOnlyList<Note> LoadCorpus()
     {
+        if (_corpus is not null)
+            return _corpus;
+
         var directory = _options.VaultPath is null ? null : Path.Combine(_options.VaultPath, "knowledge", "concepts");
         if (directory is null || !Directory.Exists(directory))
-            return [];
+            return _corpus = [];
 
         var notes = new List<Note>();
         foreach (var path in Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly).OrderBy(x => x, StringComparer.Ordinal))
@@ -276,7 +295,7 @@ public sealed class Retrieve
             }
         }
 
-        return notes;
+        return _corpus = notes;
     }
 
     private Dictionary<string, string[]> FieldTokens(Note note) => new(StringComparer.Ordinal)
@@ -287,26 +306,40 @@ public sealed class Retrieve
         ["body"] = Tokenize(Notes.IndexableBody(note)).ToArray()
     };
 
-    private static double Score(string term, string name, Dictionary<string, Dictionary<string, string[]>> fields)
+    /// <summary>
+    /// Per-field corpus statistics for one query. They used to be recomputed inside the score of
+    /// every (term, note, field) triple, which made one query over 542 notes cost 690 ms against
+    /// the 300 ms budget of spec 6.4; the arithmetic below is unchanged, only its position is.
+    /// </summary>
+    private static Dictionary<string, FieldStats> Statistics(Dictionary<string, Dictionary<string, string[]>> fields, string[] terms)
     {
-        var weights = new (string Field, double Weight)[]
-        {
-            ("title", TitleWeight), ("aliases", AliasWeight), ("tags", TagWeight), ("body", BodyWeight)
-        };
-
-        var total = 0.0;
-        foreach (var (field, weight) in weights)
+        var stats = new Dictionary<string, FieldStats>(StringComparer.Ordinal);
+        foreach (var (field, _) in Weights)
         {
             var documents = fields.Values.Select(entry => entry[field]).ToArray();
-            var frequency = fields[name][field].Count(token => string.Equals(token, term, StringComparison.Ordinal));
+            var containing = terms.ToDictionary(term => term,
+                term => documents.Count(tokens => tokens.Contains(term, StringComparer.Ordinal)), StringComparer.Ordinal);
+            stats[field] = new FieldStats(documents.Length,
+                documents.Length == 0 ? 0 : documents.Average(tokens => (double)tokens.Length), containing);
+        }
+
+        return stats;
+    }
+
+    private static double Score(string term, Dictionary<string, string[]> note, Dictionary<string, FieldStats> stats)
+    {
+        var total = 0.0;
+        foreach (var (field, weight) in Weights)
+        {
+            var tokens = note[field];
+            var frequency = tokens.Count(token => string.Equals(token, term, StringComparison.Ordinal));
             if (frequency == 0)
                 continue;
 
-            var containing = documents.Count(tokens => tokens.Contains(term, StringComparer.Ordinal));
-            var idf = Math.Log(1 + (documents.Length - containing + 0.5) / (containing + 0.5));
-            var average = documents.Average(tokens => (double)tokens.Length);
-            var length = fields[name][field].Length;
-            var norm = average <= 0 ? 1 : 1 - B + B * length / average;
+            var statistic = stats[field];
+            var containing = statistic.Frequency[term];
+            var idf = Math.Log(1 + (statistic.Documents - containing + 0.5) / (containing + 0.5));
+            var norm = statistic.Average <= 0 ? 1 : 1 - B + B * tokens.Length / statistic.Average;
             total += weight * idf * (frequency * (K1 + 1)) / (frequency + K1 * norm);
         }
 

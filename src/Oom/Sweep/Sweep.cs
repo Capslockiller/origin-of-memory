@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text;
 
 namespace Oom.Contracts;
 
@@ -131,48 +130,34 @@ public sealed class Sweep
     /// Task Scheduler registration for <c>schtasks /Create /XML</c>: no duration element anywhere,
     /// eight-hourly, run-if-missed, thirty-minute limit (Y-009, D4).
     /// </summary>
-    public string BuildScheduledTaskXml(string executablePath)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("<?xml version=\"1.0\" encoding=\"UTF-16\"?>");
-        builder.AppendLine("<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">");
-        builder.AppendLine("  <RegistrationInfo>");
-        builder.AppendLine("    <Author>oom</Author>");
-        builder.AppendLine("    <Description>OdenaOS bellek taraması</Description>");
-        builder.AppendLine("  </RegistrationInfo>");
-        builder.AppendLine("  <Triggers>");
-        builder.AppendLine("    <CalendarTrigger>");
-        builder.AppendLine("      <StartBoundary>2026-01-01T06:00:00</StartBoundary>");
-        builder.AppendLine("      <Enabled>true</Enabled>");
-        builder.AppendLine("      <Repetition>");
-        builder.AppendLine("        <Interval>PT8H</Interval>");
-        builder.AppendLine("      </Repetition>");
-        builder.AppendLine("      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>");
-        builder.AppendLine("    </CalendarTrigger>");
-        builder.AppendLine("  </Triggers>");
-        builder.AppendLine("  <Principals>");
-        builder.AppendLine("    <Principal id=\"Author\">");
-        builder.AppendLine("      <LogonType>InteractiveToken</LogonType>");
-        builder.AppendLine("      <RunLevel>LeastPrivilege</RunLevel>");
-        builder.AppendLine("    </Principal>");
-        builder.AppendLine("  </Principals>");
-        builder.AppendLine("  <Settings>");
-        builder.AppendLine("    <StartWhenAvailable>true</StartWhenAvailable>");
-        builder.AppendLine("    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
-        builder.AppendLine("    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
-        builder.AppendLine("    <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>");
-        builder.AppendLine("    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");
-        builder.AppendLine("    <Priority>7</Priority>");
-        builder.AppendLine("  </Settings>");
-        builder.AppendLine("  <Actions Context=\"Author\">");
-        builder.AppendLine("    <Exec>");
-        builder.AppendLine($"      <Command>{Escape(executablePath)}</Command>");
-        builder.AppendLine("      <Arguments>sweep</Arguments>");
-        builder.AppendLine("    </Exec>");
-        builder.AppendLine("  </Actions>");
-        builder.AppendLine("</Task>");
-        return builder.ToString();
-    }
+    public string BuildScheduledTaskXml(string executablePath) => $"""
+        <?xml version="1.0" encoding="UTF-16"?>
+        <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+          <RegistrationInfo><Author>oom</Author><Description>OdenaOS bellek taraması</Description></RegistrationInfo>
+          <Triggers>
+            <CalendarTrigger>
+              <StartBoundary>2026-01-01T06:00:00</StartBoundary>
+              <Enabled>true</Enabled>
+              <Repetition><Interval>PT8H</Interval></Repetition>
+              <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+            </CalendarTrigger>
+          </Triggers>
+          <Principals>
+            <Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
+          </Principals>
+          <Settings>
+            <StartWhenAvailable>true</StartWhenAvailable>
+            <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+            <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+            <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
+            <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+            <Priority>7</Priority>
+          </Settings>
+          <Actions Context="Author">
+            <Exec><Command>{Escape(executablePath)}</Command><Arguments>sweep</Arguments></Exec>
+          </Actions>
+        </Task>
+        """;
 
     /// <summary>Sessions stamped in this process; the durable store is <c>sweep_stamps</c>.</summary>
     private static readonly ConcurrentDictionary<string, byte> StampedSessions = new(StringComparer.Ordinal);

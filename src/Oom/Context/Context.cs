@@ -59,17 +59,22 @@ public sealed class Context
 
         Append(builder, "[Durum]", _options.StatusLine ? StatusText(vaultPath) : null);
 
-        var flexible = new StringBuilder();
-        Append(flexible, "[Bilgi Tabanı — İndeks]", ReadAll(vaultPath, Path.Combine("knowledge", "index.md")));
-        Append(flexible, "[Bugünün Logu]", DailyTail(vaultPath, now));
-
+        // The two flexible bodies are trimmed, never their labels: every section of the
+        // Spec 7 contract stays present and in order even when the cap bites.
         var text = builder.ToString();
-        var room = _options.CapChars - text.Length - TrimNote.Length - 40;
-        var flexibleText = flexible.ToString();
-        if (flexibleText.Length > room)
-            flexibleText = room <= 0 ? TrimNote + "\n" : flexibleText[..room] + "\n" + TrimNote + "\n";
+        var log = DailyTail(vaultPath, now);
+        var index = ReadAll(vaultPath, Path.Combine("knowledge", "index.md"));
+        var closing = "Hafıza protokolü zorunludur.\n";
+        var fixedCost = text.Length + closing.Length + "[Bilgi Tabanı — İndeks]\n".Length + "[Bugünün Logu]\n".Length;
+        var room = _options.CapChars - fixedCost - TrimNote.Length - 2;
+        var trimmed = false;
+        (log, room, trimmed) = Fit(log, room, trimmed);
+        (index, _, trimmed) = Fit(index, room, trimmed);
 
-        text += flexibleText + "Hafıza protokolü zorunludur.\n";
+        var flexible = new StringBuilder();
+        Append(flexible, "[Bilgi Tabanı — İndeks]", index);
+        Append(flexible, "[Bugünün Logu]", log);
+        text += flexible.ToString() + (trimmed ? TrimNote + "\n" : string.Empty) + closing;
         var result = new ContextResult(text, SectionNames, System.Diagnostics.Stopwatch.GetElapsedTime(started));
         lock (_cache)
             _cache[key] = result;
@@ -105,6 +110,17 @@ public sealed class Context
         }
 
         return items;
+    }
+
+    /// <summary>Gives one flexible body what is left of the budget and reports the rest.</summary>
+    private static (string? Body, int Room, bool Trimmed) Fit(string? body, int room, bool trimmed)
+    {
+        if (body is null)
+            return (null, room, trimmed);
+        if (body.Length <= room)
+            return (body, room - body.Length, trimmed);
+
+        return (room <= 0 ? null : body[..room], 0, true);
     }
 
     private static string Label(string section) => $"[Hafıza — {section}]";

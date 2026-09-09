@@ -6,6 +6,9 @@ obj/
 TestResults/
 publish/
 
+# lane INT-2 synthetic end-to-end proof (never committed)
+.e2e/
+
 # bench (Python measurement tools, not shipped)
 __pycache__/
 *.pyc

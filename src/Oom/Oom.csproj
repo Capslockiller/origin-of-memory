@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <AssemblyName>oom</AssemblyName>
     <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <!-- D1: .NET 10 LTS hedef; SDK kurulunca tek satir degisir -->
     <PublishSingleFile>true</PublishSingleFile>

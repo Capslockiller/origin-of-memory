@@ -18,9 +18,22 @@ namespace Oom.Contracts;
 /// </summary>
 public static class VaultPaths
 {
+    private static string? _override;
+
+    /// <summary>
+    /// The global <c>--vault &lt;path&gt;</c> option (spec 4). It exists so the published
+    /// executable can be run from anywhere against any vault without being copied into it;
+    /// when it is absent the vault is still only ever <c>vault.json</c> next to the exe.
+    /// </summary>
+    public static void UseVault(string? vault) =>
+        _override = string.IsNullOrWhiteSpace(vault) ? null : Path.GetFullPath(vault).TrimEnd(Path.DirectorySeparatorChar);
+
     /// <summary>The vault root, or <c>null</c> when this executable is not installed.</summary>
     public static string? ReadVault()
     {
+        if (_override is not null)
+            return _override;
+
         var descriptor = Path.Combine(AppContext.BaseDirectory, "vault.json");
         if (!File.Exists(descriptor))
             return null;
@@ -50,8 +63,9 @@ public static class VaultPaths
         if (ReadVault() is not { } vault)
             return null;
 
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(vault.ToUpperInvariant())))[..16].ToLowerInvariant();
-        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "oom", hash);
+        // One vault, one state root: the hash is the compile side's, so `compile` and
+        // `retrieve` do not end up with two databases for the same vault.
+        var directory = LaneCVaultPaths.StateRoot(vault);
         Directory.CreateDirectory(directory);
         return Path.Combine(directory, "state.db");
     }

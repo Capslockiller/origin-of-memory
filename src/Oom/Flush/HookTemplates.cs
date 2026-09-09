@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 
 namespace Oom.Contracts;
@@ -59,28 +58,24 @@ public static class HookTemplates
 
     /// <summary>
     /// The hook process re-launches itself detached (DETACHED_PROCESS | CREATE_NO_WINDOW) and
-    /// returns inside 200 ms; the summary is written by the child, the hook never blocks the user.
+    /// returns inside 200 ms; the summary is written by the child, the hook never blocks the
+    /// user. The child carries <c>--detached</c> and deliberately not <c>OOM_INVOKED_BY</c>:
+    /// the recursion guard is what makes a guarded command exit at once, so setting it on the
+    /// very child that has to do the work would silently drop every hook flush (10.1 #19).
     /// </summary>
-    public static int LaunchDetached(string executablePath, string sessionId, FlushReason reason)
+    public static int LaunchDetached(string executablePath, string sessionId, FlushReason reason, string? transcriptPath = null)
     {
-        var start = new ProcessStartInfo(executablePath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden,
-            RedirectStandardInput = true
-        };
+        List<string> arguments =
+        [
+            "flush", "--detached",
+            "--session", sessionId,
+            "--reason", reason == FlushReason.PreCompact ? "precompact" : "sessionend"
+        ];
 
-        start.ArgumentList.Add("flush");
-        start.ArgumentList.Add("--session");
-        start.ArgumentList.Add(sessionId);
-        start.ArgumentList.Add("--reason");
-        start.ArgumentList.Add(reason == FlushReason.PreCompact ? "precompact" : "sessionend");
-        start.Environment["OOM_INVOKED_BY"] = "hook";
+        if (!string.IsNullOrEmpty(transcriptPath))
+            arguments.AddRange(["--transcript", transcriptPath]);
 
-        using var child = Process.Start(start);
-        child?.StandardInput.Close();
-        return child?.Id ?? 0;
+        return DetachedProcess.Start(executablePath, arguments, Path.GetTempPath());
     }
 
     private static string Quote(string path) => path.Contains(' ', StringComparison.Ordinal) ? $"\"{path}\"" : path;

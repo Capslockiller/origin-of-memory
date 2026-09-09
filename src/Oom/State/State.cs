@@ -13,7 +13,7 @@ namespace Oom.Contracts;
 /// <c>knowledge/</c> and the transcript archive, which is what lets
 /// <c>doctor --fix</c> rebuild the file after a failed integrity check.
 /// </summary>
-public sealed class State : IDisposable
+public sealed partial class State : IDisposable
 {
     private const int SchemaVersion = 1;
     private const int ReplaceAttempts = 5;
@@ -102,9 +102,7 @@ public sealed class State : IDisposable
         {
             foreach (var (table, column, days) in Retention)
             {
-                using var delete = _connection.CreateCommand();
-                delete.CommandText = $"DELETE FROM {table} WHERE {column} < $cutoff";
-                delete.Parameters.AddWithValue("$cutoff", Stamp(now.AddDays(-days)));
+                using var delete = Command($"DELETE FROM {table} WHERE {column} < $cutoff", [("$cutoff", (object)Stamp(now.AddDays(-days)))]);
                 delete.ExecuteNonQuery();
             }
 
@@ -133,19 +131,8 @@ public sealed class State : IDisposable
         Parallel.ForEach(pending, item =>
         {
             var observedAt = item.Stale ? now.AddHours(-(StaleWarningHours + 1)) : now;
-            lock (_gate)
-            {
-                using var insert = _connection.CreateCommand();
-                insert.CommandText = "INSERT INTO health(ts, component, level, code, key, detail) " +
-                                     "VALUES ($ts, $component, $level, $code, $key, $detail)";
-                insert.Parameters.AddWithValue("$ts", Stamp(observedAt));
-                insert.Parameters.AddWithValue("$component", item.Component);
-                insert.Parameters.AddWithValue("$level", item.Level.ToString());
-                insert.Parameters.AddWithValue("$code", item.Code);
-                insert.Parameters.AddWithValue("$key", item.Key);
-                insert.Parameters.AddWithValue("$detail", item.Detail);
-                insert.ExecuteNonQuery();
-            }
+            Write("INSERT INTO health(ts, component, level, code, key, detail) VALUES ($ts, $component, $level, $code, $key, $detail)",
+                ("$ts", Stamp(observedAt)), ("$component", item.Component), ("$level", item.Level.ToString()), ("$code", item.Code), ("$key", item.Key), ("$detail", item.Detail));
         });
 
         var written = new List<HealthItem>();
@@ -241,26 +228,22 @@ public sealed class State : IDisposable
                 if (!stale)
                     return new LockResult(false, "locked", holder);
 
-                Write(name, machineIdentity, pid, now);
+                Take(name, machineIdentity, pid, now);
                 return new LockResult(true, "stale-takeover", machineIdentity);
             }
 
             if (holder is not null && holderPid != pid && now - takenAt <= TimeSpan.FromMinutes(StaleLockMinutes) && IsAlive(holderPid))
                 return new LockResult(false, "locked", holder);
 
-            Write(name, machineIdentity, pid, now);
+            Take(name, machineIdentity, pid, now);
             return new LockResult(true, holder is null ? "acquired" : "held", machineIdentity);
         }
 
-        void Write(string lockName, string machine, int owner, DateTimeOffset at)
+        void Take(string lockName, string machine, int owner, DateTimeOffset at)
         {
-            using var upsert = _connection.CreateCommand();
-            upsert.CommandText = "INSERT INTO locks(name, machine, pid, ts) VALUES ($name, $machine, $pid, $ts) " +
-                                 "ON CONFLICT(name) DO UPDATE SET machine = $machine, pid = $pid, ts = $ts";
-            upsert.Parameters.AddWithValue("$name", lockName);
-            upsert.Parameters.AddWithValue("$machine", machine);
-            upsert.Parameters.AddWithValue("$pid", owner);
-            upsert.Parameters.AddWithValue("$ts", Stamp(at));
+            using var upsert = Command("INSERT INTO locks(name, machine, pid, ts) VALUES ($name, $machine, $pid, $ts) " +
+                                       "ON CONFLICT(name) DO UPDATE SET machine = $machine, pid = $pid, ts = $ts",
+                [("$name", lockName), ("$machine", machine), ("$pid", (object)owner), ("$ts", Stamp(at))]);
             upsert.ExecuteNonQuery();
         }
     }
@@ -313,27 +296,33 @@ public sealed class State : IDisposable
     }
 
     /// <summary>One ledger row per model call; content is never written (spec 6.6).</summary>
-    public void RecordCall(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, long elapsedMs, string outcome, string usageSource, string purpose)
-    {
-        lock (_gate)
-        {
-            using var insert = _connection.CreateCommand();
-            insert.CommandText = "INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, ms, outcome, usage_source, purpose) " +
-                                 "VALUES ($ts, $backend, $component, $tier, $model, $in, $out, $ms, $outcome, $usage, $purpose)";
-            insert.Parameters.AddWithValue("$ts", Stamp(_clock.Now));
-            insert.Parameters.AddWithValue("$backend", backend);
-            insert.Parameters.AddWithValue("$component", component.ToString());
-            insert.Parameters.AddWithValue("$tier", tier.ToString());
-            insert.Parameters.AddWithValue("$model", model);
-            insert.Parameters.AddWithValue("$in", inputChars);
-            insert.Parameters.AddWithValue("$out", outputChars);
-            insert.Parameters.AddWithValue("$ms", elapsedMs);
-            insert.Parameters.AddWithValue("$outcome", outcome);
-            insert.Parameters.AddWithValue("$usage", usageSource);
-            insert.Parameters.AddWithValue("$purpose", purpose);
-            insert.ExecuteNonQuery();
-        }
-    }
+    public void RecordCall(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, long elapsedMs, string outcome, string usageSource, string purpose,
+        long inputTokens = 0, long outputTokens = 0, long cacheRead = 0) =>
+        Write("INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, ms, outcome, usage_source, purpose) " +
+              "VALUES ($ts, $backend, $component, $tier, $model, $in, $out, $intok, $outtok, $cache, $ms, $outcome, $usage, $purpose)",
+            ("$ts", Stamp(_clock.Now)), ("$backend", backend), ("$component", component.ToString()), ("$tier", tier.ToString()), ("$model", model),
+            ("$in", inputChars), ("$out", outputChars), ("$intok", inputTokens), ("$outtok", outputTokens), ("$cache", cacheRead),
+            ("$ms", elapsedMs), ("$outcome", outcome), ("$usage", usageSource), ("$purpose", purpose));
+
+    /// <summary>One <c>flush_log</c> row per session outcome (spec 6.3-8).</summary>
+    public void RecordFlush(DateTimeOffset now, string sessionId, string reason, string outcome, int turns, int chars, string backend) =>
+        Write("INSERT INTO flush_log(ts, session_id, reason, outcome, turns, chars, backend) VALUES ($ts, $s, $r, $o, $t, $c, $b)",
+            ("$ts", Stamp(now)), ("$s", sessionId), ("$r", reason), ("$o", outcome), ("$t", turns), ("$c", chars), ("$b", backend));
+
+    /// <summary>The coverage reconciliation of one sweep run (spec 6.3, gate 6).</summary>
+    public void RecordCoverage(DateTimeOffset now, int total, int covered, IReadOnlyList<string> uncovered) =>
+        Write("INSERT INTO coverage(ts, total, covered, uncovered_json) VALUES ($ts, $t, $c, $u)",
+            ("$ts", Stamp(now)), ("$t", total), ("$c", covered), ("$u", JsonSerializer.Serialize(uncovered)));
+
+    /// <summary>Whether a file still carries the (mtime, size) it was swept with; an unchanged file is never reopened.</summary>
+    public bool IsStamped(string path, string mtime, long size) =>
+        Text("SELECT 1 FROM sweep_stamps WHERE path = $p AND mtime = $m AND size = $s", ("$p", path), ("$m", mtime), ("$s", size)) is not null;
+
+    /// <summary>Stamps a swept file; a locked session is never stamped, so the next run sees it again (spec 6.3).</summary>
+    public void WriteStamp(string path, string mtime, long size, string outcome) =>
+        Write("INSERT INTO sweep_stamps(path, mtime, size, outcome) VALUES ($p, $m, $s, $o) ON CONFLICT(path) DO UPDATE SET mtime = $m, size = $s, outcome = $o",
+            ("$p", path), ("$m", mtime), ("$s", size), ("$o", outcome));
+
 
     public void Dispose() => _connection.Dispose();
 
@@ -458,11 +447,32 @@ public sealed class State : IDisposable
         }
     }
 
-    private long Scalar(string sql)
+    /// <summary>One counted row, for doctor's summary lines (spec 6.8).</summary>
+    public long Scalar(string sql)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToInt64(command.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
+    }
+
+    private void Write(string sql, params (string Name, object Value)[] parameters) => Text(sql, parameters);
+
+    private string? Text(string sql, params (string Name, object Value)[] parameters)
+    {
+        lock (_gate)
+        {
+            using var command = Command(sql, parameters);
+            return command.ExecuteScalar()?.ToString();
+        }
+    }
+
+    private SqliteCommand Command(string sql, (string Name, object Value)[] parameters)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = sql;
+        foreach (var (name, value) in parameters)
+            command.Parameters.AddWithValue(name, value);
+        return command;
     }
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);

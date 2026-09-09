@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -17,54 +16,11 @@ public sealed record FlushOptions(
     string? RawChannelPath = null,
     string? RejectionPath = null);
 
-/// <summary>
-/// Per-session write-path state. The durable store is <c>state.db</c> (`sessions`,
-/// `retry_queue`); when no store is configured the process keeps the same shape in memory so
-/// that hook, sweep and ingest see one cursor per session inside one run.
-/// </summary>
-internal sealed class SessionState
-{
-    internal string Id = string.Empty;
-    internal string? TranscriptPath;
-    internal Session? Session;
-    internal int Cursor = -1;
-    internal int Attempts;
-    internal bool Parked;
-    internal int Notifications;
-    internal DateTimeOffset NextAt;
-    internal string? LastError;
-}
-
-internal static class FlushStore
-{
-    private static readonly ConcurrentDictionary<string, SessionState> Sessions = new(StringComparer.Ordinal);
-    private static readonly ConcurrentDictionary<string, string> RawChannel = new(StringComparer.Ordinal);
-
-    internal static SessionState Get(string sessionId, string? transcriptPath)
-    {
-        var state = Sessions.GetOrAdd(sessionId, id => new SessionState { Id = id, TranscriptPath = transcriptPath });
-        if (!string.IsNullOrEmpty(transcriptPath))
-            state.TranscriptPath = transcriptPath;
-        return state;
-    }
-
-    internal static SessionState? Find(string sessionId) => Sessions.TryGetValue(sessionId, out var state) ? state : null;
-
-    internal static void KeepRaw(string key, string text) => RawChannel[key] = text;
-
-    internal static string? ReadRaw(string key) => RawChannel.TryGetValue(key, out var text) ? text : null;
-}
-
 public sealed class Flush
 {
     private static readonly string[] Headings =
     [
         "## Bağlam", "## Önemli Konuşmalar", "## Alınan Kararlar", "## Öğrenilenler", "## Yapılacaklar"
-    ];
-
-    private static readonly string[] EnvelopeMarkers =
-    [
-        "<task-notification", "<system-reminder", "<local-command-stdout", "<command-message"
     ];
 
     private static readonly string[] MechanismMarkers = ["oom", ".oom", "stage-compile", "claude-config", "oom-config"];
@@ -77,20 +33,25 @@ public sealed class Flush
     private readonly Runner _runner;
     private readonly Guards _guards;
     private readonly INotifier? _notifier;
+    private readonly IFlushStore _store;
 
-    public Flush(FlushOptions? options = null, IClock? clock = null, Runner? runner = null, Guards? guards = null, INotifier? notifier = null)
+    public Flush(FlushOptions? options = null, IClock? clock = null, Runner? runner = null, Guards? guards = null, INotifier? notifier = null, State? state = null)
     {
         _options = options ?? new FlushOptions();
         _clock = clock ?? new FlushSystemClock();
         _runner = runner ?? new Runner();
         _guards = guards ?? new Guards();
         _notifier = notifier;
+
+        // A configured executable keeps cursors and the retry queue in state.db; without one the
+        // process-wide store keeps the same shape in memory, which is what the scar tests see.
+        _store = state is null ? MemoryFlushStore.Instance : new DurableFlushStore(state, _options.MaxAttempts);
     }
 
     /// <summary>The single write function; hook, sweep and ingest all enter here (Spec 6.3).</summary>
     public FlushResult FlushSession(string sessionId, string transcriptPath, FlushReason reason)
     {
-        var state = FlushStore.Get(sessionId, transcriptPath);
+        var state = _store.Get(sessionId, transcriptPath);
         var cursor = state.Cursor + 1;
         if (state.Parked)
             return new FlushResult(FlushOutcome.Parked, cursor, null, null, state.LastError ?? "parked");
@@ -139,7 +100,7 @@ public sealed class Flush
     /// <summary>Same write function, entered with an already parsed session (sweep and ingest).</summary>
     public FlushResult FlushSession(Session session, string transcriptPath, FlushReason reason)
     {
-        var state = FlushStore.Get(session.Id, transcriptPath);
+        var state = _store.Get(session.Id, transcriptPath);
         state.Session = session;
         return FlushSession(session.Id, transcriptPath, reason);
     }
@@ -189,47 +150,10 @@ public sealed class Flush
     }
 
     /// <summary>Reads user/assistant text turns; tool, thinking and system blocks are skipped.</summary>
-    public IReadOnlyList<Turn> ParseTranscript(string jsonl)
-    {
-        var turns = new List<Turn>();
-        var index = 0;
-        foreach (var line in jsonl.Split('\n'))
-        {
-            var trimmed = line.Trim().TrimStart('﻿');
-            if (trimmed.Length == 0 || trimmed[0] != '{')
-                continue;
+    public IReadOnlyList<Turn> ParseTranscript(string jsonl) => ReadTranscript(jsonl).Turns;
 
-            JsonElement root;
-            try
-            {
-                root = JsonDocument.Parse(trimmed).RootElement;
-            }
-            catch (JsonException)
-            {
-                continue;
-            }
-
-            var role = ReadString(root, "role") ?? ReadString(root, "type") ?? string.Empty;
-            if (role is not ("user" or "assistant"))
-                continue;
-
-            var kind = ReadString(root, "kind") ?? "text";
-            var text = ReadText(root);
-            if (text is null)
-                continue;
-
-            kind = ClassifyKind(kind, text);
-            var stamp = ReadString(root, "timestamp");
-            var time = stamp is not null && DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
-                ? parsed
-                : _clock.Now;
-            var position = root.TryGetProperty("index", out var declared) && declared.TryGetInt32(out var value) ? value : index;
-            turns.Add(new Turn(position, role, kind, text, time));
-            index++;
-        }
-
-        return turns;
-    }
+    /// <summary>The whole transcript: its own session id and project, plus the turns (spec 6.3).</summary>
+    public TranscriptRead ReadTranscript(string jsonl) => ClaudeTranscript.Read(jsonl, _clock);
 
     /// <summary>Lossless raw channel: the summary is derived, it never consumes the source (Y-005).</summary>
     public string StoreRawTranscript(string transcriptJsonl)
@@ -243,8 +167,8 @@ public sealed class Flush
                 File.WriteAllText(path, transcriptJsonl, Utf8);
         }
 
-        FlushStore.KeepRaw(key, transcriptJsonl);
-        return FlushStore.ReadRaw(key) ?? transcriptJsonl;
+        RawChannel.Keep(key, transcriptJsonl);
+        return RawChannel.Read(key) ?? transcriptJsonl;
     }
 
     /// <summary>Shape validation: five headings, once each, in order, no line starting with '&lt;'.</summary>
@@ -318,7 +242,7 @@ public sealed class Flush
     /// <summary>Exponential retry: 1 s, 8 s, 24 s; the fifth attempt parks and notifies once (Y-012).</summary>
     public RetryRecord Retry(string sessionId, int currentAttempts, string rawOutput)
     {
-        var state = FlushStore.Get(sessionId, null);
+        var state = _store.Get(sessionId, null);
         var attempts = currentAttempts + 1;
         var parked = attempts >= _options.MaxAttempts;
         var delay = TimeSpan.FromSeconds(attempts switch { <= 1 => 1, 2 => 8, _ => 24 });
@@ -334,6 +258,7 @@ public sealed class Flush
             _notifier?.Notify($"Oturum {sessionId} beş denemeden sonra park edildi — oom doctor");
         }
 
+        _store.Save(state);
         return new RetryRecord(sessionId, attempts, state.NextAt, parked, state.Notifications);
     }
 
@@ -418,6 +343,8 @@ public sealed class Flush
         // The cursor moves only after the append succeeded, and only over this range.
         state.Cursor = range.End;
         state.Attempts = 0;
+        state.LastError = null;
+        _store.Save(state);
         return new FlushResult(outcome, state.Cursor + 1, dailyPath, summary);
     }
 
@@ -438,7 +365,7 @@ public sealed class Flush
         if (string.IsNullOrWhiteSpace(transcriptPath) || !File.Exists(transcriptPath))
             return null;
 
-        var turns = ParseTranscript(File.ReadAllText(transcriptPath));
+        var turns = ParseTranscript(ReadAllText(transcriptPath));
         if (turns.Count == 0)
             return null;
 
@@ -447,10 +374,30 @@ public sealed class Flush
 
     private void Remember(Session session, int lastTurnIndex)
     {
-        var state = FlushStore.Get(session.Id, null);
+        var state = _store.Get(session.Id, null);
         state.Session = session;
         if (lastTurnIndex > state.Cursor)
             state.Cursor = lastTurnIndex;
+    }
+
+    /// <summary>The session id the transcript declares, so a renamed file still meets its cursor.</summary>
+    public Session? ReadSessionFile(string sessionId, string transcriptPath, string source)
+    {
+        if (string.IsNullOrWhiteSpace(transcriptPath) || !File.Exists(transcriptPath))
+            return null;
+
+        var read = ReadTranscript(ReadAllText(transcriptPath));
+        return read.Turns.Count == 0
+            ? null
+            : new Session(read.SessionId ?? sessionId, source, read.Turns, read.Turns.Min(turn => turn.Timestamp));
+    }
+
+    /// <summary>A transcript that a live session is still writing is read, not locked out.</summary>
+    private static string ReadAllText(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Utf8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     private string? Reject(string sessionId, string rawOutput)
@@ -465,7 +412,7 @@ public sealed class Flush
         }
         else
         {
-            FlushStore.KeepRaw(path, rawOutput);
+            RawChannel.Keep(path, rawOutput);
         }
 
         return path;
@@ -492,16 +439,6 @@ public sealed class Flush
 
     private static bool IsSummarizable(Turn turn) =>
         turn.Kind is "text" && turn.Role is "user" or "assistant";
-
-    private static string ClassifyKind(string kind, string text)
-    {
-        if (kind is "tool_use" or "tool_result" or "thinking" or "system")
-            return kind;
-
-        return EnvelopeMarkers.Any(marker => text.Contains(marker, StringComparison.OrdinalIgnoreCase))
-            ? "envelope"
-            : "text";
-    }
 
     private static string CutAtBoundary(string text, int budget)
     {
@@ -531,24 +468,6 @@ public sealed class Flush
 
     private static string? ReadString(JsonElement root, string name) =>
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
-
-    private static string? ReadText(JsonElement root)
-    {
-        var direct = ReadString(root, "text");
-        if (direct is not null)
-            return direct;
-
-        if (!root.TryGetProperty("message", out var message))
-            return null;
-
-        if (message.ValueKind == JsonValueKind.String)
-            return message.GetString();
-
-        if (message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
-            return content.GetString();
-
-        return null;
-    }
 
     private static string SafeFullPath(string path)
     {
