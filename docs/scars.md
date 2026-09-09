@@ -1,6 +1,6 @@
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release -v n` — Toplam test sayısı: 99, Geçti: 92, Başarısız: 7. Tarih: 2026-09-09.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam test sayısı: 99, Geçti: 92, Başarısız: 7. Tarih: 2026-09-09, şerit P3, `fdff18a`.
 
 Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahibin (Master) kararıyla şimdilik kırmızıdır; şerit INT'in hükümleri `progress.md` içinde `## Lane INT` bölümünde kayıtlıdır: Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
 

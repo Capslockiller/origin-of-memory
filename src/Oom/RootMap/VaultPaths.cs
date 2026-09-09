@@ -99,10 +99,3 @@ internal sealed class VaultFileOperations : IFileOperations
 {
     public void Replace(string source, string destination) => File.Replace(source, destination, null);
 }
-
-/// <summary>Real <see cref="IClock"/>; <c>OOM_FAKE_NOW</c> is the only clock override (spec 4.1).</summary>
-internal sealed class VaultClock : IClock
-{
-    public DateTimeOffset Now
-        => DateTimeOffset.TryParse(Environment.GetEnvironmentVariable("OOM_FAKE_NOW"), out var faked) ? faked : DateTimeOffset.Now;
-}

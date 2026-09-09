@@ -83,7 +83,7 @@ public sealed class Retrieve
         _options = options ?? new RetrieveOptions(VaultPath: vault, IndexPath: VaultPaths.StateDatabase());
         _fold = fold ?? new TurkishFold();
         _notes = notes ?? new Notes();
-        _clock = clock ?? new FlushSystemClock();
+        _clock = clock ?? SystemClock.Instance;
     }
 
     /// <summary>

@@ -50,7 +50,7 @@ public sealed class Install
         IProcessRunner? processRunner = null, Func<string, bool>? shortcutRegistrar = null, Func<bool>? eventLogRegistrar = null,
         Func<string>? userSettingsPath = null, Func<string[]>? mcpCandidates = null)
     {
-        this.clock = clock ?? new SystemClock();
+        this.clock = clock ?? SystemClock.Instance;
         this.processRunner = processRunner ?? new WindowsProcessRunner();
         this.scheduler = scheduler ?? new InstallRuntime.SchtasksScheduler(this.processRunner);
         this.windowsSupported = windowsSupported ?? (() => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041));

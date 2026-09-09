@@ -19,7 +19,7 @@ public sealed class Sweep
     public Sweep(Flush? flush = null, IClock? clock = null)
     {
         _flush = flush ?? new Flush();
-        _clock = clock ?? new FlushSystemClock();
+        _clock = clock ?? SystemClock.Instance;
     }
 
     /// <summary>Every skipped candidate of the last run, classified by reason.</summary>

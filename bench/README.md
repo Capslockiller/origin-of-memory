@@ -52,7 +52,7 @@ Answer and judge stages checkpoint incrementally and support `--resume`. Conditi
 
 Gate 5 requires the 125-question gold set to be evaluated against the 2.0 index, with recall@3 at least 0.80 and recall@5 at least 0.88. It is measured, and after lane R2 **it passes**: recall@3 0,832 and recall@5 0,888. See "Recall parity (gate 5)" below for both the 2026-09-09 baseline and the R2 measurement.
 
-Gate 10 requires `oom bench --backend local` to measure 30 flush transcripts and five compile dailies, write `bench/results/<date>.json`, and leave the backend lists consistent with the result. The harness exists as `yerel_olcum.py` and has been smoke-run on synthetic input; the `oom bench` CLI subcommand of spec 6.12 still does not exist, and the 30-transcript run over real transcripts has not been made. Gate 10 therefore remains **planned** and must not be reported as passed.
+Gate 10 requires `oom bench --backend local` to measure 30 flush transcripts and five compile dailies, write `bench/results/<date>.json`, and leave the backend lists consistent with the result. The command now exists in the product (`src/Oom/Bench/Bench.cs`, lane P3) and has been run against `qwen3:8b` on synthetic input; the 30-transcript run over real transcripts has not been made and leg (b) has never run. Gate 10 therefore remains **planned** and must not be reported as passed.
 
 No benchmark result is a default merely because code for the feature exists. Record the dataset revision, parameters, model identity, machine, raw result path, and the acceptance threshold whenever a gate is measured.
 
@@ -152,27 +152,32 @@ Baseline for the same instrument: 5/5 canaries and 20/20 gold questions injected
 
 ## Local model measurement (gate 10)
 
-`yerel_olcum.py` implements the three legs of spec 6.12 and its decision rule. The harness is Python under `bench/` rather than a C# `bench` subcommand, because `bench/` is the documented home for tools that measure the product without shipping in it, and because adding a module to `src/Oom` would have put a rebuild and the test-parity obligation inside a measurement lane. **This is a deviation from spec 6.12, which names the command `oom bench --backend local`; that subcommand is still owed.**
+**`oom bench` is authoritative.** Spec 6.12 names the measurement `oom bench --backend claude|local`, and since lane P3 that command exists in the product (`src/Oom/Bench/Bench.cs`). It is the measurement of record: it grades the model through the shipped path — `Flush` produces the summary and validates its five-section shape, `CompilePrompt` builds the compile prompt and `Compile.ValidateOutputPaths` judges the answer — so the grader cannot drift from the code it grades. `yerel_olcum.py` stays as the offline cross-check: a second, independent implementation in Python that can be run without a build, and whose `--check-drift` guard re-reads the C# files and refuses to measure when the strings it copied no longer appear verbatim. If the two disagree, `oom bench` is right and the Python copy is stale.
 
-The harness copies the prompt and the validator out of `src/Oom` rather than importing them, so it re-reads those C# files on every run and refuses to measure when the copied strings no longer appear verbatim (`--no-check-drift` disables the guard). A drift failure means the harness is stale, never that the model failed.
+Neither writes into the vault. `oom bench` builds its `Flush` with no vault path, no state database and no rejection directory, so no daily block, `flush_log` row or `calls` row comes out of a measurement; the only file it produces is the results JSON. Its records carry the file name, the verdict, the reason and the duration — never the summary or the note text.
 
 ```bash
-python bench/yerel_olcum.py --transcripts 3 --dailies 2    # synthetic smoke
+oom --vault <vault> bench --backend local --transcripts 30 --dailies 5 \
+    --transcript-dir "%USERPROFILE%\.claude\projects" --daily-dir "<vault>\daily"
+oom --vault <vault> bench --backend local --dry-run    # resolve inputs, call nothing, write nothing
+python bench/yerel_olcum.py --transcripts 3 --dailies 2    # offline cross-check
 ```
 
-Smoke result, `qwen3:8b` via Ollama at `http://localhost:11434/v1`, 3 synthetic Claude Code transcripts and 2 synthetic dailies under the gitignored `bench/.data/`. Raw result: `bench/results/yerel-2026-09-09.json`.
+`--transcripts` defaults to 30 and `--dailies` to 5; without `--transcript-dir` the first `sweep.roots` entry is used and without `--daily-dir` the vault's own `daily\`. `--out` moves the results file, `--judge` runs leg (b), `--dry-run` lists the inputs and calls nothing.
+
+Synthetic run of `oom bench`, `qwen3:8b` via Ollama at `http://localhost:11434/v1`, 3 synthetic Claude Code transcripts and 2 synthetic dailies (invented text, no vault or transcript material). Raw result: `bench/results/oom-bench-sentetik-2026-09-09.json`. The Python harness's own smoke on comparable input is `bench/results/yerel-2026-09-09.json`.
 
 | leg | n | result | threshold | pass |
 | --- | ---: | ---: | ---: | --- |
-| (a) five-section flush shape | 3 | 1,000 | 0,95 | yes |
-| (b) double-blind judge | 0 | **not run** | 3,5 | — |
-| (c) text-mode compile conformance | 2 | 0,500 | 0,95 | no |
+| (a) five-section flush shape | 3 | 1.000 | 0.95 | yes |
+| (b) double-blind judge | 0 | **not run** | 3.50 | — |
+| (c) text-mode compile conformance | 2 | 0.000 | 0.95 | no |
 
-Leg (b) is implemented (`judge_pairs` builds the blind A/B pairing) and deliberately not called: it needs Claude reference summaries and Claude judge calls, and this lane spends no Claude quota. Because leg (b) did not run, the `backend.flush` decision of spec 6.12 is **undecided**, not passed.
+Leg (b) is implemented in both (`Bench.RunJudge` pairs the two backends blind and asks the Claude `smart` judge for `A=<n> B=<n>`; `judge_pairs` does the pairing in Python) and is invoked only with `--judge`, because each pair spends Claude quota twice. Without it the results JSON says `"judge": "not run"` and the `backend.flush` decision of spec 6.12 is **undecided**, not passed. `backend.compile` reads `drop` on this run.
 
-**A synthetic smoke decides nothing.** n=3 and n=2 are far below the 30 and 5 the spec requires, and the inputs are invented. The one substantive observation is that both compile failures were contract failures rather than truncations (`finish_reason: stop`): `qwen3:8b` omitted `=== END FILE ===` between blocks, and in an earlier run emitted a slug containing Turkish characters, which the `^knowledge/concepts/[a-z0-9-]+\.md$` allowlist rejects.
+**A synthetic run decides nothing.** n=3 and n=2 are far below the 30 and 5 the spec requires, and the inputs are invented. The substantive observation is that both compile failures were contract failures, not truncations: on one daily `qwen3:8b` never emitted `=== DONE ===`, and on the other it produced the slug `hDMI-fiber-kablo`, which the shipped `^knowledge/concepts/[a-z0-9-]+\.md$` allowlist rejects — the same class of failure the Python harness saw.
 
-The full run of spec 6.12 is the owner's decision — it reads real transcripts and real dailies and sends them to the local model. The exact command is in `progress.md` under `## Lane BENCH`.
+The full run of spec 6.12 is the owner's decision — it reads real transcripts and real dailies and sends them to the local model. The `oom bench` form is above; the Python equivalent is in `progress.md` under `## Lane BENCH`.
 
 ## Mutation check (gate 9)
 

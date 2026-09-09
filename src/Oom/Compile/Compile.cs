@@ -60,7 +60,7 @@ public sealed class Compile
     {
         _vault = vaultRoot;
         _stateRoot = LaneCVaultPaths.StateRoot(vaultRoot);
-        _clock = clock ?? new VaultClock();
+        _clock = clock ?? SystemClock.Instance;
         _fileOperations = fileOperations ?? new VaultFileOperations();
         _notifier = notifier;
         _guards = guards ?? new Guards();

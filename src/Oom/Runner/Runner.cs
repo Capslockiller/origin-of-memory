@@ -66,7 +66,7 @@ public sealed class Runner
     {
         _processes = processes ?? new WindowsProcessRunner();
         _http = http ?? new HttpTransport();
-        _clock = clock ?? new SystemClock();
+        _clock = clock ?? SystemClock.Instance;
         _state = state;
         _localUrl = localUrl;
         _configured = configured ?? VaultPaths.ReadVault() is not null;

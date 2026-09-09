@@ -38,7 +38,7 @@ public sealed class Flush
     public Flush(FlushOptions? options = null, IClock? clock = null, Runner? runner = null, Guards? guards = null, INotifier? notifier = null, State? state = null)
     {
         _options = options ?? new FlushOptions();
-        _clock = clock ?? new FlushSystemClock();
+        _clock = clock ?? SystemClock.Instance;
         _runner = runner ?? new Runner();
         _guards = guards ?? new Guards();
         _notifier = notifier;
@@ -480,20 +480,6 @@ public sealed class Flush
         catch (ArgumentException)
         {
             return path;
-        }
-    }
-}
-
-internal sealed class FlushSystemClock : IClock
-{
-    public DateTimeOffset Now
-    {
-        get
-        {
-            var fake = Environment.GetEnvironmentVariable("OOM_FAKE_NOW");
-            return fake is not null && DateTimeOffset.TryParse(fake, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
-                ? parsed
-                : DateTimeOffset.Now;
         }
     }
 }

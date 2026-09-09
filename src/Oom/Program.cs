@@ -104,8 +104,24 @@ internal static class Program
             }
 
             case "bench":
-                Console.WriteLine("ölçüm araçları bench/ altındadır: 'oom bench' sonuçları bench/results/ içine yazılır.");
-                return 0;
+            {
+                // Spec 6.12's measurement command. The options are read here, where every other
+                // command's options are read; Bench itself only measures.
+                var options = new BenchOptions(
+                    (Value(args, "--backend") ?? "local").Trim().ToLowerInvariant(),
+                    ReadInt(args, "--transcripts") ?? 30, ReadInt(args, "--dailies") ?? 5,
+                    Value(args, "--transcript-dir"), Value(args, "--daily-dir"), Value(args, "--out"),
+                    args.Contains("--dry-run"), args.Contains("--judge"));
+                try
+                {
+                    return new Bench().Run(options, vault, settings, Console.Out);
+                }
+                catch (ArgumentException error)
+                {
+                    Console.Error.WriteLine(error.Message);
+                    return 1;
+                }
+            }
 
             default:
                 PrintUsage();
@@ -580,7 +596,8 @@ internal static class Program
         {
             if (args[index].StartsWith("--", StringComparison.Ordinal))
             {
-                if (args[index] is "--vault" or "--session" or "--transcript" or "--reason" or "--query" or "--top" or "--batch" or "--max" or "--session-json")
+                if (args[index] is "--vault" or "--session" or "--transcript" or "--reason" or "--query" or "--top" or "--batch" or "--max" or "--session-json"
+                    or "--backend" or "--transcripts" or "--dailies" or "--transcript-dir" or "--daily-dir" or "--out")
                     index++;
                 continue;
             }
@@ -614,7 +631,7 @@ internal static class Program
         return read.Wait(TimeSpan.FromSeconds(2)) ? read.Result : string.Empty;
     }
 
-    private static IClock Clock { get; } = new FlushSystemClock();
+    private static IClock Clock { get; } = SystemClock.Instance;
 
     /// <summary>UTF-8 without BOM on stdin too; a console that refuses the change is not an error.</summary>
     private static void TrySetInputEncoding()
@@ -646,7 +663,9 @@ internal static class Program
               save "<metin>" | --session-json   Daily'ye doğrudan kayıt
               mcp                               Salt okunur MCP sunucusu (stdio JSON-RPC)
               install [--uninstall] [--from-v0] [--dry-run]  Kurulum ve göç
-              bench [--backend claude|local]    Ölçüm koşumu
+              bench [--backend claude|local] [--transcripts N] [--dailies N]
+                    [--transcript-dir <yol>] [--daily-dir <yol>] [--out <dosya>] [--judge] [--dry-run]
+                                                Spec 6.12 ölçümü; sonuç bench/results/<tarih>.json
             """);
     }
 }

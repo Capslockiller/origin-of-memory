@@ -589,3 +589,57 @@ Ruling: Jeton muhasebesi hiçbir gerçek model çağrısı yapılmadan, elle yaz
 Blocked-by: **Y-068 satır bütçesi — Master kararı gerekiyor.** `main` 7.318 satırla (obj ile 7.390) 7.500 tavanının 110 satır altındaydı; D2'nin taslağı 632 satır yeni yetenek getiriyor (`Migration.cs` 382, `ShortcutRegistration.cs` 177 COM interop dâhil, `InstallRuntime.cs` 39) ve B bölümü ~60 satır ekliyor. Bulabildiğim bütün gerçek kopyaları sildim (~90 satır); kalan açık **573 satır**. Bunu kapatmanın dürüst bir yolu yok: yetenek silmeden 573 satır çıkarılamıyor ve `tests/**` düzenlenemiyor. Karar Master'ın: ya Y-068'in 7.500 tavanı yükseltilir (modül tavanları için zaten bekleyen spec değişikliğiyle birlikte), ya D2'nin kapsamı küçültülür. Ben tavanı kendi başıma değiştirmedim ve kodu tavan uğruna okunmaz hâle getirmedim.
 
 Blocked-by (küçük): Üç ayrı üretim `IClock` var — `SystemClock` (Boundaries) `OOM_FAKE_NOW`'u **okumuyor**, `FlushSystemClock` ve `VaultClock` okuyor. Yani `State`, `Runner`, `WindowsNotifier` ve `Install` sahte saati yok sayarken `Flush`/`Sweep`/`Retrieve` sayıyor: `OOM_FAKE_NOW` ile koşulan bir kanıtta daily'ler sahte, `calls`/`health`/`coverage` gerçek zamanla damgalanır. Tek saatte birleştirmek ~20 satır kazandırır ve bu tutarsızlığı kapatır; bu şeridin görevi olmadığı ve 92 yeşili riske atmamak için dokunmadım.
+
+## Lane P3 — tek saat, `oom bench` ürün komutu, README ölçüm satırları
+
+Ağaç `fdff18a` üstünde; koşum 9 Eylül 2026. Test satırı üç maddenin her birinden sonra aynı: `Başarısız: 7, Başarılı: 92, Toplam: 99` ve kırmızılar tam olarak Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
+
+### 1. Tek saat
+
+Üretimde üç değil dört gerçek `IClock` vardı: `SystemClock` (`Infrastructure/Boundaries.cs`, `OOM_FAKE_NOW` okumuyordu), `FlushSystemClock` (`Flush/Flush.cs`), `VaultClock` (`RootMap/VaultPaths.cs`) ve `Doctor.cs` içinde aynı adı gölgeleyen özel bir iç sınıf (o da sahte saati bilmiyordu). Dördü de silinip tek `SystemClock` bırakıldı; spec 4.1'in tek saat değişkeni `OOM_FAKE_NOW` orada, `InvariantCulture` + `RoundtripKind` ile ayrıştırılıyor (`VaultClock`'un kültüre bağlı `TryParse`'ı makine yereline göre farklı okuyordu). Paylaşılan `SystemClock.Instance` eklendi ve her bileşenin `clock ?? …` varsayılanı ona bağlandı: `State`, `Runner`, `WindowsNotifier`, `Install`, `Flush`, `Sweep`, `SweepRun`, `Retrieve`, `Compile`, `Doctor`, `Program.Clock`.
+
+`Ingest/Parsers/ClaudeParser.cs` içindeki `EpochClock` bilerek duruyor: damgasız satıra deterministik zaman veren test/ayrıştırma saatidir (Y-077, Y-078), gerçek saat değildir. `Context.cs`'te kalan tek doğrudan duvar saati okuması (`DateTime.UtcNow`, companion dosyası bayat mı kontrolü) da `SystemClock.Instance` üstünden geçirildi; artık `src/Oom` içinde `DateTimeOffset.Now` yalnız `SystemClock`'un kendi gövdesinde geçiyor.
+
+**Kanıt** (`.e2e/clock.sh`, sentetik vault + 5 sentetik transkript, gerçek saat 2026-09-09T20:06:59+03:00, `OOM_FAKE_NOW=2027-03-04T14:37:11+03:00`):
+
+| | sahte saatle | `OOM_FAKE_NOW` olmadan (kontrol) |
+| --- | --- | --- |
+| daily başlığı | `# Günlük Log: 2027-03-04` | `# Günlük Log: 2026-09-09` |
+| `flush_log.ts` (n=6) | `2027-03-04T14:37:11.0000000+03:00` | `2026-09-09T20:07:29…` |
+| `calls.ts` (n=5) | `2027-03-04T14:37:11.0000000+03:00` | `2026-09-09T20:07:38…20:07:59` |
+| `coverage.ts` (n=1) | `2027-03-04T14:37:11.0000000+03:00` | `2026-09-09T20:07:29…` |
+| `health.ts` (n=2) | `2027-03-04T14:37:11.0000000+03:00` | `2026-09-09T20:07:59…` |
+
+Sahte saatte beş damganın beşi de milisaniyesine kadar aynı — tek saat okunduğunun kanıtı; kontrol koşumunda hepsi gerçek saate ve birbirinden farklı anlara kayıyor. `### Oturum (HH:MM)` başlıkları her iki koşumda da oturumun kendi olay zamanından geliyor (D3 Part B kararı), saatten değil; saatin ısırdığı yer dosya başlığı ve damgalardır.
+
+### 2. `oom bench` (spec 6.12)
+
+`src/Oom/Bench/Bench.cs`, 250 satır ("geri kalan" bütçesinde; `src/Oom` toplamı 8 080 → 8 347, tavan 9 000). `Program.cs`'teki `bench` kolu artık gerçek komutu çağırıyor; seçenekler diğer komutlarınki gibi `Program` içinde okunuyor (`--backend`, `--transcripts`, `--dailies`, `--transcript-dir`, `--daily-dir`, `--out`, `--judge`, `--dry-run`) ve `Command(args)`'ın atlama listesine eklendi.
+
+Ölçüm ürün yolunun kendisini not veriyor, yeniden yazmıyor: (a) özetler `Flush`'tan çıkıyor ve `Flush.ValidateSummary` kabul ediyor, (c) istem `CompilePrompt.Build`'den geliyor ve `Compile.ValidateOutputPaths` + `=== DONE ===` karar veriyor. Bu yüzden `yerel_olcum.py`'nin `--check-drift` sorununun C# tarafında karşılığı yok — kopyalanmış dize kalmadı.
+
+Vault'a hiçbir şey yazılmıyor: `Flush` `VaultPath`, `RawChannelPath`, `RejectionPath` ve `State` verilmeden kuruluyor, bu yüzden daily bloğu, `flush_log`/`calls` satırı ve red dosyası oluşmuyor; `Compile` örneği yalnız saf doğrulayıcısı için, vault dışında bir temp köküne bağlanıyor. Yazılan tek dosya sonuç JSON'u ve o da kayıt başına yalnız dosya adı, karar, gerekçe ve süre taşıyor — model metni (`BenchRecord.Answer`) bellekte kalıyor, (b) ayağı için.
+
+**Kuru koşum** (`--dry-run`): girdiler çözülüyor, model çağrılmıyor, dosya yazılmıyor, tabloda üç ayak da `kuru koşum / —`.
+
+**Sentetik koşum**, 3 sentetik transkript + 2 sentetik daily, `qwen3:8b` (hem fast hem smart), Ollama `http://localhost:11434/v1`. Ham sonuç `bench/results/oom-bench-sentetik-2026-09-09.json`.
+
+| ayak | n | sonuç | eşik | geçti |
+| --- | ---: | ---: | ---: | --- |
+| (a) flush beş bölümlü şekil | 3 | 1.000 | 0.95 | evet |
+| (b) çift-kör yargı | 0 | koşulmadı | 3.50 | — |
+| (c) compile uyumu | 2 | 0.000 | 0.95 | hayır |
+
+Karar: `backend.flush = undecided — leg (b) not run`, `backend.compile = drop`. İki compile ıskası da sözleşme hatası: bir daily'de `=== DONE ===` hiç yazılmadı, ötekinde slug `hDMI-fiber-kablo` çıktı ve `^knowledge/concepts/[a-z0-9-]+\.md$` izin listesi bütün koşumu reddetti — lane BENCH'in Python harness'ıyla aynı sınıf hata.
+
+(b) uygulandı (`Bench.RunJudge`: ölçülen arka ucun özetleriyle öteki arka ucun özetlerini kör A/B eşliyor, taraf ataması istemin dışında kalıyor, Claude `smart` yargıç `A=<n> B=<n>` döndürüyor) ve `--judge` verilmeden hiç çağrılmıyor; bu şerit Claude kotası harcamadı. Çağrılmadığında JSON `"judge": {"status": "not run"}` diyor.
+
+`bench/README.md` güncellendi: yetkili ölçüm `oom bench`, `yerel_olcum.py` çevrimdışı çapraz kontrol olarak kalıyor; ikisi çelişirse `oom bench` haklı, Python kopyası bayattır.
+
+### 3. README ölçüm satırları
+
+`README.md`, `README.tr.md` ve `docs/scars.md` başlığı `a739c5b` yerine bu şeridin kendi koşumunu gösteriyor (`fdff18a`, 9 Eylül 2026). Her iki README'ye kapı 5 ve kapı 9 için birer cümle eklendi: kapı 5 recall@3 0,832 / recall@5 0,888 ile (eşikler 0,80 ve 0,88) geçiyor, ham sonuç `bench/results/recall-2026-09-09-r2.json`; kapı 9 yeşil, 6 mutantın 6'sı öldü, 0 sağ kaldı, ham sonuç `bench/results/mutation-2026-09-09.json`.
+
+Ruling: Üretimdeki saat artık tek; `OOM_FAKE_NOW` ile koşulan sentetik tarama daily başlığını, `flush_log`, `calls` ve `coverage` damgalarını aynı sahte ana bağlıyor, kontrol koşumu ise hepsini gerçek saate kaydırıyor.
+Ruling: Lane BENCH'in `oom bench` spec borcu kapandı — komut ürün içinde, ölçtüğü yol ürünün kendi yolu ve sonucu `bench/results/`'a yazıyor. Kapı 10 hâlâ **geçmedi**: bu koşum sentetiktir (n=3/n=2, spec 30/5 ister) ve (b) ayağı koşmadı, bu yüzden `backend.flush` belirsiz kalıyor.
+Ruling: Sentetik koşum hiçbir karar vermez; `oom.json`'a hiçbir şey yazılmadı, `backend` listelerine dokunulmadı. Spec 6.12'nin tam koşumu Master'ın kararıdır.

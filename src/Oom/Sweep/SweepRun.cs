@@ -37,7 +37,7 @@ public sealed class SweepRun
         _flush = flush;
         _sweep = new Sweep(flush, clock);
         _state = state;
-        _clock = clock ?? new FlushSystemClock();
+        _clock = clock ?? SystemClock.Instance;
 
         // Claude Code names a project directory after its cwd with every non-word character
         // replaced by '-'. The mechanism's own runs live under the temp directory, so their

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -71,10 +72,28 @@ public static class VaultPaths
     }
 }
 
-/// <summary>The real clock; every component takes <see cref="IClock"/> instead.</summary>
+/// <summary>
+/// The one real clock (spec 4.1): every component takes <see cref="IClock"/> and every
+/// production wiring resolves to this implementation, so a single run stamps one time
+/// everywhere. <c>OOM_FAKE_NOW</c> is the only clock override there is and it is parsed
+/// round-trip under the invariant culture, so a fake time reads the same on any locale.
+/// </summary>
 public sealed class SystemClock : IClock
 {
-    public DateTimeOffset Now => DateTimeOffset.Now;
+    /// <summary>Shared instance; the clock is stateless, so one is enough.</summary>
+    public static readonly SystemClock Instance = new();
+
+    public DateTimeOffset Now
+    {
+        get
+        {
+            var fake = Environment.GetEnvironmentVariable("OOM_FAKE_NOW");
+            return fake is not null
+                && DateTimeOffset.TryParse(fake, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+                    ? parsed
+                    : DateTimeOffset.Now;
+        }
+    }
 }
 
 /// <summary>

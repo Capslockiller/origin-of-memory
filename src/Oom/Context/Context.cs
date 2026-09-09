@@ -104,7 +104,7 @@ public sealed class Context
             var touched = File.GetLastWriteTimeUtc(path);
             var unchanged = ContentDigests.TryGetValue(path, out var previous) && string.Equals(previous, digest, StringComparison.Ordinal);
             ContentDigests[path] = digest;
-            if (unchanged && touched > DateTime.UtcNow.AddDays(-1))
+            if (unchanged && touched > SystemClock.Instance.Now.UtcDateTime.AddDays(-1))
                 items.Add(new HealthItem("context", HealthLevel.Warning, "companion-content-stale", file,
                     $"{section} dosyasına dokunulmuş ama içeriği değişmemiş"));
         }

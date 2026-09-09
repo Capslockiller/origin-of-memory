@@ -16,7 +16,7 @@ public sealed class WindowsNotifier(State? state = null, string? applicationId =
 
     private const int DedupeDays = 7;
 
-    private readonly IClock _clock = clock ?? new SystemClock();
+    private readonly IClock _clock = clock ?? SystemClock.Instance;
     private readonly string _applicationId = applicationId ?? ApplicationId;
 
     /// <summary>What the last <see cref="Notify"/> did; the report and doctor read it.</summary>

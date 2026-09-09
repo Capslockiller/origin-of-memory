@@ -41,7 +41,7 @@ public sealed partial class State : IDisposable
 
     public State(IClock? clock, IFileOperations? files = null, string? databasePath = null)
     {
-        _clock = clock ?? new SystemClock();
+        _clock = clock ?? SystemClock.Instance;
         _files = files ?? new WindowsFileOperations();
         var path = databasePath ?? VaultPaths.StateDatabase();
         _workDirectory = path is null

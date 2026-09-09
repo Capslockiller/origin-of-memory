@@ -187,10 +187,4 @@ public sealed class Doctor
         var candidate = command[..(marker + "oom.exe".Length)].Trim().Trim('"');
         return Path.IsPathFullyQualified(candidate);
     }
-
-    private sealed class SystemClock : IClock
-    {
-        internal static readonly SystemClock Instance = new();
-        public DateTimeOffset Now => DateTimeOffset.Now;
-    }
 }
