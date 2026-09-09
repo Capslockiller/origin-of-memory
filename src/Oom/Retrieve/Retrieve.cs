@@ -64,7 +64,7 @@ public sealed class Retrieve
         _options = options ?? new RetrieveOptions();
         _fold = fold ?? new TurkishFold();
         _notes = notes ?? new Notes();
-        _clock = clock ?? new SystemClock();
+        _clock = clock ?? new FlushSystemClock();
     }
 
     /// <summary>

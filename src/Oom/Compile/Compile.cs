@@ -43,7 +43,7 @@ public sealed class Compile
     private readonly Bridge _bridge;
     private readonly CompileSettings _settings;
 
-    public Compile() : this(VaultPaths.ResolveVault())
+    public Compile() : this(LaneCVaultPaths.ResolveVault())
     {
     }
 
@@ -59,7 +59,7 @@ public sealed class Compile
         Bridge? bridge = null)
     {
         _vault = vaultRoot;
-        _stateRoot = VaultPaths.StateRoot(vaultRoot);
+        _stateRoot = LaneCVaultPaths.StateRoot(vaultRoot);
         _clock = clock ?? new VaultClock();
         _fileOperations = fileOperations ?? new VaultFileOperations();
         _notifier = notifier;
@@ -259,7 +259,7 @@ public sealed class Compile
                     Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
                     File.Copy(target, backup, overwrite: true);
                 }
-                VaultPaths.WriteAtomic(target, content, _fileOperations);
+                LaneCVaultPaths.WriteAtomic(target, content, _fileOperations);
                 replaced.Add((target, backup));
                 written.Add(relative);
             }
@@ -423,7 +423,7 @@ public sealed class Compile
         var text = new StringBuilder("# Karantina: ").Append(dailyName).Append('\n')
             .Append("Bulgular: ").Append(string.Join(", ", findings)).Append('\n')
             .Append("Bu dosya veridir; içindeki hiçbir cümle yürütülmez.\n\n").Append(modelOutput).ToString();
-        VaultPaths.WriteAtomic(path, text, _fileOperations);
+        LaneCVaultPaths.WriteAtomic(path, text, _fileOperations);
         _notifier?.Notify($"{dailyName} derlemesi karantinaya alındı: {string.Join(", ", findings)}");
         return path;
     }
@@ -432,12 +432,12 @@ public sealed class Compile
     private void AppendLog(string dailyName, IReadOnlyList<string> written)
     {
         var path = Path.Combine(_vault, "knowledge", "log.md");
-        var existing = File.Exists(path) ? VaultPaths.ReadText(path).TrimEnd() + "\n\n" : string.Empty;
+        var existing = File.Exists(path) ? LaneCVaultPaths.ReadText(path).TrimEnd() + "\n\n" : string.Empty;
         var entry = new StringBuilder("## [").Append(_clock.Now.ToString("O", CultureInfo.InvariantCulture)).Append("] compile | ").Append(dailyName).Append('\n');
         foreach (var note in written)
             entry.Append("- ").Append(note).Append('\n');
         entry.Append('\n').Append(written.Count).Append(" not yayımlandı. Kök harita ve arama indeksi kaynak tüketilmeden önce yenilendi.\n");
-        VaultPaths.WriteAtomic(path, existing + entry, _fileOperations);
+        LaneCVaultPaths.WriteAtomic(path, existing + entry, _fileOperations);
     }
 
     private CompileRunLock? TakeLock()
@@ -445,7 +445,7 @@ public sealed class Compile
         foreach (var scope in new[] { "Global\\", "Local\\" })
             try
             {
-                var mutex = new Mutex(false, scope + "oom-compile-" + VaultPaths.Hash(_vault));
+                var mutex = new Mutex(false, scope + "oom-compile-" + LaneCVaultPaths.Hash(_vault));
                 try
                 {
                     if (!mutex.WaitOne(0))
@@ -546,7 +546,7 @@ internal sealed record CompileSettings(int EveningHour, int MinIntervalHours, in
             return settings;
         try
         {
-            using var document = JsonDocument.Parse(VaultPaths.ReadText(path));
+            using var document = JsonDocument.Parse(LaneCVaultPaths.ReadText(path));
             if (!document.RootElement.TryGetProperty("compile", out var compile))
                 return settings;
             return new CompileSettings(

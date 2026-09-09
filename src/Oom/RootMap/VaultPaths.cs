@@ -9,7 +9,7 @@ namespace Oom.Contracts;
 /// hard-coded: the vault comes from <c>.oom/vault.json</c>, the state root from
 /// %LOCALAPPDATA%. Every text boundary uses UTF-8 without BOM (spec 3).
 /// </summary>
-internal static class VaultPaths
+internal static class LaneCVaultPaths
 {
     internal static readonly UTF8Encoding Utf8 = new(false);
 

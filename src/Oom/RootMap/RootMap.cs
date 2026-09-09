@@ -23,7 +23,7 @@ public sealed class RootMap
     private readonly IFileOperations _files;
     private HubConfiguration? _configuration;
 
-    public RootMap() : this(VaultPaths.ResolveVault())
+    public RootMap() : this(LaneCVaultPaths.ResolveVault())
     {
     }
 
@@ -46,9 +46,9 @@ public sealed class RootMap
                 buckets[id].Add(note);
 
         var index = BuildIndex(configuration, buckets);
-        VaultPaths.WriteAtomic(Path.Combine(_vault, "knowledge", "index.md"), index, _files);
+        LaneCVaultPaths.WriteAtomic(Path.Combine(_vault, "knowledge", "index.md"), index, _files);
         foreach (var hub in configuration.Hubs)
-            VaultPaths.WriteAtomic(Path.Combine(_vault, "knowledge", "hubs", hub.Id + ".md"), BuildHubFile(hub, buckets[hub.Id]), _files);
+            LaneCVaultPaths.WriteAtomic(Path.Combine(_vault, "knowledge", "hubs", hub.Id + ".md"), BuildHubFile(hub, buckets[hub.Id]), _files);
         WriteFullTable(corpus);
         return index;
     }
@@ -117,7 +117,7 @@ public sealed class RootMap
         var rows = new Dictionary<string, string>(StringComparer.Ordinal);
         var order = new List<string>();
         if (File.Exists(path))
-            foreach (var line in VaultPaths.ReadText(path).Split('\n'))
+            foreach (var line in LaneCVaultPaths.ReadText(path).Split('\n'))
             {
                 var cells = line.Split('|');
                 if (cells.Length < 6 || line.Contains("---", StringComparison.Ordinal) || line.Contains("Makale", StringComparison.Ordinal))
@@ -141,7 +141,7 @@ public sealed class RootMap
         var builder = new StringBuilder("| Makale | Özet | Kaynak | Güncellendi |\n| --- | --- | --- | --- |\n");
         foreach (var key in order.Where(live.Contains))
             builder.Append(rows[key]).Append('\n');
-        VaultPaths.WriteAtomic(path, builder.ToString(), _files);
+        LaneCVaultPaths.WriteAtomic(path, builder.ToString(), _files);
     }
 
     /// <summary>Concept corpus, non-recursive (scar Y-028); invalid frontmatter is skipped, not fatal (spec 6.4).</summary>
@@ -155,7 +155,7 @@ public sealed class RootMap
         {
             try
             {
-                corpus.Add(_notes.Parse("knowledge/concepts/" + Path.GetFileName(file), VaultPaths.ReadText(file)));
+                corpus.Add(_notes.Parse("knowledge/concepts/" + Path.GetFileName(file), LaneCVaultPaths.ReadText(file)));
             }
             catch (Exception error) when (error is FormatException or IOException)
             {
@@ -173,7 +173,7 @@ public sealed class RootMap
         if (File.Exists(path))
             try
             {
-                using var document = JsonDocument.Parse(VaultPaths.ReadText(path));
+                using var document = JsonDocument.Parse(LaneCVaultPaths.ReadText(path));
                 var root = document.RootElement;
                 var catchAll = root.TryGetProperty("catch_all", out var value) ? value.GetString() ?? "genel" : "genel";
                 var hubs = new List<HubDefinition>();

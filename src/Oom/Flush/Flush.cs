@@ -81,7 +81,7 @@ public sealed class Flush
     public Flush(FlushOptions? options = null, IClock? clock = null, Runner? runner = null, Guards? guards = null, INotifier? notifier = null)
     {
         _options = options ?? new FlushOptions();
-        _clock = clock ?? new SystemClock();
+        _clock = clock ?? new FlushSystemClock();
         _runner = runner ?? new Runner();
         _guards = guards ?? new Guards();
         _notifier = notifier;
@@ -555,7 +555,7 @@ public sealed class Flush
     }
 }
 
-internal sealed class SystemClock : IClock
+internal sealed class FlushSystemClock : IClock
 {
     public DateTimeOffset Now
     {

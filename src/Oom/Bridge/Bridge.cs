@@ -16,7 +16,7 @@ public sealed class Bridge
     private readonly RootMap _rootMap;
     private readonly IFileOperations _files;
 
-    public Bridge() : this(VaultPaths.ResolveVault())
+    public Bridge() : this(LaneCVaultPaths.ResolveVault())
     {
     }
 
@@ -35,7 +35,7 @@ public sealed class Bridge
         {
             if (!File.Exists(path))
                 return "skip:no-claude-md";
-            var text = VaultPaths.ReadText(path);
+            var text = LaneCVaultPaths.ReadText(path);
             var start = text.IndexOf(StartMarker, StringComparison.Ordinal);
             var end = text.IndexOf(EndMarker, StringComparison.Ordinal);
             if (start < 0 || end < start)
@@ -50,7 +50,7 @@ public sealed class Bridge
                 .ToString();
             if (string.Equals(refreshed, text, StringComparison.Ordinal))
                 return "ok";
-            VaultPaths.WriteAtomic(path, refreshed, _files);
+            LaneCVaultPaths.WriteAtomic(path, refreshed, _files);
             return "ok";
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -62,6 +62,6 @@ public sealed class Bridge
     private string RootMapText()
     {
         var index = Path.Combine(_vault, "knowledge", "index.md");
-        return File.Exists(index) ? VaultPaths.ReadText(index) : _rootMap.Regenerate();
+        return File.Exists(index) ? LaneCVaultPaths.ReadText(index) : _rootMap.Regenerate();
     }
 }
