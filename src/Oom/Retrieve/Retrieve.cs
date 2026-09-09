@@ -61,7 +61,8 @@ public sealed class Retrieve
 
     public Retrieve(RetrieveOptions? options = null, TurkishFold? fold = null, Notes? notes = null, IClock? clock = null)
     {
-        _options = options ?? new RetrieveOptions();
+        var vault = VaultPaths.ReadVault();
+        _options = options ?? new RetrieveOptions(VaultPath: vault, IndexPath: VaultPaths.StateDatabase());
         _fold = fold ?? new TurkishFold();
         _notes = notes ?? new Notes();
         _clock = clock ?? new FlushSystemClock();
@@ -76,6 +77,8 @@ public sealed class Retrieve
         var corpus = LoadCorpus();
         if (corpus.Count == 0 || IndexFile() is not { } indexPath)
             return new VerifyResult([], [], 0);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(indexPath)!);
 
         var digest = ManifestDigest(corpus);
         if (string.Equals(digest, _manifestDigest, StringComparison.Ordinal))
@@ -150,7 +153,7 @@ public sealed class Retrieve
             if (score <= 0)
                 continue;
 
-            var text = Trim(note.Body, _options.PerNoteChars);
+            var text = Trim(Notes.IndexableBody(note), _options.PerNoteChars);
             hits.Add(new SearchHit(note.Name, score, text, "concept", ToOffset(note.Updated)));
         }
 
@@ -281,7 +284,7 @@ public sealed class Retrieve
         ["title"] = Tokenize(note.Title).ToArray(),
         ["aliases"] = Tokenize(string.Join(' ', note.Aliases)).ToArray(),
         ["tags"] = Tokenize(string.Join(' ', note.Tags)).ToArray(),
-        ["body"] = Tokenize(note.Body).ToArray()
+        ["body"] = Tokenize(Notes.IndexableBody(note)).ToArray()
     };
 
     private static double Score(string term, string name, Dictionary<string, Dictionary<string, string[]>> fields)

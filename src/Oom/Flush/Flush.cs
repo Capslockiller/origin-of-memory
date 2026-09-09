@@ -117,6 +117,8 @@ public sealed class Flush
 
         StoreRawTranscript(RenderRange(range));
         var run = _runner.Run(BuildPrompt(range), ModelTier.Fast, ComponentKind.Flush, "summary");
+        if (run.Error?.Contains("yapılandırma yok", StringComparison.Ordinal) == true)
+            run = new RunResult(ExtractiveSummary(range), null, "extractive", "in-process", "none");
         if (!string.IsNullOrEmpty(run.Error))
             return Queue(state, run.Error!, cursor);
 
@@ -400,7 +402,7 @@ public sealed class Flush
     {
         var eventTime = EventTime(session, default, _clock.Now);
         string? dailyPath = null;
-        if (outcome == FlushOutcome.Ok)
+        if (outcome == FlushOutcome.Ok && !string.IsNullOrEmpty(_options.VaultPath))
         {
             var block = ComposeBlock(session, range, reason, summary, eventTime);
             dailyPath = DailyPath(eventTime);
@@ -478,6 +480,12 @@ public sealed class Flush
         RenderRange(range),
         "--- END UNTRUSTED TRANSCRIPT DATA ---"
     ]);
+
+    private static string ExtractiveSummary(TurnRange range)
+    {
+        var facts = string.Join('\n', range.Turns.Take(12).Select(turn => $"- {turn.Text}"));
+        return $"## Bağlam\nfallback_backend: extractive\nconfidence: low\nModel yapılandırılmadığı için metin doğrudan transkriptten çıkarıldı.\n## Önemli Konuşmalar\n{facts}\n## Alınan Kararlar\n- Belirlenmedi.\n## Öğrenilenler\n- Belirlenmedi.\n## Yapılacaklar\n- Belirlenmedi.";
+    }
 
     private static string RenderRange(TurnRange range) =>
         string.Join('\n', range.Turns.Select(turn => $"[{turn.Index}][{turn.Role}][{turn.Kind}] {turn.Text}"));

@@ -185,7 +185,11 @@ public sealed class Runner
     public ProcessResult RunProcess(ProcessRequest request, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return _processes.Run(request, timeout);
+        var result = _processes.Run(request, timeout);
+        if (result.TimedOut || result.ExitCode != 0)
+            HealthLedger.Record(new HealthItem("hooks", HealthLevel.Error, "hook-failed", request.FileName,
+                $"Alt süreç başarısız oldu (çıkış {result.ExitCode}) — oom doctor"), _clock.Now);
+        return result;
     }
 
     /// <summary>

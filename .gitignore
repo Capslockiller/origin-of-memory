@@ -18,5 +18,6 @@ bench/.e2e/
 
 # local state never belongs in the repo
 .state/
+.oom/backup/
 *.db
 *.lock

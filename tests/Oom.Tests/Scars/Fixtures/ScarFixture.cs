@@ -9,7 +9,7 @@ internal static class ScarFixture
 
     internal static Session Session(string id, int turns, int charactersPerTurn = 12, DateTimeOffset? lastTurnAt = null, string source = "claude")
     {
-        var start = (lastTurnAt ?? Now).AddMinutes(-turns);
+        var start = (lastTurnAt ?? Now).AddMinutes(-(turns - 1));
         var items = Enumerable.Range(0, turns)
             .Select(i => new Turn(i, i % 2 == 0 ? "user" : "assistant", "text", new string((char)('a' + i % 26), charactersPerTurn), start.AddMinutes(i)))
             .ToArray();

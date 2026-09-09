@@ -124,17 +124,21 @@ public sealed class Notes
     {
         ArgumentNullException.ThrowIfNull(note);
 
-        var body = HtmlComment.Replace(note.Body, string.Empty);
-        body = RetiredAnchor.Replace(body, string.Empty);
-
         var builder = new StringBuilder();
         builder.AppendLine(note.Title);
         if (note.Aliases.Count > 0)
             builder.AppendLine(string.Join(' ', note.Aliases));
         if (note.Tags.Count > 0)
             builder.AppendLine(string.Join(' ', note.Tags));
-        builder.Append(body.Trim());
+        builder.Append(IndexableBody(note));
         return builder.ToString();
+    }
+
+    /// <summary>The display body after non-indexable comments and retired anchors are removed.</summary>
+    internal static string IndexableBody(Note note)
+    {
+        var body = HtmlComment.Replace(note.Body, string.Empty);
+        return RetiredAnchor.Replace(body, string.Empty).Trim();
     }
 
     /// <summary>Index terms for a note; the query side uses the same folding.</summary>

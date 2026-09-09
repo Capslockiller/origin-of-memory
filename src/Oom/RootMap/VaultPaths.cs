@@ -25,7 +25,7 @@ internal static class LaneCVaultPaths
             if (!string.IsNullOrWhiteSpace(configured))
                 return configured;
         }
-        return Path.Combine(LocalAppData(), "oom", "workspace");
+        return Path.Combine(Path.GetTempPath(), "oom", $"workspace-{Environment.ProcessId}");
     }
 
     private static string? ReadVaultField(string manifest)

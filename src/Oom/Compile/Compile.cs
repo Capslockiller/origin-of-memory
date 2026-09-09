@@ -66,7 +66,7 @@ public sealed class Compile
         _guards = guards ?? new Guards();
         _notes = notes ?? new Notes();
         _rootMap = rootMap ?? new RootMap(vaultRoot, _notes, files: _fileOperations);
-        _retrieve = retrieve ?? new Retrieve();
+        _retrieve = retrieve ?? new Retrieve(new RetrieveOptions(VaultPath: vaultRoot, IndexPath: Path.Combine(_stateRoot, "state.db")));
         _bridge = bridge ?? new Bridge(vaultRoot, _rootMap, _fileOperations);
         _settings = CompileSettings.Load(vaultRoot);
     }
@@ -267,6 +267,9 @@ public sealed class Compile
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
+            var code = failDuringRebuild ? "rebuild-failed" : "publication-failed";
+            HealthLedger.Record(new HealthItem("compile", HealthLevel.Error, code, dailyName,
+                $"Yayın yenilemesi başarısız oldu: {error.Message}"), _clock.Now);
             RollBack(replaced);
             Discard(backupRoot);
             return new PublicationResult(true, true, true, []);

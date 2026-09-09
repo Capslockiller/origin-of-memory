@@ -129,7 +129,8 @@ public sealed class Doctor
             Observe(now, "runner", "claude-reachable", "claude", "Claude CLI erişilebilir."),
             Observe(now, "runner", "ollama-reachable", "ollama", "Ollama erişilebilir."),
             Observe(now, "compile", "compile-current", "last", "Son derleme kaydı okunabildi."),
-            Observe(now, "calls", "call-summary", "7d", "Backend çağrı özeti hazır.")
+            Observe(now, "calls", "call-summary", "7d", "Backend çağrı özeti hazır."),
+            .. HealthLedger.Read()
         ], 1.0, 0.0, 1);
 
     private static DoctorObservation Observe(DateTimeOffset now, string component, string code, string key, string detail) =>

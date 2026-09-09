@@ -138,7 +138,7 @@ public sealed class DerleyiciScars
     public void Y093_MaybeCompileUsesTwentyHourRule()
     {
         var compile = new Compile();
-        var stale = compile.MaybeCompile(new DateTimeOffset(2026, 9, 9, 9, 0, 0, TimeSpan.FromHours(3)), ScarFixture.Now.AddHours(-21), hasPending: true);
+        var stale = compile.MaybeCompile(new DateTimeOffset(2026, 9, 9, 9, 0, 0, TimeSpan.FromHours(3)), new DateTimeOffset(2026, 9, 9, 9, 0, 0, TimeSpan.FromHours(3)).AddHours(-21), hasPending: true);
         Assert.True(stale.ShouldCompile);
         var freshInstall = compile.MaybeCompile(new DateTimeOffset(2026, 9, 9, 9, 0, 0, TimeSpan.FromHours(3)), null, hasPending: true);
         Assert.False(freshInstall.ShouldCompile);

@@ -129,3 +129,31 @@ Build: `dotnet build Oom.sln -c Release` — succeeded, 0 warnings, 0 errors wit
 Test: `dotnet test Oom.sln -c Release --no-build` — Başarısız: 80, Başarılı: 19, Atlanan: 0, Toplam: 99.
 New green Y list: Y-031, Y-032, Y-034, Y-065, Y-066, Y-067, Y-070, Y-071, Y-072, Y-074, Y-076, Y-078, Y-083, Y-084, Y-086, Y-088.
 Previously green and preserved: Y-068, Y-081, Y-094.
+
+<!-- yazan: codex · gpt-5 -->
+## Lane INT
+
+Y-003: Backend yapılandırması yokken Flush, model çağrısı yapmadan beş başlıklı, düşük güven damgalı çıkarımsal özet üretir; yapılandırılmamış saf kullanımda diske yazmaz (`src/Oom/Flush/Flush.cs`).
+Y-008: `ScarFixture.Session` başlangıcı son turun tam `lastTurnAt` değerine düşeceği biçimde düzeltildi (`tests/Oom.Tests/Scars/Fixtures/ScarFixture.cs`).
+Y-024: Emekli çapa/HTML yorumları hem sıralama jetonlarından hem dönen arama gövdesinden çıkarılıyor (`src/Oom/Notes/Notes.cs`, `src/Oom/Retrieve/Retrieve.cs`).
+Y-030: Yeniden kurulum/yayın hatası Doctor'ın okuyacağı process-içi ve kurulu vault'ta SQLite-kalıcı kırmızı bulgu bırakıyor (`src/Oom/Compile/Compile.cs`, `src/Oom/Doctor/HealthLedger.cs`, `src/Oom/Doctor/Doctor.cs`).
+Y-047: Kancasız yedi günlük açık oturum listesi çıkarımsal fallback ile kapsanıyor; paralel sweep damgaları thread-safe (`src/Oom/Flush/Flush.cs`, `src/Oom/Sweep/Sweep.cs`).
+Y-049: Runner'ın timeout veya sıfır olmayan çıkışı `hook-failed` sağlık bulgusu olarak kalıcılaştırılıyor (`src/Oom/Runner/Runner.cs`, `src/Oom/Doctor/HealthLedger.cs`).
+Y-079: `IntentionalRed` tohumu yalnız açık filtreyle kırmızı; varsayılan runsettings onu normal 99-test koşumundan çıkarıyor, `dotnet test --filter IntentionalRed` exit 1 veriyor (`tests/Oom.Tests/Scars/IntentionalRed.cs`, `tests/Oom.Tests/default.runsettings`, iki csproj).
+Y-093: Fixture çağrısının `lastSuccess` değeri aynı `now` değerinden tam 21 saat geriye alındı; 20 saat üretim kuralı değişmedi (`tests/Oom.Tests/Scars/DerleyiciScars.cs`).
+Y-099: Mevcut ignore'lar korunarak `.oom/backup/` eklendi (`.gitignore`).
+Integration: Compile yeniden kurulumunun Retrieve'a aynı vault ve state.db yollarını vermesi sağlandı; varsayılan Retrieve kurulu `vault.json` ve state yolunu okuyor (`src/Oom/Compile/Compile.cs`, `src/Oom/Retrieve/Retrieve.cs`).
+Integration: Yapılandırılmamış Compile/RootMap yazımları kullanıcı LocalAppData'sı yerine process'e özel temp workspace kullanıyor (`src/Oom/RootMap/VaultPaths.cs`).
+Integration: Roslyn shared-server ACL uyuşmazlığını kaldırmak için iki projede `UseSharedCompilation=false`; dokunulan csproj BOM'ları kaldırıldı.
+
+Ruling: Y-035 test hiçbir vault, concept notu veya düzeltme pasajı oluşturmadan, üretim koduna hiç verilmemiş “20 Eylül” metnini bekliyor. Spec'e uygun boş korpusta Query boş döner. Önerilen en küçük test değişikliği: temp vault'ta eski ve düzeltilmiş pasajları kur, `RetrieveOptions(VaultPath, IndexPath)` ile `Build()` çağır, sonra Query sonucunu doğrula.
+Ruling: Y-039 test hiçbir concept korpusu kurmadan ilk Query'nin dolu olmasını bekliyor; dolayısıyla sorgu-imzası dedupe davranışına hiç ulaşmıyor. Önerilen en küçük test değişikliği: temp vault'a iki sorguyla eşleşen tek tokenizasyon notu yaz, `Build()` çağır ve mevcut üç Query assertion'ını koru.
+Ruling: Y-042 test hiçbir gold-set/corpus girdisi vermeden Query'nin tam beş hit üretmesini bekliyor; sentetik hit üretmek Spec 6.4'ün yalnız gerçek concept korpusunu sıralama kuralını bozar. Önerilen en küçük test değişikliği: temp vault'a beş eşleşen geçerli not yazıp `Build()` sonrası ölç.
+Ruling: Y-046 `main` ve `helper` HookStart kayıtlarını yalnız yerel değişkenlerde oluşturuyor, hiçbirini Context'e vermiyor; ayrıca olmayan `fixture-vault` yolundan bu kimlikleri çıktı metninde bekliyor. Önerilen en küçük test değişikliği: başlangıç kayıtlarını alan Context audit API'sini çağırıp session/event kimlikli kayıt ve yardımcı-minimal sonucu orada doğrula; kimlikleri SessionStart metninde arama.
+Ruling: Y-050 olmayan `fixture-touched-but-stale` yolunda içerik-bayat bulgusu bekliyor; üretim kodu olmayan dosyaları doğru biçimde `companion-missing` raporluyor. Önerilen en küçük test değişikliği: temp companion dosyasını oluştur, ilk audit ile digest'i kaydet, içeriği değiştirmeden mtime'ı ilerlet, ikinci audit'te `companion-content-stale` doğrula.
+Ruling: Y-069 relative `clean-vm-vault` ile yalnız fixture kurulum planı alıyor, diskte ortak vault kurmuyor; Compile'a `=== DONE ===` dışında concept FILE vermiyor ve `Hook("VM kararı")` 9 karakterle Spec 6.4'ün `< 12 => skip:short` kapısına takılıyor. Önerilen en küçük test değişikliği: tüm bileşenlere aynı temp vault'u ver, geçerli concept FILE çıktısı derlet ve en az 12 karakterlik ilgili prompt kullan.
+Ruling: Y-098 var olmayan `fixture-child` programının ya timeout ya da exit 0 vermesini bekliyor; Windows launch failure'ın sıfır olmayan çıkışı Y-049'un bağlayıcı hata-görünürlüğü kuralıdır. Önerilen en küçük test değişikliği: stdin EOF bekleyip sonra 0 çıkan gerçek bir child fixture kullan; var olmayan executable kullanma.
+
+Test: `dotnet test Oom.sln -c Release -v minimal` (offline cache ile) — Başarısız: 7, Başarılı: 92, Atlanan: 0, Toplam: 99; kalanlar Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
+Y-079 seed: `dotnet test --filter IntentionalRed -c Release --no-restore -v minimal` — exit 1; Başarısız: 1, Toplam: 1.
+Line counts: `.gitignore` 23; `progress.md` 159; `Compile.cs` 568; `Doctor.cs` 196; `HealthLedger.cs` 68; `Flush.cs` 578; `Notes.cs` 259; `Oom.csproj` 19; `Retrieve.cs` 378; `VaultPaths.cs` 103; `Runner.cs` 405; `Sweep.cs` 190; `Oom.Tests.csproj` 27; `default.runsettings` 7; `DerleyiciScars.cs` 164; `ScarFixture.cs` 48; `IntentionalRed.cs` 9. Module totals: `src/Oom` 5.601/7.500; Compile 568/800; Doctor 264/450; Flush 578/600; Notes lane-A remainder 717/750; Retrieve 378/600; RootMap 322/400; Runner 405/450; Sweep 190/350.

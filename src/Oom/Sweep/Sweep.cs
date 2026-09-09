@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 
 namespace Oom.Contracts;
@@ -47,7 +48,7 @@ public sealed class Sweep
                 continue;
             }
 
-            if (!ShouldProcess(last, StampedSessions.Contains(session.Id), options.SinceHours, now))
+            if (!ShouldProcess(last, StampedSessions.ContainsKey(session.Id), options.SinceHours, now))
             {
                 _skips.Add(new SweepSkip(session.Id, "stamped-and-old"));
                 continue;
@@ -63,7 +64,7 @@ public sealed class Sweep
                 continue;
             }
 
-            StampedSessions.Add(session.Id);
+            StampedSessions.TryAdd(session.Id, 0);
             if (IsCovered(result.Outcome))
                 covered++;
             else
@@ -174,7 +175,7 @@ public sealed class Sweep
     }
 
     /// <summary>Sessions stamped in this process; the durable store is <c>sweep_stamps</c>.</summary>
-    private static readonly HashSet<string> StampedSessions = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, byte> StampedSessions = new(StringComparer.Ordinal);
 
     private static bool IsCovered(FlushOutcome outcome) =>
         outcome is FlushOutcome.Ok or FlushOutcome.NoTurns or FlushOutcome.NoNewTurns or FlushOutcome.Empty;
