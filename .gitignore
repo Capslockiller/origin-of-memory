@@ -24,3 +24,7 @@ bench/.e2e/
 .oom/backup/
 *.db
 *.lock
+
+# lane VM kapi 7 (Windows Sandbox) - kanit ve host'a ozel uretilen dosyalar
+bench/vm/.out/
+bench/vm/host.txt
