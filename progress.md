@@ -61,3 +61,24 @@ Blocked-by: Y-069 also conflicts with the Spec 6.4 gate: its prompt "VM kararı"
 
 Build: `dotnet build Oom.sln -c Release` — 0 warnings, 0 errors.
 Test: Başarısız! - Başarısız: 71, Başarılı: 28, Atlanan: 0, Toplam: 99 (lane S baseline: 96 red / 3 green; the three repository invariants stay green).
+
+## Lane C
+
+Compile: 565 lines (`src/Oom/Compile/Compile.cs`), Y-016 · Y-022 · Y-025 · Y-028 green
+RootMap: 322 lines (`src/Oom/RootMap/RootMap.cs` 219 + `src/Oom/RootMap/VaultPaths.cs` 103), no scar of its own is unblocked
+Bridge: 67 lines (`src/Oom/Bridge/Bridge.cs`), no scar calls it
+
+Ruling: Y-093 stays red. The test passes now = 2026-09-09 09:00+03 with lastSuccess = ScarFixture.Now.AddHours(-21) = 2026-09-08 15:00+03, which is 18 hours before that now, not 21; the binding spec (6.5, oom.json compile.minIntervalHours = 20, spec 10.1 #10) makes 18 hours too early. The 20-hour rule is implemented as written and the test is left red rather than the threshold bent to 18.
+Ruling: Compile.Run checks the source confidence stamp (Y-016) before it takes the compile mutex. A daily that may not be promoted is refused without competing for the lock; the spec order (6.5-1 lock, 6.5-2 selection) is otherwise kept.
+Ruling: Compile.SelectCandidates matches titles and aliases with ordinal case-insensitive word-boundary comparison instead of TurkishFold. The scar (Y-025) is about corpus coverage, not tokenisation, and routing it through lane A's stub would have made the full-corpus guarantee untestable; the index tokenizer stays TurkishFold's business (spec 6.4).
+Ruling: Compile.Publish treats any failure of the post-write rebuild the same way, including a not-yet-implemented dependency: everything is rolled back from backup/ and the daily stays pending. That is why the interrupted half of Y-029 passes and the completed half does not.
+Ruling: Bridge.Refresh returns an outcome token (ok / skip:no-claude-md / warn:bridge-*) instead of throwing, because spec 6.5-7 puts it at warning level at the very end of a run; it never rewrites a byte outside the two markers.
+
+Blocked-by: lane A Guards.Gate — Compile.Run gates the whole model reply and every file it carries; Y-026 and Y-027 stay red on the stub.
+Blocked-by: lane A Notes.Parse and Notes.Validate — the concept corpus load in RootMap.Regenerate and the per-file validation in Compile.Run; Y-023 and Y-096 stay red on the stub.
+Blocked-by: lane A TurkishFold.Fold — RootMap.Assign, RootMap.HubsForNote and therefore Compile.BuildRegistry (hub membership of the dedupe registry). No scar test calls them directly, so nothing turns red on it, but the compile prompt path cannot run until lane A lands.
+Blocked-by: lane A State.AcquireLock — the compile-<day> row in the locks table (machine + pid + ts) is not written. Compile.Run uses the named mutex (Global, falling back to Local) and Compile.ResolveLock implements the 120-minute stale-lock takeover as a pure function; wiring it to the locks table is one call once lane A lands.
+Blocked-by: lane B Retrieve.Build — the index rebuild inside Compile.Publish; the completed-publication half of Y-029 stays red.
+Blocked-by: lane D Doctor.Check — Y-030, Y-031 and Y-034 assert doctor output; the Compile.Publish half of Y-030 already behaves as the scar requires.
+Blocked-by: lanes A, B and D for Y-069 (Install.Run, Ingest.ParseClaude, Sweep.Run, Retrieve.Hook); Compile.Run is the only step of that chain implemented here.
+Blocked-by: lane D Notify — the single parked-daily notification goes through an injected INotifier; lane C ships no default implementation because Notify is lane D's file.
