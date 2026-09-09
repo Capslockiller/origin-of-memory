@@ -93,9 +93,12 @@ internal static class Program
 
             case "install":
             {
+                var target = Value(args, "--vault") ?? vault;
+                var install = new Install();
                 var result = args.Contains("--uninstall")
-                    ? new Install().Uninstall(vault)
-                    : new Install().Run(vault, args.Contains("--from-v0"));
+                    ? install.Uninstall(target)
+                    : install.Run(target, args.Contains("--from-v0"), args.Contains("--dry-run"));
+                if (install.MigrationReport.Length > 0) Console.Write(install.MigrationReport);
                 Console.WriteLine(result.Success ? "kurulum tamam" : $"kurulum başarısız: {result.Error}");
                 return result.Success ? 0 : 1;
             }
@@ -642,7 +645,7 @@ internal static class Program
               doctor [--fix] [--json] [--quiet] Sağlık ve onarım
               save "<metin>" | --session-json   Daily'ye doğrudan kayıt
               mcp                               Salt okunur MCP sunucusu (stdio JSON-RPC)
-              install [--uninstall] [--from-v0] Kurulum ve göç
+              install [--uninstall] [--from-v0] [--dry-run]  Kurulum ve göç
               bench [--backend claude|local]    Ölçüm koşumu
             """);
     }

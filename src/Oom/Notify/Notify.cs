@@ -15,10 +15,16 @@ public sealed class Notify
     private readonly INotifier? notifier;
     private readonly bool toastRegistered;
 
+    /// <summary>
+    /// <paramref name="toastRegistered"/> is the caller's assertion; when it is false the
+    /// machine is still asked, because the AUMID shortcut install writes is what actually
+    /// decides whether Windows will raise a toast. A machine where that registration failed
+    /// (D3) therefore queues the line for the next SessionStart and sends nothing.
+    /// </summary>
     public Notify(INotifier? notifier = null, bool toastRegistered = false)
     {
         this.notifier = notifier;
-        this.toastRegistered = toastRegistered;
+        this.toastRegistered = toastRegistered || ShortcutRegistration.IsRegistered;
     }
 
     public NotificationResult Send(string notificationClass, string key, string text, DateTimeOffset now)

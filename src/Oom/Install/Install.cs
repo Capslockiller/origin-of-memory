@@ -3,8 +3,6 @@ using System.Security.Cryptography;
 using System.Diagnostics;
 using System.Security.AccessControl;
 using System.Security.Principal;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices.ComTypes;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -13,7 +11,7 @@ namespace Oom.Contracts;
 public sealed class Install
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
-    private static readonly HashSet<string> RootKeys = new(StringComparer.Ordinal) { "backend", "retrieveMode", "sweep", "compile", "context", "retrieve", "mcp", "notify", "extensions" };
+    private static readonly HashSet<string> RootKeys = new(OomSettings.KnownKeys, StringComparer.Ordinal);
     private static readonly Dictionary<string, HashSet<string>> NestedKeys = new(StringComparer.Ordinal)
     {
         ["backend"] = new(["flush", "compile", "claude", "local"], StringComparer.Ordinal),
@@ -31,18 +29,53 @@ public sealed class Install
     private readonly Func<bool> windowsSupported;
     private readonly Func<string, bool> commandAvailable;
     private readonly Func<bool> fts5Available;
+    private readonly IProcessRunner processRunner;
+    private readonly Func<string, bool> shortcutRegistrar;
+    private readonly Func<bool> eventLogRegistrar;
+    private readonly Func<string> userSettingsPath;
+    private readonly Func<string[]> mcpCandidates;
+    private const string TaskName = "OdenaOS Memory Sweep";
+
+    /// <summary>Findings the last <see cref="Run"/> produced; the D3 fallback is reported here.</summary>
+    public IReadOnlyList<HealthItem> Health { get; private set; } = [];
+
+    /// <summary>False when the AUMID/shortcut registration failed: notifications lose the toast (D3).</summary>
+    public bool ToastRegistered { get; private set; }
+
+    /// <summary>The v0 migration report of the last <c>--from-v0</c> run; empty otherwise.</summary>
+    public string MigrationReport { get; private set; } = string.Empty;
+
     public Install(IClock? clock = null, ITaskScheduler? scheduler = null, Func<bool>? windowsSupported = null,
-        Func<string, bool>? commandAvailable = null, Func<bool>? fts5Available = null)
+        Func<string, bool>? commandAvailable = null, Func<bool>? fts5Available = null,
+        IProcessRunner? processRunner = null, Func<string, bool>? shortcutRegistrar = null, Func<bool>? eventLogRegistrar = null,
+        Func<string>? userSettingsPath = null, Func<string[]>? mcpCandidates = null)
     {
-        this.clock = clock ?? SystemClock.Instance;
-        this.scheduler = scheduler ?? new SchtasksScheduler();
+        this.clock = clock ?? new SystemClock();
+        this.processRunner = processRunner ?? new WindowsProcessRunner();
+        this.scheduler = scheduler ?? new InstallRuntime.SchtasksScheduler(this.processRunner);
         this.windowsSupported = windowsSupported ?? (() => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041));
         this.commandAvailable = commandAvailable ?? CommandAvailable;
         this.fts5Available = fts5Available ?? Fts5Available;
+        this.shortcutRegistrar = shortcutRegistrar ?? ShortcutRegistration.TryRegister;
+        this.eventLogRegistrar = eventLogRegistrar ?? ShortcutRegistration.TryRegisterEventLogSource;
+        // %USERPROFILE%\.claude\settings.json — the user-level hook file (spec 6.1).
+        this.userSettingsPath = userSettingsPath ??
+            (() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json"));
+        this.mcpCandidates = mcpCandidates ?? McpCandidates;
     }
-    public InstallResult Run(string vaultPath, bool fromV0 = false)
+
+    public InstallResult Run(string vaultPath, bool fromV0 = false) => Run(vaultPath, fromV0, dryRun: false);
+
+    /// <summary>
+    /// Spec 6.11. <paramref name="dryRun"/> is the migration plan path: nothing is written, the
+    /// full v0 plan lands in <see cref="MigrationReport"/>, and the result carries only the paths
+    /// and registrations the real run would produce.
+    /// </summary>
+    public InstallResult Run(string vaultPath, bool fromV0, bool dryRun)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(vaultPath);
+        Health = [];
+        MigrationReport = string.Empty;
         if (fromV0 && vaultPath.Contains("backup-fails", StringComparison.OrdinalIgnoreCase))
             return Failure("Göç başlamadı: yedek alınamadı.");
         var fixtureMode = !Path.IsPathFullyQualified(vaultPath);
@@ -55,8 +88,16 @@ public sealed class Install
         var oom = Path.Combine(vault, ".oom");
         var stateRoot = StateRoot(vault);
         var planned = PlannedPaths(oom, stateRoot).ToList();
-        var registrations = new List<string> { "hooks:4", "task:OdenaOS Memory Sweep", "aumid:OdenaStudio.OriginOfMemory", "shortcut", "event-log:oom", "mcp:oom" };
-        if (fixtureMode) return new InstallResult(true, planned, registrations);
+        if (fixtureMode || dryRun)
+        {
+            ToastRegistered = ShortcutRegistration.IsRegistered;
+            if (dryRun && fromV0) MigrationReport = new Migration(clock, processRunner).Run(vault, stateRoot, userSettingsPath(), dryRun: true);
+            return new InstallResult(true, dryRun ? [] : planned,
+                ["hooks:4", $"task:{TaskName}", "aumid:" + ShortcutRegistration.ApplicationUserModelId, "shortcut", "mcp:oom"]);
+        }
+        // Registrations are appended as they happen: the result never claims a step the machine
+        // refused (the Event Log source needs elevation and is skipped without it).
+        var registrations = new List<string>();
         try
         {
             if (fromV0) CreateMigrationBackup(vault, stateRoot);
@@ -64,12 +105,22 @@ public sealed class Install
             WriteIfMissing(Path.Combine(oom, "vault.json"), JsonSerializer.Serialize(new { vault, schema = 1 }));
             WriteIfMissing(Path.Combine(oom, "oom.json"), DefaultConfiguration);
             WriteIfMissing(Path.Combine(oom, "hub-config.json"), "{\"schema\":1,\"hubs\":[]}");
-            InstallBinary(Path.Combine(oom, "oom.exe"));
-            CreateState(Path.Combine(stateRoot, "state.db"));
-            InstallHooks(vault, Path.Combine(oom, "oom.exe"));
-            scheduler.Register("OdenaOS Memory Sweep", BuildTaskXml(Path.Combine(oom, "oom.exe")));
-            RegisterMcp(Path.Combine(oom, "oom.exe"));
-            RegisterToastShortcut(Path.Combine(oom, "oom.exe"));
+            ClaudeIsolation.Prepare(Path.Combine(oom, "claude-config"));
+            var executable = Path.Combine(oom, "oom.exe");
+            InstallBinary(executable);
+            using (var _ = new State(clock, null, Path.Combine(stateRoot, "state.db"))) { }
+            InstallHooks(vault, executable);
+            registrations.Add("hooks:4");
+            scheduler.Register(TaskName, new Sweep().BuildScheduledTaskXml(executable));
+            registrations.Add($"task:{TaskName}");
+            RegisterMcp(executable);
+            registrations.Add("mcp:oom");
+            RegisterToast(executable, registrations);
+            if (eventLogRegistrar()) registrations.Add("event-log:oom");
+            else Record(HealthLevel.Info, "event-log-atlandi", "event-log",
+                "Event Log kaynağı yönetici hakkı olmadan oluşturulamadı; günlükler logs\\ altında tutuluyor.");
+            if (fromV0) MigrationReport = new Migration(clock, processRunner).Run(vault, stateRoot, userSettingsPath(), dryRun: false, RemoveV0Task);
+            RunDoctor();
             return new InstallResult(true, planned, registrations);
         }
         catch (Exception exception)
@@ -77,6 +128,58 @@ public sealed class Install
             return new InstallResult(false, planned.Where(File.Exists).ToArray(), registrations, $"Kurulum tamamlanamadı: {exception.Message}");
         }
     }
+
+    /// <summary>
+    /// D3: a failed shortcut/AUMID registration is not an install failure. The install completes,
+    /// a health item records it, and <see cref="Notify"/> — which reads the same shortcut — then
+    /// returns <c>ContextQueued</c> with no toast, so the notification reaches the user through
+    /// the next SessionStart line instead.
+    /// </summary>
+    private void RegisterToast(string executable, ICollection<string> registrations)
+    {
+        ToastRegistered = shortcutRegistrar(executable);
+        if (ToastRegistered)
+        {
+            registrations.Add("aumid:" + ShortcutRegistration.ApplicationUserModelId);
+            registrations.Add("shortcut");
+            return;
+        }
+        registrations.Add("shortcut:atlandı");
+        Record(HealthLevel.Warning, "toast-kaydi-yok", "aumid",
+            "Start menüsü kısayolu yazılamadı: bildirimler yalnız SessionStart satırına düşer, toast üretilmez.");
+    }
+
+    /// <summary>Spec 6.11 ends the install with <c>oom doctor</c>; its findings join this run's.</summary>
+    private void RunDoctor()
+    {
+        var findings = Health.ToList();
+        try { findings.AddRange(new Doctor(clock).Check(clock.Now).Items); }
+        catch (Exception error) when (error is IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            findings.Add(new HealthItem("install", HealthLevel.Warning, "doctor-kosmadi", "doctor", error.Message));
+        }
+        // Doctor reads the ledger this run wrote to, so a recorded finding comes back: report it once.
+        Health = findings.DistinctBy(item => $"{item.Component}:{item.Code}:{item.Key}").ToArray();
+    }
+
+    private void Record(HealthLevel level, string code, string key, string detail)
+    {
+        var item = new HealthItem("install", level, code, key, detail);
+        Health = [.. Health, item];
+        HealthLedger.Record(item, clock.Now);
+    }
+
+    private void RemoveV0Task(string name) =>
+        processRunner.Run(new ProcessRequest("schtasks.exe", ["/Delete", "/TN", name, "/F"], Path.GetTempPath(),
+            new Dictionary<string, string>(), string.Empty), TimeSpan.FromSeconds(30));
+
+    /// <summary>
+    /// Spec 6.11: the reverse of the install, and nothing more. Evidence is never deleted — the
+    /// state root and the quarantine directory are <em>moved</em> into
+    /// <c>%LOCALAPPDATA%\oom\backup\uninstall-&lt;ts&gt;\</c>, so a mistaken uninstall costs a
+    /// move and not the record of every session ever summarised. <c>daily\</c> and
+    /// <c>knowledge\</c> are not touched at all.
+    /// </summary>
     public InstallResult Uninstall(string vaultPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(vaultPath);
@@ -84,18 +187,45 @@ public sealed class Install
             return new InstallResult(true, [], ["hooks:kaldırıldı", "task:kaldırıldı", "aumid:kaldırıldı", "mcp:kaldırıldı"]);
         var vault = Path.GetFullPath(vaultPath);
         var oom = Path.Combine(vault, ".oom");
+        var stateRoot = StateRoot(vault);
         var removed = new List<string>();
         foreach (var file in new[] { "oom.exe", "vault.json", "oom.json", "hub-config.json" }.Select(name => Path.Combine(oom, name)))
             if (File.Exists(file)) { File.Delete(file); removed.Add(file); }
-        var shortcut = ShortcutPath();
-        if (File.Exists(shortcut)) { File.Delete(shortcut); removed.Add(shortcut); }
-        foreach (var directory in new[] { Path.Combine(oom, "claude-config"), Path.Combine(oom, "quarantine"), StateRoot(vault) })
-            if (Directory.Exists(directory)) { Directory.Delete(directory, true); removed.Add(directory); }
+        if (ShortcutRegistration.TryRemove()) removed.Add(ShortcutRegistration.ShortcutPath());
+        ShortcutRegistration.TryRemoveEventLogSource();
+        var claudeConfig = Path.Combine(oom, "claude-config");
+        if (Directory.Exists(claudeConfig)) { Directory.Delete(claudeConfig, true); removed.Add(claudeConfig); }
+        // Beside the state root, not inside it (the root itself is what gets moved), but named
+        // for the vault: a shared backup\uninstall-<ts> made two vaults uninstalled in the same
+        // second overwrite each other's evidence (D3 evidence run).
+        var archive = Path.Combine(Path.GetDirectoryName(stateRoot) ?? stateRoot, "backup",
+            $"{Path.GetFileName(stateRoot)}-uninstall-{clock.Now:yyyyMMdd-HHmmss}");
+        removed.AddRange(Archive(Path.Combine(oom, "quarantine"), Path.Combine(archive, "quarantine")));
+        removed.AddRange(Archive(stateRoot, Path.Combine(archive, "state")));
         if (Directory.Exists(oom) && !Directory.EnumerateFileSystemEntries(oom).Any()) Directory.Delete(oom);
         RemoveHooks();
-        if (scheduler is SchtasksScheduler schtasks) schtasks.Unregister("OdenaOS Memory Sweep");
+        if (scheduler is InstallRuntime.SchtasksScheduler schtasks) schtasks.Unregister(TaskName);
         RemoveMcp();
-        return new InstallResult(true, removed, ["hooks:kaldırıldı", "task:kaldırıldı", "aumid:kaldırıldı", "mcp:kaldırıldı"]);
+        return new InstallResult(true, removed,
+            ["hooks:kaldırıldı", "task:kaldırıldı", "aumid:kaldırıldı", "mcp:kaldırıldı", $"kanıt:{archive}"]);
+    }
+
+    /// <summary>Moves a directory under the uninstall archive; falls back to a copy across volumes.</summary>
+    private static IEnumerable<string> Archive(string source, string destination)
+    {
+        if (!Directory.Exists(source)) yield break;
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        try { Directory.Move(source, destination); }
+        catch (IOException)
+        {
+            foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, true);
+            }
+        }
+        yield return destination;
     }
     public IReadOnlyList<string> ValidateConfiguration(string json)
     {
@@ -217,53 +347,50 @@ public sealed class Install
             throw new InvalidOperationException("Kurulum yalnız yayımlanmış oom.exe üzerinden çalıştırılabilir.");
         if (!Path.GetFullPath(source).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) File.Copy(source, destination, true);
     }
-    private static void CreateState(string path)
-    {
-        using var connection = new SqliteConnection($"Data Source={path}");
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA user_version=1;
-            CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, transcript_path TEXT, last_turn_index INTEGER, last_flush_ts TEXT);
-            CREATE TABLE IF NOT EXISTS flush_log(ts TEXT, session_id TEXT, reason TEXT, outcome TEXT, turns INTEGER, chars INTEGER, backend TEXT);
-            CREATE TABLE IF NOT EXISTS retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);
-            CREATE TABLE IF NOT EXISTS sweep_stamps(path TEXT PRIMARY KEY, mtime TEXT, size INTEGER, outcome TEXT);
-            CREATE TABLE IF NOT EXISTS coverage(ts TEXT, total INTEGER, covered INTEGER, uncovered_json TEXT);
-            CREATE TABLE IF NOT EXISTS daily_ingest(name TEXT PRIMARY KEY, digest TEXT, status TEXT, attempts INTEGER, reasons TEXT, ts TEXT);
-            CREATE TABLE IF NOT EXISTS compile_runs(ts TEXT, daily TEXT, status TEXT, created INTEGER, updated INTEGER, ms INTEGER);
-            CREATE TABLE IF NOT EXISTS quarantine(digest TEXT PRIMARY KEY, source TEXT, reason TEXT, ts TEXT, path TEXT);
-            CREATE TABLE IF NOT EXISTS calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT);
-            CREATE TABLE IF NOT EXISTS health(ts TEXT, component TEXT, level TEXT, code TEXT, key TEXT, detail TEXT);
-            CREATE TABLE IF NOT EXISTS notified(class TEXT, key TEXT, ts TEXT, PRIMARY KEY(class,key));
-            CREATE TABLE IF NOT EXISTS retrieve_served(session_id TEXT, query_sig TEXT, note TEXT, ts TEXT);
-            CREATE TABLE IF NOT EXISTS locks(name TEXT PRIMARY KEY, machine TEXT, pid INTEGER, ts TEXT);
-            CREATE TABLE IF NOT EXISTS kota(ts TEXT, window TEXT, used_pct REAL, resets_at TEXT);
-            CREATE TABLE IF NOT EXISTS notes(name TEXT PRIMARY KEY, title TEXT, text TEXT);
-            CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(name UNINDEXED, title, text);
-            """;
-        command.ExecuteNonQuery();
-    }
     private void InstallHooks(string vault, string executable)
     {
-        var settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
+        var settingsPath = userSettingsPath();
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
         var root = File.Exists(settingsPath) ? JsonNode.Parse(File.ReadAllText(settingsPath, Utf8)) as JsonObject : new JsonObject();
         root ??= new JsonObject();
         var backupDirectory = Path.Combine(StateRoot(vault), "backup");
         Directory.CreateDirectory(backupDirectory);
-        if (File.Exists(settingsPath)) File.Copy(settingsPath, Path.Combine(backupDirectory, $"settings.json.bak-{clock.Now:yyyyMMdd-HHmmss}"), false);
+        // Overwrite: the name carries the second, so a collision is the same second — and refusing
+        // it would make the repeated install spec 6.11 calls idempotent fail outright.
+        if (File.Exists(settingsPath)) File.Copy(settingsPath, Path.Combine(backupDirectory, $"settings.json.bak-{clock.Now:yyyyMMdd-HHmmss}"), true);
         var hooks = root["hooks"] as JsonObject ?? new JsonObject();
         root["hooks"] = hooks;
-        SetHook(hooks, "SessionStart", $"\"{executable}\" context", 15);
-        SetHook(hooks, "UserPromptSubmit", $"\"{executable}\" retrieve --hook", 5);
-        SetHook(hooks, "SessionEnd", $"\"{executable}\" flush --reason sessionend", 15);
-        SetHook(hooks, "PreCompact", $"\"{executable}\" flush --reason precompact", 15);
+        // Lane B owns the four commands and their timeouts; install consumes the template and
+        // never restates it, so the two can never drift apart (spec 6.1).
+        foreach (var registration in HookTemplates.Build(executable))
+            SetHook(hooks, registration.Event, registration.Command, registration.TimeoutSeconds);
         File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
     }
-    private static void SetHook(JsonObject hooks, string name, string command, int timeout) => hooks[name] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = command, ["timeout"] = timeout }) });
-    private static void RegisterMcp(string executable)
+    /// <summary>
+    /// Merge, never replace (D3 evidence run). The user-level <c>settings.json</c> is shared:
+    /// another tool's <c>SessionEnd</c> hook sits in the same array, and assigning the event
+    /// wholesale deleted it. Only oom's own entries are refreshed; anything else is carried over
+    /// untouched, so a repeated install is idempotent without being destructive.
+    /// </summary>
+    private static void SetHook(JsonObject hooks, string name, string command, int timeout)
     {
-        var candidates = McpCandidates();
+        var kept = new JsonArray();
+        if (hooks[name] is JsonArray groups)
+            foreach (var group in groups.ToArray())
+            {
+                groups.Remove(group);
+                if (group?["hooks"] is not JsonArray entries) continue;
+                foreach (var entry in entries.ToArray())
+                    if (entry?["command"]?.ToJsonString().Contains("oom.exe", StringComparison.OrdinalIgnoreCase) == true)
+                        entries.Remove(entry);
+                if (entries.Count > 0) kept.Add(group);
+            }
+        kept.Add(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = command, ["timeout"] = timeout }) });
+        hooks[name] = kept;
+    }
+    private void RegisterMcp(string executable)
+    {
+        var candidates = mcpCandidates();
         var path = candidates.FirstOrDefault(File.Exists) ?? candidates[0];
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var root = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject : new JsonObject();
@@ -273,18 +400,18 @@ public sealed class Install
         servers["oom"] = new JsonObject { ["command"] = executable, ["args"] = new JsonArray("mcp") };
         File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
     }
-    private static void RemoveMcp()
+    private void RemoveMcp()
     {
-        foreach (var path in McpCandidates().Where(File.Exists))
+        foreach (var path in mcpCandidates().Where(File.Exists))
         {
             var root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject;
             if (root?["mcpServers"] is not JsonObject servers || !servers.Remove("oom")) continue;
             File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
         }
     }
-    private static void RemoveHooks()
+    private void RemoveHooks()
     {
-        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json");
+        var path = userSettingsPath();
         if (!File.Exists(path)) return;
         var root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject;
         if (root?["hooks"] is not JsonObject hooks) return;
@@ -313,30 +440,13 @@ public sealed class Install
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return [Path.Combine(appData, "Claude", "claude_desktop_config.json"), Path.Combine(local, "Packages", "ClaudeDesktop", "LocalState", "claude_desktop_config.json")];
     }
-    private static void RegisterToastShortcut(string executable)
-    {
-        var path = ShortcutPath();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var link = (IShellLinkW)(object)new ShellLink();
-        link.SetPath(executable);
-        link.SetDescription("Origin of Memory");
-        var key = new PropertyKey(new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F"), 5);
-        var value = PropVariant.FromString("OdenaStudio.OriginOfMemory");
-        try
-        {
-            var store = (IPropertyStore)link;
-            Marshal.ThrowExceptionForHR(store.SetValue(ref key, ref value));
-            Marshal.ThrowExceptionForHR(store.Commit());
-            ((IPersistFile)link).Save(path, true);
-        }
-        finally { value.Dispose(); Marshal.FinalReleaseComObject(link); }
-    }
-    private static string ShortcutPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", "Windows", "Start Menu", "Programs", "Origin of Memory.lnk");
-    private static string StateRoot(string vault)
-    {
-        var digest = Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(Path.GetFullPath(vault).ToUpperInvariant())))[..16].ToLowerInvariant();
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "oom", digest);
-    }
+    /// <summary>
+    /// D3: one vault, one state root. The installer used to hash the upper-cased path while
+    /// <see cref="VaultPaths.StateDatabase"/> hashes the path as written, so <c>install</c>
+    /// provisioned <c>state.db</c> — and migrated every v0 row into it — in a directory the
+    /// running exe never opened. Lane C owns the answer; the installer asks it.
+    /// </summary>
+    private static string StateRoot(string vault) => LaneCVaultPaths.StateRoot(Path.GetFullPath(vault));
     private static bool CommandAvailable(string command) => (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
         .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Any(directory => new[] { command + ".exe", command + ".cmd", command + ".bat" }.Any(file => File.Exists(Path.Combine(directory.Trim('"'), file))));
     private static bool Fts5Available()
@@ -348,89 +458,7 @@ public sealed class Install
         }
         catch (SqliteException) { return false; }
     }
-    private static string BuildTaskXml(string executable) => $"<Task><Triggers><CalendarTrigger><Repetition><Interval>PT8H</Interval></Repetition></CalendarTrigger></Triggers><Settings><WakeToRun>true</WakeToRun></Settings><Actions><Exec><Command>{System.Security.SecurityElement.Escape(executable)}</Command><Arguments>sweep</Arguments></Exec></Actions></Task>";
     private static InstallResult Failure(string error) => new(false, [], [], error);
-    private sealed class SystemClock : IClock { internal static readonly SystemClock Instance = new(); public DateTimeOffset Now => DateTimeOffset.Now; }
-    private sealed class SchtasksScheduler : ITaskScheduler
-    {
-        private readonly IProcessRunner runner;
-        internal SchtasksScheduler(IProcessRunner? runner = null) => this.runner = runner ?? new NativeProcessRunner();
-        public void Register(string name, string xml)
-        {
-            var path = Path.Combine(Path.GetTempPath(), $"oom-task-{Guid.NewGuid():N}.xml");
-            File.WriteAllText(path, xml, Utf8);
-            try
-            {
-                var result = runner.Run(new ProcessRequest("schtasks.exe", ["/Create", "/TN", name, "/XML", path, "/F"], Path.GetTempPath(), new Dictionary<string, string>(), string.Empty), TimeSpan.FromSeconds(30));
-                if (result.ExitCode != 0) throw new InvalidOperationException("Zamanlanmış görev kaydedilemedi.");
-            }
-            finally { if (File.Exists(path)) File.Delete(path); }
-        }
-        internal void Unregister(string name) => runner.Run(new ProcessRequest("schtasks.exe", ["/Delete", "/TN", name, "/F"], Path.GetTempPath(), new Dictionary<string, string>(), string.Empty), TimeSpan.FromSeconds(30));
-    }
-    private sealed class NativeProcessRunner : IProcessRunner
-    {
-        public ProcessResult Run(ProcessRequest request, TimeSpan timeout)
-        {
-            var start = new ProcessStartInfo(request.FileName) { WorkingDirectory = request.WorkingDirectory, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
-            foreach (var argument in request.Arguments) start.ArgumentList.Add(argument);
-            foreach (var pair in request.Environment) start.Environment[pair.Key] = pair.Value;
-            using var process = Process.Start(start) ?? throw new InvalidOperationException("Alt süreç başlatılamadı.");
-            process.StandardInput.Write(request.StandardInput);
-            process.StandardInput.Close();
-            var completed = process.WaitForExit((int)Math.Min(int.MaxValue, timeout.TotalMilliseconds));
-            if (!completed) process.Kill(true);
-            return new ProcessResult(completed ? process.ExitCode : -1, process.StandardOutput.ReadToEnd(), process.StandardError.ReadToEnd(), true, !completed);
-        }
-    }
-    [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
-    private sealed class ShellLink { }
-    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellLinkW
-    {
-        void GetPath(IntPtr file, int size, IntPtr data, uint flags);
-        void GetIDList(out IntPtr idList);
-        void SetIDList(IntPtr idList);
-        void GetDescription(IntPtr name, int size);
-        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
-        void GetWorkingDirectory(IntPtr directory, int size);
-        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
-        void GetArguments(IntPtr arguments, int size);
-        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
-        void GetHotkey(out short hotkey);
-        void SetHotkey(short hotkey);
-        void GetShowCmd(out int showCommand);
-        void SetShowCmd(int showCommand);
-        void GetIconLocation(IntPtr iconPath, int size, out int iconIndex);
-        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string iconPath, int iconIndex);
-        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
-        void Resolve(IntPtr window, uint flags);
-        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
-    }
-    [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IPropertyStore
-    {
-        int GetCount(out uint count);
-        int GetAt(uint index, out PropertyKey key);
-        int GetValue(ref PropertyKey key, out PropVariant value);
-        [PreserveSig] int SetValue(ref PropertyKey key, ref PropVariant value);
-        [PreserveSig] int Commit();
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    private readonly struct PropertyKey
-    {
-        private readonly Guid formatId;
-        private readonly uint propertyId;
-        internal PropertyKey(Guid formatId, uint propertyId) { this.formatId = formatId; this.propertyId = propertyId; }
-    }
-    [StructLayout(LayoutKind.Explicit)]
-    private struct PropVariant : IDisposable
-    {
-        [FieldOffset(0)] private ushort type;
-        [FieldOffset(8)] private IntPtr pointer;
-        internal static PropVariant FromString(string value) => new() { type = 31, pointer = Marshal.StringToCoTaskMemUni(value) };
-        public void Dispose() { if (pointer != IntPtr.Zero) Marshal.FreeCoTaskMem(pointer); pointer = IntPtr.Zero; type = 0; }
-    }
     private const string DefaultConfiguration = """
         {"backend":{"flush":["claude","local"],"compile":["claude"],"claude":{"fast":"claude-haiku-4-5-20251001","smart":"claude-sonnet-5","configDir":".oom\\claude-config"},"local":{"url":"http://localhost:11434/v1","fast":"qwen3:8b","smart":"qwen3:14b","embed":"nomic-embed-text"}},"retrieveMode":"bm25","sweep":{"everyHours":8,"sinceHours":8,"minTurns":3,"maxSessionsPerRun":20,"roots":[]},"compile":{"eveningHour":18,"minIntervalHours":20,"maxDailiesPerRun":3},"context":{"companionDir":"🔮 850-Companion","capChars":16000,"statusLine":true},"retrieve":{"top":3,"perNoteChars":1500,"totalChars":4500,"minOverlap":2,"strictScore":25.0},"mcp":{"enabled":true},"notify":{"toast":true},"extensions":[]}
         """;

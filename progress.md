@@ -441,3 +441,151 @@ k=5'te 14 ıska var. Dördü (`q033`, `q051`, `q108`, `q119`) gold notu ilk 100'
 
 ### Test satırı
 `dotnet test Oom.sln -c Release` → 92 yeşil / 7 kırmızı, kırmızılar tam olarak Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098. Y-040 (title ağırlığı) ve Y-044 (Türkçe katlama) yeşil kaldı.
+
+## Lane D2
+
+Kapsam: Install / Uninstall / v0 göçü boşlukları (`docs/install.md`'nin E şeridinde çıkardığı liste). Sahiplik: `src/Oom/Install/**`, `src/Oom/Notify/**`, `docs/install.md`.
+
+### Kapatılan boşluklar
+
+1. D3 geri düşüşü: Kısayol/AUMID kaydı başarısız olursa `Install.Run` artık düşmüyor. Kayıt `Install/ShortcutRegistration.cs`'e taşındı, `Install` onu `shortcutRegistrar` tohumundan çağırıyor; başarısızlıkta `Registrations` `shortcut:atlandı` taşıyor, `HealthLedger`'a `Warning/toast-kaydi-yok` yazılıyor ve `Install.ToastRegistered` false oluyor. `Notify` aynı kısayolu okuyor: kayıt yoksa `ToastSent=false, ContextQueued=true`.
+2. Uninstall güvenliği: durum kökü ve `quarantine\` artık silinmiyor, `%LOCALAPPDATA%\oom\backup\uninstall-<ts>\` altına taşınıyor (aynı birim değilse dosya dosya kopya). `Registrations`'a `kanıt:<yol>` ekleniyor. `daily/` ve `knowledge/` hiç okunmuyor.
+3. Event Log: HKLM anahtarı önce okunuyor; yalnız süreç zaten yükseltilmişse oluşturuluyor. Olmadıysa `Registrations`'a hiçbir şey eklenmiyor ve `Info/event-log-atlandi` bulgusu yazılıyor. Kurulum kendini yükseltmiyor.
+4. Kurulum sonu: `Run` sonunda `new Doctor(clock).Check(...)` koşuyor, bulgular `Install.Health`'te; `claude-config\settings.json` boş nesne (`{}`) olarak yazılıyor (Spec 6.6 yalıtımı).
+5. Zamanlanmış görev XML'i: `Install`'ın kendi ince XML'i silindi, `Sweep.BuildScheduledTaskXml` tek kaynak. Ölçüldü: `Duration` yok, `PT8H` var, `StartWhenAvailable` var, `PT30M` var, `InteractiveToken` var, pil kısıtı yok.
+6. Hook şablonu: `Install` artık dört kaydı `HookTemplates.Build`'den tüketiyor (kendi kopyası kaldırıldı).
+7. `--from-v0`: `Install/Migration.cs` olarak gerçek göç; on iki adım, hepsi idempotent ve raporlu. `--dry-run` aynı kod yolunu hiçbir şey yazmadan koşuyor.
+
+### Yan bulgular (bu şeritte düzeltildi)
+
+- `RegisterToastShortcut` içindeki `PKEY_AppUserModel_ID` GUID'i 31 haneliydi (`9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F`); `new Guid(...)` her çağrıda `FormatException` atıyordu, yani toast kaydı gerçek bir vault'ta hiç çalışmamış ve eski kodda tüm kurulumu düşürüyordu. Doğru değer `…D5FA` olarak düzeltildi.
+- `InstallHooks` `settings.json.bak-<ts>` kopyasını `overwrite: false` ile alıyordu; aynı saniyede ikinci kurulum tüm kurulumu düşürüyordu. Spec 6.11 idempotentlik istediği için `true` yapıldı.
+
+### v0 göçü — dry-run kanıtı
+
+Sentetik v0 yerleşimi (temp): `.claude/scripts/.state/` içinde `compile-state.json` (2 ingested + 1 rejected + 1 parked + 1 quarantined), iki `flush-<sha256>.json`, `flush-tara.json` (2 transkript), `calls.jsonl` (2 satır), `mutabakat.json` (3 oturum, 2'si kapsanmamış), `red/` (2 dosya); `.stage/karantina/sema/` (1 not + sidecar); v0'ın altı hook satırını taşıyan sentetik `settings.json`; dokunulmaması gereken `daily/` ve `knowledge/`.
+
+```
+v0-göç: yedek — planlandı: …\state-root\backup\v0-20260909-134000
+v0-göç: compile-state.json → daily_ingest — 5 satır (planlandı)
+v0-göç: flush durum dosyaları → sessions — 2 satır (planlandı)
+v0-göç: flush-tara.json → sweep_stamps — 2 satır (planlandı)
+v0-göç: calls.jsonl → calls — 2 satır (planlandı)
+v0-göç: .stage/karantina → quarantine — 1 satır (planlandı)
+v0-göç: red/ → retry_queue — 2 satır (planlandı)
+v0-göç: mutabakat.json → kapsanmayan oturumlar — 1 satır (planlandı) (2 kapsanmayan)
+v0-göç: v0 hook satırları (6) kaldırıldı — 6 satır
+v0-göç: v0 görevi OdenaOS-Flush kaldırıldı — planlandı
+v0-göç: .claude/scripts + .claude/hooks → backup — scripts, hooks
+v0-göç: daily/, knowledge/, companion — dokunulmadı
+```
+
+Dry-run sonrası diskte hiçbir değişiklik yok: `state-root` oluşmadı, `settings.json` altı satırını hâlâ taşıyor, `.claude/scripts` ve `.claude/hooks` yerinde. Aynı yerleşimin kopyası üzerinde gerçek koşum bütün satırları `(planlandı)` eki olmadan yazdı; `state.db` doğrulaması: `daily_ingest` 5, `sessions` 2, `sweep_stamps` 2, `calls` 2, `quarantine` 1, `retry_queue` 2, `coverage` 1 (`uncovered_json = ["sess-beta","sess-gama"]`). `settings.json`'da yalnız v0'a ait olmayan `echo baskasinin-kancasi` satırı ve `model` anahtarı kaldı. `daily/` ve `knowledge/` değişmedi. İkinci koşum: `daily_ingest/sessions/sweep_stamps/calls/red/mutabakat` hepsi `kaynak yok`, `quarantine` `INSERT OR REPLACE` ile aynı 1 satır — çift kayıt yok.
+
+### Ruling ve Blocked-by
+
+Ruling: `State` (A şeridi) `daily_ingest`, `sessions`, `sweep_stamps`, `calls`, `quarantine`, `retry_queue` ve `coverage` için genel yazıcı sunmuyor; göç satırları `Install/Migration.cs` içinde `Microsoft.Data.Sqlite` ile, `Install`'ın kurduğu şemaya karşı yazılıyor. Anahtarlı tablolar `INSERT OR REPLACE`, anahtarsız `calls`/`coverage` ilk zaman damgasıyla korunuyor.
+
+Ruling: Event Log kaynağı için `System.Diagnostics.EventLog` ayrı bir NuGet paketi ve yeni paket yasak; kayıt `Microsoft.Win32.Registry` ile HKLM anahtarı üzerinden yapılıyor. Yükseltme istenmiyor — Spec 6.11 "gerekmezse Event Log atlanır ve `logs\` yeter" diyor, kurulum kendini yükseltmez ve yükseltilmemiş koşumda kaydı iddia etmez.
+
+Ruling: Spec 13'ün `notes.db` yeniden kurulumu ve `index-full.md`/`hubs/` yeniden üretimi göçe alınmadı; bunlar türetilmiş çıktı ve `doctor --fix` ile ilk compile zaten üretiyor. Göç yalnız türetilemeyen durumu taşıyor.
+
+Ruling: `src/Oom/Program.cs` (hiçbir şeridin bileşen klasöründe değil) `install` dalında dört satır değişti: `--vault`, `--dry-run` ve göç raporunun basılması. Davranış Install'da; Program yalnız bayrağı geçiriyor.
+
+Ruling: Testleri gerçek makineye yazdırmamak için `Install`'a üç isteğe bağlı tohum eklendi (`userSettingsPath`, `mcpCandidates`, `shortcutRegistrar`/`eventLogRegistrar`); hiçbir mevcut public imza değişmedi, hepsi varsayılanıyla üretim davranışını koruyor.
+
+Blocked-by: lane B HookTemplates — `Build(executablePath)` içindeki `SessionEnd` ve `PreCompact` komutları `"<exe>" flush --reason sessionend|precompact`; Spec §5 `flush --session <id> --reason sessionend|precompact` istiyor. Gereken tam değişiklik: iki komut, hook stdin'inden gelen `session_id`'yi `--session` argümanına bağlayacak biçimde tamamlanmalı (kayıt zamanında oturum kimliği bilinmediği için ya `flush` komutu hook girdisini stdin'den okuyup `--session`'ı kendi doldurmalı, ya da komut dizesi `flush --hook --reason sessionend` gibi bir biçime çekilip Spec §5 tablosu ona göre düzeltilmelidir). `Install` şablonu olduğu gibi tüketiyor, kendi kopyasını tutmuyor.
+
+### Ölçüm
+
+Test: `dotnet test Oom.sln -c Release` — Başarısız: 7, Başarılı: 92, Atlanan: 0, Toplam: 99; kırmızılar Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098 (giriş durumuyla aynı yedi).
+
+Line counts: `Install.cs` 449; `Migration.cs` 379; `ShortcutRegistration.cs` 177; `InstallRuntime.cs` 76; `Notify.cs` 57; `Program.cs` 175; `docs/install.md` 110. Install modülü dosya başına 450 tavanının altında (toplam 1.081); `src/Oom` toplamı 6.257/7.500 (Y-068 yeşil).
+
+<!-- yazan: claude · opus -->
+## Lane D3
+
+Kapsam: D2'nin Install/Uninstall/Göç taslağını `main` (`e64566c`) üzerine sahiplik kuralıyla almak (A bölümü) ve INT-2'nin canlı kabul koşumunda görülen dört kalıntıyı kapatmak (B bölümü). Commit yok, push yok.
+
+### Şerit kurulumu — sapma
+
+Bana verilen dizin `E:\OdenaWorks\10-Aktif\oom-lane-D3` **Oom deposunun değil, `E:\OdenaOS` kasasının** bir worktree'siydi (`gitdir: E:/OdenaOS/.git/worktrees/oom-lane-D3`, HEAD `74fbe242`). Brief `e64566c`'den ayrık bir Oom worktree'si tarif ediyor; o dizinde çalışmak `E:\OdenaOS`'in git yönetim alanına yazmak demekti ve sert kural bunu yasaklıyor. `E:\OdenaOS`'e hiç dokunmadım: doğru worktree'yi `origin-of-memory` deposundan **`E:\OdenaWorks\10-Aktif\oom-lane-D3-oom`** olarak açtım (`git worktree add --detach … e64566c`). Bütün iş oradadır. `E:\OdenaOS` HEAD'i oturum boyunca `74fbe242` kaldı.
+
+### A bölümü — birleştirme kararları (dosya dosya)
+
+`git cherry-pick -n ba12fed` iki çakışma verdi; kalan dosyalar temiz uygulandı çünkü INT-2 `Install/**` ve `Notify/Notify.cs`'e hiç dokunmamıştı.
+
+- `src/Oom/Program.cs` — çakışma yalnız kullanım metnindeydi. INT-2'nin yapısı korundu, `mcp` satırı INT-2'nin (`stdio JSON-RPC`), `install` satırına D2'nin `--dry-run`'ı eklendi. Dağıtıcıdaki `install` dalı (`--vault`, `--uninstall`, `--from-v0`, `--dry-run`, göç raporunun basılması) INT-2'nin `switch`'i içine sorunsuz oturdu.
+- `progress.md` — iki taraf da ekleme yapıyordu; ikisi de korundu.
+- `src/Oom/Install/InstallRuntime.cs` — D2'nin `CreateState` şeması silindi (lane A'nın `State` kurucusu aynı şemayı kuruyor; üstelik D2'nin kopyası `notes`/`notes_fts`'i üç sütunlu kuruyordu, `Retrieve` ise beş sütunlu kurup düşürüyor — kopya yanlıştı). `NativeProcessRunner` silindi, INT-2'nin `WindowsProcessRunner`'ı kullanılıyor. `SystemClock` silindi, `Infrastructure`'ınki kullanılıyor. Dosya 76 → 39 satır; geriye yalnız `schtasks` kaydedicisi kaldı.
+- `src/Oom/Install/Install.cs` — `WriteIsolatedClaudeConfiguration` silindi, INT-2'nin `ClaudeIsolation.Prepare`'i çağrılıyor. `RootKeys` artık `OomSettings.KnownKeys`'ten geliyor. Zamanlanmış görev XML'i (`Sweep.BuildScheduledTaskXml`) ve hook şablonu (`HookTemplates.Build`) zaten D2'de tek kaynaktan geliyordu; öyle bırakıldı — D2'nin `Blocked-by` kaydı INT-2'de kapalı.
+- `src/Oom/Notify/WindowsNotifier.cs` (INT-2 sahibi) — `IsRegistered()` kendi Start menüsü taramasını bırakıp D2'nin `ShortcutRegistration.IsRegistered`'ına devrediyor; `ApplicationId` artık `ShortcutRegistration.ApplicationUserModelId`. Kısayolu yazan kod, "orada mı?" sorusunun tek dürüst kaynağıdır.
+- D2'nin iki hata düzeltmesi korundu: `PKEY_AppUserModel_ID` GUID'i `…D5FA` (31 haneli hâli her çağrıda `FormatException` atıyordu) ve `settings.json.bak-<ts>` kopyasının `overwrite: true` olması.
+
+### A bölümü — kanıt koşumunda çıkan dört gerçek kusur (düzeltildi)
+
+1. **Durum kökü iki farklı yerde hesaplanıyordu.** `Install.StateRoot` yolu `ToUpperInvariant()` ile hash'liyordu, çalışan exe'nin kullandığı `VaultPaths.StateDatabase` ise yolu yazıldığı gibi hash'liyor. Aynı vault için `a5d8aa86c6092fe9` ve `063f3cc3ae06c9f9`: `install --from-v0` bütün v0 satırlarını exe'nin hiç açmadığı bir dizine göç ettiriyordu. `Install` artık lane C'nin `LaneCVaultPaths.StateRoot`'unu çağırıyor.
+2. **Kurulum, kendisine ait olmayan hook'ları siliyordu.** `SetHook` olayın bütün dizisini `hooks[name] = new JsonArray(…)` ile değiştiriyordu; sentetik `settings.json`'daki `echo baskasinin-kancasi` satırı kurulumda yok oldu. Artık yalnız `oom.exe` taşıyan girdiler tazeleniyor, geri kalan olduğu gibi taşınıyor.
+3. **Göç birimler arasında düşüyordu.** `MoveLegacyTrees`'in `Directory.Move`'u vault (E:) ile `%LOCALAPPDATA%` (C:) arasında `IOException` atıyor ve bütün kurulumu düşürüyordu — yol haritasının 4. adımı tam olarak bu yerleşim. Kopya + silme yedeği eklendi.
+4. **Uninstall kanıtı vault'a atfedilmiyordu.** Arşiv `%LOCALAPPDATA%\oom\backup\uninstall-<ts>` idi; aynı saniyede iki vault birbirinin kanıtını eziyordu. Artık `…\backup\<vault-hash>-uninstall-<ts>`.
+
+### B bölümü
+
+1. **Yerel saat.** `Flush.EventTime` sonucu `TimeZoneInfo.ConvertTime(…, TimeZoneInfo.Local)` ile döndürüyor; başlık, `ts:` çapası ve daily dosya adı aynı kaynaktan geldiği için üçü birden yerelleşti. Kanıt: `Z` damgalı sentetik transkript (`.e2e/utc_session.py`) → `### Oturum (15:57), tarama` ve `ts:2026-09-09T15:57:00+03:00`, son tur `2026-09-09T12:57:00.000Z`. Y-008 yeşil (açık `+03:00` fixture'ları anı karşılaştırıyor).
+2. **Doktor kapsama penceresi.** `SweepRun` artık `coverage` satırını yalnız son tur'u 7 gün içinde olan oturumlar üzerinden yazıyor (`CoverageWindowDays = 7`); tüm zamanlar sayısı `sweep/kapsama-tum-zamanlar` sağlık satırı olarak duruyor. `Program.Snapshot` bütün `coverage` satırlarını toplamak yerine en yeni satırı okuyor — toplama farklı pencereleri karıştırıyordu. Y-003/Y-047 yeşil (ikisi de `Sweep.Run` fixture yolunu kullanıyor, kalıcı satırı değil).
+3. **Jeton muhasebesi.** `Runner.ReadUsage` `modelUsage`'ın bütün girdilerini topluyor (tek çağrı ara fallback'te iki model taşıyabilir) ve `in_tok`'u gerçek istem girdisi yapıyor: `inputTokens + cacheCreationInputTokens + cacheReadInputTokens`. `cache_w` artık hem okunuyor hem yazılıyor — `State.RecordCall`'ın INSERT'ü `cache_w` sütununu hiç doldurmuyordu. Kanıt: elle yazılmış `captured-claude.json` (gerçek çağrı yok) → `in_tok=15370 out_tok=512 cache_r=14336 cache_w=1024`, `usage_source=actual`. Canlı koşumdaki `in_tok=10` tam olarak `inputTokens`'ın önbelleklenmemiş artık olmasıydı.
+4. **`--vault` + `.oom` yerleşimi ve config hatası.** `--vault` verildiğinde `oom.json` `<vault>\.oom\oom.json`'dan okunuyor (doctor `sweep.roots` satırı sentetik kökü gösteriyor). `OomSettings.Load` artık okunamayan dosyayı `LoadError`'da taşıyor ve doctor'da `config hata json` satırı olarak, `--quiet`'te de stderr'de görünüyor; sessiz varsayılana düşüş bitti.
+
+### Sert kural — canlı makineye dokunulmadı
+
+Kanıt koşumları sentetik vault (`.e2e/vault`, `.e2e/v0vault`) ve sahte profil (`.e2e/profile`) üzerinde. `SpecialFolder.UserProfile` kabuktan geldiği için ortam değişkeniyle yönlendirilemiyor; bu yüzden yalıtım tohumlarla yapıldı (`userSettingsPath`, `mcpCandidates`, `scheduler`, `processRunner`, `shortcutRegistrar`, `eventLogRegistrar`). Geriye kalan tek canlı okuma — `ClaudeIsolation`'ın bu makinenin Claude kimliğini yalıtılmış dizine kopyalaması — yalıtılmış dizine daha yeni bir yer tutucu koyularak etkisizleştirildi (`Prepare` "güncel" dönüp hiçbir şey kopyalamadı).
+
+```
+önce  userSettings   167f818ad90e98efc23164c8eb0d0b090f63377f24f9169f736ad9b3887a8581  2615 bayt
+sonra userSettings   167f818ad90e98efc23164c8eb0d0b090f63377f24f9169f736ad9b3887a8581  2615 bayt
+önce  claudeDesktop  9ebc6344403835a4ad4c0d3c5a28cbdf0186c06d03102b78d1339fe7ff52a1de  3334 bayt
+sonra claudeDesktop  9ebc6344403835a4ad4c0d3c5a28cbdf0186c06d03102b78d1339fe7ff52a1de  3334 bayt
+önce/sonra  schtasks /Query | grep -ic oom = 0 · Start menüsü "oom" = 0
+E:\OdenaOS HEAD 74fbe242 (değişmedi; hiçbir komut oraya yazmadı)
+%LOCALAPPDATA%\oom yeni girdiler: ab4df82b2af7e36b (.e2e\vault), 063f3cc3ae06c9f9 (.e2e\v0vault), backup\ (uninstall kanıtı) — üçü de sentetik
+```
+
+### Sentetik uçtan uca (INT-2 reçetesi + D3 eklentileri)
+
+```
+sweep --dry-run → sweep: 5 blok, 5 çapa
+ikinci sweep    : 5 blok (idempotent)
+mtime değişti   : 5 blok (içerik değişmedi, yeniden açılmadı)
+ayrık flush     : 6 blok, kanca dönüşü 86 ms
+doctor          : kapsama %100 · ret %0 · bekleyen 1
+doctor satırı   : sweep bilgi kapsama-tum-zamanlar "Tüm zamanlar kapsama: 5/5"
+doctor satırı   : doctor bilgi coverage 7d "Son 7 gün kapsama: %100,0"
+doctor --json   : schema_version 1, coverage/rejection_rate/pending/items
+mcp             : initialize · tools/list · tools/call yanıtladı
+Z transkript    : ### Oturum (15:57) · ts:…T15:57:00+03:00
+bozuk oom.json  : config hata json — "okunamadı, varsayılanlar kullanılıyor"
+install probe   : dry-run yazmadı; gerçek koşum daily_ingest=5 sessions=2 sweep_stamps=2
+                  calls=2 quarantine=1 retry_queue=2 coverage=1 uncovered=["sess-beta","sess-gama"]
+ikinci install  : aynı sayılar (idempotent); daily/ ve knowledge/ dokunulmadı;
+                  başkasının kancası duruyor; v0'ın altı satırı gitti
+```
+
+### Ölçüm
+
+Test: `dotnet test Oom.sln -c Release` — Başarısız: 8, Başarılı: 91, Atlanan: 0, Toplam: 99. Yedi bilinen kırmızı aynen duruyor (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098). Sekizinci kırmızı **Y-068**: satır bütçesi.
+
+Line counts: `Install.cs` 465; `Migration.cs` 382; `ShortcutRegistration.cs` 177; `InstallRuntime.cs` 39; `Notify.cs` 57; `WindowsNotifier.cs` 103; `Flush.cs` 499; `SweepRun.cs` 316; `Runner.cs` 478; `State.cs` 502; `Doctor.cs` 196; `Configuration.cs` 206; `Program.cs` 652; `docs/install.md` 110. `src/Oom` toplamı **8.073** (Y-068 tavanı 7.500).
+
+### Ruling ve Blocked-by
+
+Ruling: Bana verilen `oom-lane-D3` dizini `E:\OdenaOS` kasasının worktree'siydi, Oom deposunun değil. Sert kural gereği oraya hiç yazmadım; doğru worktree `oom-lane-D3-oom` olarak `origin-of-memory`'den `e64566c` üzerinde açıldı ve bütün iş oradadır.
+
+Ruling: `Install`'ın kendi durum şeması, kendi süreç işleticisi, kendi saati ve kendi `claude-config` yazıcısı silindi; hepsi INT-2/lane A'nın uygulamasını çağırıyor. `Migration.cs` kopya değildir — lane A `daily_ingest`, `sessions`, `sweep_stamps`, `calls`, `quarantine`, `retry_queue`, `coverage` için genel yazıcı sunmuyor, satırlar `Microsoft.Data.Sqlite` ile `State`'in kurduğu şemaya yazılıyor.
+
+Ruling: Kanıt koşumunu `oom.exe install` ile canlı koşmadım. `Install`'ın varsayılanları gerçek `settings.json`'ı, gerçek `claude_desktop_config.json`'ı, Start menüsünü ve Task Scheduler'ı yazar; yalıtım ancak kurucu tohumlarıyla mümkün, o da ancak kod içinden. Bu yüzden kanıt `.e2e/probe/` altındaki ayrı bir konsol projesiyle alındı — `Oom.sln`'e dâhil değil, `src/` altında değil, ürüne girmiyor.
+
+Ruling: Jeton muhasebesi hiçbir gerçek model çağrısı yapılmadan, elle yazılmış `captured-claude.json` üzerinden doğrulandı; `in_tok` artık `input + cacheCreation + cacheRead` toplamıdır ve iki önbellek yarısı `cache_r`/`cache_w`'de ayrıca durur.
+
+Blocked-by: **Y-068 satır bütçesi — Master kararı gerekiyor.** `main` 7.318 satırla (obj ile 7.390) 7.500 tavanının 110 satır altındaydı; D2'nin taslağı 632 satır yeni yetenek getiriyor (`Migration.cs` 382, `ShortcutRegistration.cs` 177 COM interop dâhil, `InstallRuntime.cs` 39) ve B bölümü ~60 satır ekliyor. Bulabildiğim bütün gerçek kopyaları sildim (~90 satır); kalan açık **573 satır**. Bunu kapatmanın dürüst bir yolu yok: yetenek silmeden 573 satır çıkarılamıyor ve `tests/**` düzenlenemiyor. Karar Master'ın: ya Y-068'in 7.500 tavanı yükseltilir (modül tavanları için zaten bekleyen spec değişikliğiyle birlikte), ya D2'nin kapsamı küçültülür. Ben tavanı kendi başıma değiştirmedim ve kodu tavan uğruna okunmaz hâle getirmedim.
+
+Blocked-by (küçük): Üç ayrı üretim `IClock` var — `SystemClock` (Boundaries) `OOM_FAKE_NOW`'u **okumuyor**, `FlushSystemClock` ve `VaultClock` okuyor. Yani `State`, `Runner`, `WindowsNotifier` ve `Install` sahte saati yok sayarken `Flush`/`Sweep`/`Retrieve` sayıyor: `OOM_FAKE_NOW` ile koşulan bir kanıtta daily'ler sahte, `calls`/`health`/`coverage` gerçek zamanla damgalanır. Tek saatte birleştirmek ~20 satır kazandırır ve bu tutarsızlığı kapatır; bu şeridin görevi olmadığı ve 92 yeşili riske atmamak için dokunmadım.

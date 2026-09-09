@@ -12,7 +12,7 @@ namespace Oom.Contracts;
 public sealed class WindowsNotifier(State? state = null, string? applicationId = null, IClock? clock = null) : INotifier
 {
     /// <summary>The identity <c>install</c> registers for the Start menu shortcut (spec 6.8, D3).</summary>
-    public const string ApplicationId = "OdenaStudio.OriginOfMemory";
+    public const string ApplicationId = ShortcutRegistration.ApplicationUserModelId;
 
     private const int DedupeDays = 7;
 
@@ -37,22 +37,12 @@ public sealed class WindowsNotifier(State? state = null, string? applicationId =
         return Last = new NotificationResult(Toast(line), true, line);
     }
 
-    /// <summary>Whether a toast can be shown at all: the Start menu shortcut carries the AUMID.</summary>
-    public bool IsRegistered()
-    {
-        try
-        {
-            var programs = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
-            return programs.Length > 0
-                && Directory.Exists(programs)
-                && Directory.EnumerateFiles(programs, "*.lnk", SearchOption.TopDirectoryOnly)
-                    .Any(path => Path.GetFileNameWithoutExtension(path).Contains("Origin of Memory", StringComparison.OrdinalIgnoreCase));
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
+    /// <summary>
+    /// Whether a toast can be shown at all. The answer is the shortcut lane D2's
+    /// <see cref="ShortcutRegistration"/> writes — the writer of the AUMID is the only honest
+    /// source for "is it there?", so this no longer scans the Start menu on its own.
+    /// </summary>
+    public bool IsRegistered() => ShortcutRegistration.IsRegistered;
 
     private bool Toast(string line)
     {

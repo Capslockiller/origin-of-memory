@@ -1,11 +1,11 @@
 ---
-yazan: codex
-model: gpt-5
+yazan: codex, opus
+model: gpt-5, opus-5
 ---
 
 # Installation
 
-Origin of Memory 2.0 is still under rebuild. The installer code exists, but the clean Windows acceptance gate is red in the 2026-09-09 measurement. Use this page as an implementation record, not as a claim that installation is production-ready.
+Origin of Memory 2.0 is still under rebuild. This page is an implementation record of what `oom install` does today, not a claim that installation is production-ready: the clean Windows acceptance chain (`Y-069`) is still red in the 2026-09-09 measurement.
 
 ## Requirements
 
@@ -17,7 +17,7 @@ For a fully qualified vault path, `Install.Run` checks all prerequisites before 
 
 The running program must be a published file named `oom.exe`; otherwise the binary-copy step fails. The project currently builds with .NET 9 and targets .NET 10 LTS after the D1 SDK transition.
 
-## What `oom install` currently does
+## What `oom install` does
 
 Given `<vault>`, the installer:
 
@@ -25,18 +25,20 @@ Given `<vault>`, the installer:
 2. Creates `%LOCALAPPDATA%\oom\<vault-hash>\` with `state.db`, `backup\`, and `logs\`.
 3. Applies a current-user-only Windows ACL to `claude-config`, `quarantine`, the state root, and `backup`.
 4. Writes missing `vault.json`, `oom.json`, and `hub-config.json`, preserving existing files.
-5. Copies the running `oom.exe` into `<vault>\.oom\oom.exe` when it is not already there.
-6. Creates the SQLite schema with WAL, a 5-second busy timeout, and schema version 1.
-7. Merges four user-level Claude hooks into `%USERPROFILE%\.claude\settings.json`, after copying the old settings file into the local state backup directory.
-8. Registers `OdenaOS Memory Sweep` by writing XML to a temporary file and invoking `schtasks.exe /Create /TN ... /XML ... /F`.
-9. Adds an `oom` entry to the standard or MSIX Claude Desktop `claude_desktop_config.json`.
-10. Creates a Start-menu shortcut carrying AppUserModelID `OdenaStudio.OriginOfMemory`.
+5. Writes `claude-config\settings.json` as `{}` when it is missing — an empty file is the isolation spec 6.6 asks for: no hooks, no plan mode, no skills. An existing file (which may carry the credential link) is left alone.
+6. Copies the running `oom.exe` into `<vault>\.oom\oom.exe` when it is not already there.
+7. Creates the SQLite schema with WAL, a 5-second busy timeout, and schema version 1.
+8. Merges the four user-level Claude hooks into `%USERPROFILE%\.claude\settings.json`, after copying the old settings file into the local state backup directory. The merge replaces only entries whose command names `oom.exe`; another tool's hook registered under the same event is carried over untouched.
+9. Registers `OdenaOS Memory Sweep` by writing `Sweep.BuildScheduledTaskXml` to a temporary file and invoking `schtasks.exe /Create /TN ... /XML ... /F`.
+10. Adds an `oom` entry to the standard or MSIX Claude Desktop `claude_desktop_config.json`.
+11. Attempts the Start-menu shortcut carrying AppUserModelID `OdenaStudio.OriginOfMemory`, then the Event Log source.
+12. Runs `Doctor` and keeps its findings on `Install.Health`.
 
-The result object lists an Event Log registration, but no Event Log API or command is called in `Install.Run`. The installer also does not call `Doctor` at the end and does not populate the isolated Claude configuration with credentials or an empty settings file. Those steps are planned by the 2.0 install contract.
+`InstallResult.Registrations` now lists only what actually happened. Every entry is appended at the moment its step succeeds, so the result can no longer claim a registration the machine refused.
 
 ## Hooks
 
-All four registrations are user-level commands containing an absolute path to `<vault>\.oom\oom.exe`; none calls PowerShell or Python.
+The four registrations come from `HookTemplates.Build`; `Install` consumes that template rather than restating it, so the two cannot drift. All four are user-level commands containing an absolute path to `<vault>\.oom\oom.exe`; none calls PowerShell or Python.
 
 | Event | Command | Timeout |
 | --- | --- | ---: |
@@ -45,36 +47,64 @@ All four registrations are user-level commands containing an absolute path to `<
 | `SessionEnd` | `"<vault>\.oom\oom.exe" flush --reason sessionend` | 15 s |
 | `PreCompact` | `"<vault>\.oom\oom.exe" flush --reason precompact` | 15 s |
 
-The templates contain the same four events. They do not put a session ID on the flush command; completing the hook-input-to-session binding is planned.
+The flush commands still carry no `--session <id>`, which spec 5 asks for. The template belongs to lane B; `Install` writes it as it is and the gap is recorded in `progress.md` as a `Blocked-by:` line. `HookTemplates.LaunchDetached` already passes both `--session` and `--reason` to the detached child, so only the registered command string is short.
 
 ## Scheduled task
 
-The registration mechanism implements D4: an XML file is passed to `schtasks /Create /XML`; Task Scheduler COM interop is not used. The XML produced inside `Install` currently specifies an eight-hour repetition and `WakeToRun`. It does not yet contain the fuller settings implemented separately by `Sweep.BuildScheduledTaskXml`—interactive token, run-if-missed, no battery restriction, 30-minute execution limit, and no repetition-duration element—so consolidating the two XML builders is planned.
+Install and `Sweep` now share a single XML builder, `Sweep.BuildScheduledTaskXml` (D4: an XML file passed to `schtasks /Create /XML`; no Task Scheduler COM interop). The XML has an eight-hour repetition with **no** `Duration` element (`Y-009`), `StartWhenAvailable` for a missed run, an `InteractiveToken` logon type so the task only runs while the user is signed in, a 30-minute `ExecutionTimeLimit`, and no battery restriction. The second, thinner XML that used to live inside `Install` (and carried `WakeToRun`) is gone.
 
 ## Toast registration
 
-The installer creates `Origin of Memory.lnk` under the user's Start-menu Programs directory and stores AppUserModelID `OdenaStudio.OriginOfMemory` on the shortcut through `IShellLinkW` and `IPropertyStore`. This implements the D3 registration primitive. There is no explicit registry entry; uninstall deletes the shortcut.
+The installer creates `Origin of Memory.lnk` under the user's Start-menu Programs directory and stores AppUserModelID `OdenaStudio.OriginOfMemory` on it through `IShellLinkW` and `IPropertyStore` (`Install/ShortcutRegistration.cs`).
 
-If shortcut creation fails, `Install.Run` currently returns failure. The planned D3 behavior is to complete installation without toast and use only the next SessionStart notification line.
+If that fails, **installation still succeeds** (D3). The result carries `shortcut:atlandı` instead of `aumid:…`/`shortcut`, a `Warning`/`toast-kaydi-yok` health item is recorded in the ledger and on `Install.Health`, and `Install.ToastRegistered` is false. `Notify` reads the same shortcut: with no AUMID registration it returns `ContextQueued` with `ToastSent` false, so the notification reaches the user only through the next SessionStart line — the fallback spec 6.8 already describes.
+
+The shortcut's presence is the machine's own answer to "can a toast fire here?", which is why `Notify` asks it rather than trusting a flag.
+
+## Event Log
+
+The Event Log source lives under `HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\oom`. Reading that key needs no elevation; creating it does. So the installer reads first, creates only when the process is already elevated, and otherwise **skips it silently** and records an `Info`/`event-log-atlandi` item saying that `logs\` suffices — spec 6.11's own fallback. `event-log:oom` appears in `Registrations` only when the source really exists. The installer never elevates itself.
 
 ## `--uninstall`
 
-`oom install --uninstall` currently removes:
+`oom install --uninstall` reverses the install and **never deletes evidence**.
 
-- `.oom\oom.exe`, `vault.json`, `oom.json`, and `hub-config.json`;
-- `.oom\claude-config\` and `.oom\quarantine\`;
-- the entire `%LOCALAPPDATA%\oom\<vault-hash>\` state root;
-- matching `oom.exe` entries from the four user hooks;
-- the scheduled task, MCP entry, and Start-menu shortcut.
+Removed outright (all of them reproducible from the release or from the vault):
 
-It does not address the Event Log source and does not touch `daily\` or `knowledge\`. Because it removes the state root and quarantine directory recursively, back up any evidence or local state you need before running it.
+- `.oom\oom.exe`, `vault.json`, `oom.json`, `hub-config.json`;
+- `.oom\claude-config\`;
+- the four `oom.exe` hook entries, the scheduled task, the MCP entry, the Start-menu shortcut and its AUMID, and the Event Log source when this process may remove it.
+
+Moved, not deleted:
+
+- `<vault>\.oom\quarantine\` → `%LOCALAPPDATA%\oom\backup\<vault-hash>-uninstall-<ts>\quarantine\`
+- `%LOCALAPPDATA%\oom\<vault-hash>\` (state.db, backup, logs) → `%LOCALAPPDATA%\oom\backup\<vault-hash>-uninstall-<ts>\state\`
+
+The archive path is returned in `Registrations` as `kanıt:<path>`. A move is used, with a file-by-file copy as the cross-volume fallback. `daily\` and `knowledge\` are not touched at all, and neither is the Companion directory. Deleting the archive is a decision for the operator, not for the uninstaller.
 
 ## `--from-v0`
 
-`oom install --from-v0` currently creates `%LOCALAPPDATA%\oom\<vault-hash>\backup\v0-<timestamp>\RECOVERY.txt` before the normal install path. A test-only path containing `backup-fails` returns before writes.
+`oom install --from-v0` runs the spec 13 migration. Every step is idempotent and reports one line; `oom install --from-v0 --dry-run` runs the identical code path, writes nothing, and prints the plan.
 
-The full migration remains planned. The current code does not import `compile-state.json`, flush cursors, sweep stamps, calls, rejected summaries, quarantine, or uncovered-session reconciliation; it does not rebuild v0 indexes; it does not remove the six exact v0 hook lines or `OdenaOS-Flush`; and it does not move legacy `.claude\scripts\` or `.claude\hooks\` into backup. The target contract preserves `daily\`, `knowledge\`, and Companion content and finishes with `oom doctor` and `oom bench` only after those migrations are implemented.
+Order of the twelve steps, each of which reports `kaynak yok` when there is nothing to do:
+
+1. **Backup gate.** When the vault is a git work tree, `git stash create` makes a commit object without touching the working tree and `refs/oom/v0-<ts>` keeps it alive; otherwise `.claude\scripts\` and `.claude\hooks\` are copied into `backup\v0-<ts>\`. Either way a `RECOVERY.txt` marker is written and verified — nothing else runs until it exists. A vault path containing `backup-fails` returns before any write (`Y-074`).
+2. `compile-state.json` → `daily_ingest` (`ingested`, `rejected`, `parked`, `quarantined` become the `status` column).
+3. `flush-<sha256>.json` state files → `sessions` (transcript paths come from `mutabakat.json`).
+4. `flush-tara.json` → `sweep_stamps` (epoch `mtime` becomes an ISO string; an incomplete stamp becomes `partial`).
+5. `calls.jsonl` → `calls`.
+6. `.stage\karantina\` → `<vault>\.oom\quarantine\` plus a `quarantine` row per file, keyed by the file's SHA-256.
+7. `red\` rejected summaries → `retry_queue`, one row per session id parsed out of the file name.
+8. `mutabakat.json` → one `coverage` row whose `uncovered_json` lists the sessions v0 never summarised; spec 6.3 makes the next sweep prioritise exactly that list, so those sessions are queued for the first ingest rather than replayed here.
+9. The **six** v0 hook commands (`session-start`, `prompt-counter`, `memory-retrieve`, `flush-launch -Reason sessionend`, `session-end`, `flush-launch -Reason precompact`) are removed from the user `settings.json` **by exact string match** against v0's `powershell -NoProfile -ExecutionPolicy Bypass -File "<vault>\.claude\hooks\<script>"` form. Anything else in the file survives. The four 2.0 hooks are written by the normal install step.
+10. The v0 scheduled task `OdenaOS-Flush` is deleted; `OdenaOS Memory Sweep` is registered by the normal install step.
+11. `.claude\scripts\` and `.claude\hooks\` are **moved** into `backup\v0-<ts>\claude-scripts\` and `…\claude-hooks\` — the same names the backup copy used, so a finished migration leaves one copy of each, not two.
+12. `daily\`, `knowledge\` and the Companion directory are not touched.
+
+Re-running the migration is safe: the keyed tables use `INSERT OR REPLACE`, `calls` and `coverage` are guarded by the first timestamp they would insert, and every file-moving step reports `kaynak yok` once its source is already in the backup.
+
+Rebuilding `notes.db`, `index-full.md` and `hubs\` (also part of spec 13) is not done by the migration: those are derived artefacts and `oom doctor --fix` / the first compile regenerate them.
 
 ## Verification
 
-After installation is completed in a later integration build, the acceptance sequence is: install on a clean Windows 11 VM, create a session, run `oom sweep`, verify an anchored daily block, force compile time with `OOM_FAKE_NOW`, verify concept/root-map/index output, then verify retrieval in a new session. That chain is not green in the current scar suite (`Y-069`).
+The acceptance sequence is unchanged: install on a clean Windows 11 VM, create a session, run `oom sweep`, verify an anchored daily block, force compile time with `OOM_FAKE_NOW`, verify concept/root-map/index output, then verify retrieval in a new session. That chain is still red in the scar suite (`Y-069`).
