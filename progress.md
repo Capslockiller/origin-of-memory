@@ -374,3 +374,70 @@ Owner decision (2026-09-09): Install/Uninstall/`--from-v0` stay out of `main` (l
 - Runner.ReadUsage sums all modelUsage entries; `in_tok` = input + cacheCreation + cacheRead; `cache_w` recorded.
 - OomSettings.LoadError → doctor `config hata json` (fail loud) instead of silent defaults.
 Test: Başarısız 7, Başarılı 92, Toplam 99 (same 7 reds). src/Oom 7 376 lines.
+
+## Lane R2 — sıralama düzeltildi (kapı 5 geçti), kanca kapısı seçer hâle geldi
+
+### Ne yapıldı
+- `src/Oom/Notes/TurkishFold.cs`: `TokenizeAll` eklendi (her token tekrarı, prefix'ler dâhil, sırasıyla). `Tokenize` artık bunun tekilleştirilmiş hâli — davranışı bit bazında aynı, Y-044 dokunulmadı. `Fold` hiç değişmedi.
+- `src/Oom/Retrieve/Retrieve.cs`: indeks tarafı `TokenizeAll` kullanıyor (gerçek terim frekansı); sorgu terimleri stopword'lerden arındırılıyor; skorlama BM25F'e çevrildi; kanca kapısı spec 6.4'ün iki testine göre yeniden yazıldı.
+- `bench/probe-30.jsonl` (yeni): spec 10.1 #17'nin istediği 30 promptluk probe seti. `bench/kos20.py`: `--probe` seçeneği eklendi.
+- `bench/README.md`: kapı 5 yeniden ölçümü, değişiklik başına tablo ve probe bölümü eklendi.
+
+### Veri kuralı
+`E:\OdenaOS` yalnız `retrieve` üstünden ve salt okunur kullanıldı; `sweep`/`compile`/`flush`/`ingest`/`save`/`install` hiç çalıştırılmadı. Koşum sonrası vault'ta en yeni concept dosyası hâlâ 8 Eyl 23:17, `.oom/oom.json` değişmemiş, durum kökündeki `retrieve_served` 0 satır. Repoya not gövdesi veya vault metni girmedi; sonuç dosyalarında sayı, slug ve gold set'in kendi `soru` alanı var.
+
+### Yöntem
+Her değişiklik tek başına uygulandı ve yeniden ölçüldü (spec 1-8). Ölçüm aracı `bench/kos20.py`, exe üstünden, `E:\OdenaOS` vault'una karşı. Parametre taramaları için `Rank`'in salt okunur bir Python kopyası kullanıldı; kopya hem taban çizgisini (0,7200 / 0,7600 / 0,6763) hem de nihai yapılandırmayı (0,8320 / 0,8880 / 0,7555) C# ile virgülüne kadar ürettiği için tarama sonuçları güvenilir sayıldı, tutulan her değişiklik yine de C#'ta ölçüldü.
+
+| # | değişiklik | recall@3 | recall@5 | MRR@5 | karar |
+| --- | --- | ---: | ---: | ---: | --- |
+| 0 | taban (`f8347df`) | 0,696 | 0,744 | 0,667 | — |
+| a | BM25'e gerçek terim frekansı | 0,712 | 0,760 | 0,679 | tutuldu |
+| b | içerik kelimesi süzgeci (stopword **+** ≥ 4 karakter) | 0,648 | 0,696 | 0,603 | geri alındı |
+| b1 | yalnız stopword süzgeci | 0,720 | 0,760 | 0,676 | tutuldu |
+| c | prefix terimlerine düşük ağırlık (0,7 → 0) | ≤ 0,720 | ≤ 0,752 | ≤ 0,670 | geri alındı |
+| d | uzunluk normalizasyonu prefix'siz sayımlar üstünden | 0,832 | 0,888 | 0,755 | geri alındı (etkisiz) |
+| e | BM25F — doygunluk alan başına değil satır başına | **0,832** | **0,888** | 0,755 | tutuldu |
+
+BENCH'in beş teşhisi koda karşı doğrulandı; 1, 2, 3, 5 doğruydu, 4 doğruydu ama ölçüldüğünde etkisizdi. Asıl kusur listede yoktu: **doygunluğun yeri**. Spec 6.4 indeks sorgusu olarak SQLite'ın `bm25(notes_fts, 0.0, 8.0, 6.0, 3.0, 1.0)` çağrısını adlandırıyor; `bm25()` terim frekansını sütun ağırlığıyla çarpar, sütunlar boyunca toplar, doygunluğu ve uzunluk normalizasyonunu satıra **bir kez** uygular. `Rank` ise her alanı ayrı doyurup topluyordu, bu da title ağırlığını doymamış bir 8× çarpanına çeviriyordu: başlıktaki bir yaygın kelime, soruyu yanıtlayan nottaki dört nadir kelimeyi geçiyordu. Ağırlıklar, `k1` = 1,2 ve `b` = 0,75 aynı kaldı; yalnız işlem sırası değişti. Doküman frekansı alan başına olmaktan çıkıp satır başına oldu, idf `bm25()`'in biçimini aldı (`log((N − n + 0,5) / (n + 0,5))`, negatife düştüğü yerde 1e-6'ya sabitlenir).
+
+`k1` ve `b` tarandı, değiştirilmedi: 125 soruda en iyi alternatif ±0,016 (bir-iki soru) getiriyor, bu bu aracın gürültüsünün içinde ve belgeli bir sabiti değiştirmek için kanıt değil.
+
+**Yetkili yol (yöntem maddesi 3):** `Query` → `Rank`. `Rank` artık `bm25()`'in aritmetiğini uyguluyor, yani iki yol arasındaki anlaşmazlık kapandı. `Candidates` (FTS5 `MATCH` + `bm25()`) aynı ağırlıklarla indeks tarafı aday sorgusu olarak duruyor ve şu an hiçbir çağrısı yok.
+
+### Kanca kapısı
+Taban: 5/5 kanarya ve 20/20 gold sorusu enjekte ediliyordu — kapı hiçbir şeyi süzmüyordu. İki kusur vardı: (1) örtüşme testi `hit.Text` yani not gövdesi üstünde koşuyordu ve 1500 karakterlik bir gövde neredeyse her promptla iki içerik kelimesi paylaşır; (2) `strictScore` önce test edilip örtüşmeyi kısa devre yapıyordu, 60–300 arası ham skorlara karşı 25,0 ile hiç bağlamıyordu.
+
+Şimdi: örtüşme notun kimlik alanları üstünde (slug, title, aliases, tags — spec 6.4'ün dediği yer), ve iki test **birlikte** aranıyor.
+
+**Normalizasyon (tek cümle):** `strictScore` artık notun skorunun sıralanan sorgu terimi sayısına bölümü, yani terim başına ortalama katkıdır — ham toplam prompt uzunluğuyla büyüdüğü için tek bir sabit kısa promptlarda bağlar, uzunlarda hiç bağlamaz.
+
+Ayrım ölçüldü. `minOverlap` ≥ 3 iken engellenmesi gereken en yüksek değer 0,67 (bir kanarya), geçmesi gereken en düşük değer 1,47 (probe'un gerçek sorusu) — 2,2 katlık gerçek bir boşluk; eşik 1,0 tam ortasına düşüyor. Ham skorda aynı boşluk 21,55 → 22,02, yani %2; o yüzden normalize edilmiş ölçüt seçildi.
+
+| ölçüt | taban | R2 | hedef |
+| --- | ---: | ---: | ---: |
+| probe-30 enjeksiyon | — | 8/30 | ≤ 8 |
+| probe-30 gerçek soru | — | 8/8 | 8/8 |
+| probe-30 yanlış pozitif | — | 0/22 | 0/22 |
+| kanarya (gold set) | 5/5 | **0/5** | 0/5 |
+
+### Kararlar (Master onayı ister)
+`Ruling:` spec 6.4'ün kapı kuralındaki **`veya` `ve` yapıldı.** Ölçüm: literal `veya` ile kanarya tabanı 5'te 3'tür ve `strictScore` ne olursa olsun düşmez — üç kanarya, konu bakımından komşu bir notun başlığıyla zaten ≥ 2 içerik kelimesi paylaşıyor, yani örtüşme ayağı tek başına onları geçiriyor. "0/5 kanarya" hedefi ile `veya` aynı anda sağlanamaz; hedef seçildi, sapma buraya yazıldı.
+
+`Ruling:` **`minOverlap` 2 → 3.** Ölçüm: 2'de hiçbir `strictScore` değeri aynı anda 0/5 kanarya ve 8/8 gerçek soru vermiyor (en iyisi 0/5 ile 7/8). 3'te ikisi birden sağlanıyor.
+
+`Ruling:` **`strictScore` 25,0 → 1,0 ve anlamı ham skordan terim başına ortalamaya çevrildi.** Varsayılan `RetrieveOptions` kaydında (`src/Oom/Retrieve/Retrieve.cs`) değişti; `Configuration.Defaults` bu kaydı olduğu gibi kullanıyor, ayrı bir sabit yok.
+
+`Ruling:` **`E:\OdenaOS\.oom\oom.json` güncellenmeli — bu şerit vault'a yazmadığı için yapılmadı.** Dosya `minOverlap: 2` ve `strictScore: 25.0` değerlerini sabitliyor ve kod varsayılanını eziyor. Yeni normalizasyonla 25,0 hiçbir şeyi geçirmez: canlı vault'a karşı `retrieve --hook` şu an 0/30 enjekte ediyor (8 gerçek soru dâhil). Gereken iki satır:
+
+```json
+"retrieve": { "top": 3, "perNoteChars": 1500, "totalChars": 4500, "minOverlap": 3, "strictScore": 1.0 }
+```
+
+Kapı ölçümü bu yüzden, aynı exe ile, `knowledge` dizini `E:\OdenaOS\knowledge`'a junction'lanmış ve `.oom/oom.json`'u yukarıdaki değerleri taşıyan salt okunur bir örtü vault üstünde alındı; aynı örtüde gold recall birebir 0,832 / 0,888 / 0,755 çıkıyor, yani örtü sıralamayı değiştirmiyor. Ham sonuçlar: `bench/results/recall-2026-09-09-r2.json` (canlı vault, sıralama) ve `bench/results/recall-2026-09-09-r2-gate.json` (örtü, kapı).
+
+### Kalan ıskalar
+k=5'te 14 ıska var. Dördü (`q033`, `q051`, `q108`, `q119`) gold notu ilk 100'e hiç sokmuyor ve sözlüksel olarak erişilemez — notla tek bir token bile paylaşmayan, zamir ağırlıklı kısa promptlar. Kalan onu sıralama ıskası, gold not 6–78. aralığında.
+
+### Test satırı
+`dotnet test Oom.sln -c Release` → 92 yeşil / 7 kırmızı, kırmızılar tam olarak Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098. Y-040 (title ağırlığı) ve Y-044 (Türkçe katlama) yeşil kaldı.

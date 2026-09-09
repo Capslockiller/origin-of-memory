@@ -58,26 +58,38 @@ public sealed class TurkishFold
     /// </summary>
     public IReadOnlyList<string> Tokenize(string text)
     {
+        var tokens = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var token in TokenizeAll(text))
+        {
+            if (seen.Add(token))
+                tokens.Add(token);
+        }
+
+        return tokens;
+    }
+
+    /// <summary>
+    /// Every token occurrence in reading order, prefixes included and nothing removed.
+    /// <see cref="Tokenize"/> is this list de-duplicated; a ranker that needs a real term
+    /// frequency needs the occurrences, because over distinct tokens BM25's saturation term
+    /// is the constant <c>(k1+1)/(1+k1)</c> for every match (lane R2, change a).
+    /// </summary>
+    public IReadOnlyList<string> TokenizeAll(string text)
+    {
         if (string.IsNullOrWhiteSpace(text))
             return [];
 
         var tokens = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (Match match in TokenPattern.Matches(Fold(text)))
         {
             var token = NeutralizeDotlessI(match.Value);
             if (token.Length < MinimumTokenLength)
                 continue;
 
-            if (seen.Add(token))
-                tokens.Add(token);
-
-            if (token.Length <= PrefixLength)
-                continue;
-
-            var prefix = token[..PrefixLength];
-            if (seen.Add(prefix))
-                tokens.Add(prefix);
+            tokens.Add(token);
+            if (token.Length > PrefixLength)
+                tokens.Add(token[..PrefixLength]);
         }
 
         return tokens;

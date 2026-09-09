@@ -9,8 +9,8 @@ public sealed record RetrieveOptions(
     int Top = 3,
     int PerNoteChars = 1500,
     int TotalChars = 4500,
-    int MinOverlap = 2,
-    double StrictScore = 25.0,
+    int MinOverlap = 3,
+    double StrictScore = 1.0,
     int MinPromptChars = 12,
     int DedupeDays = 7,
     string? VaultPath = null,
@@ -18,8 +18,16 @@ public sealed record RetrieveOptions(
 
 internal sealed record ServedKey(string Entry, string SessionId, string Signature, string Note);
 
-/// <summary>One field's corpus statistics for one query: document count, average length, document frequency per term.</summary>
-internal sealed record FieldStats(int Documents, double Average, IReadOnlyDictionary<string, int> Frequency);
+/// <summary>
+/// Corpus statistics for one query, on the axis SQLite's <c>bm25()</c> uses: one row count, one
+/// average row length, one document frequency per term over the whole row, and each row's own
+/// length. They are row-level and not field-level on purpose — see <see cref="Retrieve.Score"/>.
+/// </summary>
+internal sealed record CorpusStats(
+    int Documents,
+    double Average,
+    IReadOnlyDictionary<string, int> Frequency,
+    IReadOnlyDictionary<string, int> Length);
 
 public sealed class Retrieve
 {
@@ -32,6 +40,7 @@ public sealed class Retrieve
     private const double BodyWeight = 1.0;
     private const double K1 = 1.2;
     private const double B = 0.75;
+    private const double IdfFloor = 1e-6;
 
     private static readonly string[] Stopwords =
     [
@@ -66,6 +75,7 @@ public sealed class Retrieve
     private readonly IClock _clock;
     private IReadOnlyList<Note>? _corpus;
     private Dictionary<string, Dictionary<string, string[]>>? _fields;
+    private Dictionary<string, HashSet<string>>? _surfaces;
 
     public Retrieve(RetrieveOptions? options = null, TurkishFold? fold = null, Notes? notes = null, IClock? clock = null)
     {
@@ -149,7 +159,7 @@ public sealed class Retrieve
         if (!string.Equals(mode, "bm25", StringComparison.Ordinal))
             throw new ArgumentException($"bilinmeyen getirme modu: {mode}", nameof(mode));
 
-        var terms = Tokenize(query).Distinct().ToArray();
+        var terms = QueryTerms(query);
         if (terms.Length == 0 || notes.Count == 0)
             return [];
 
@@ -161,7 +171,7 @@ public sealed class Retrieve
         var hits = new List<SearchHit>();
         foreach (var note in notes)
         {
-            var score = terms.Sum(term => Score(term, fields[note.Name], stats));
+            var score = terms.Sum(term => Score(term, note.Name, fields[note.Name], stats));
             if (score <= 0)
                 continue;
 
@@ -181,13 +191,42 @@ public sealed class Retrieve
         if (GateReason(prompt) is not null)
             return false;
 
-        if (hit.Score >= _options.StrictScore)
-            return true;
+        var terms = QueryTerms(prompt);
+        if (terms.Length == 0)
+            return false;
 
-        var content = ContentWords(prompt);
-        var target = Tokenize($"{hit.Name} {hit.Text}").ToHashSet(StringComparer.Ordinal);
-        return content.Count(word => target.Contains(word)) >= _options.MinOverlap;
+        // `strictScore` is a per-term mean, not the raw sum. The sum grows with the length of the
+        // prompt, so one constant over it binds on short prompts and never on long ones; at 25.0
+        // against sums that ran 60-300 it never bound at all and every candidate was injected.
+        if (hit.Score / terms.Length < _options.StrictScore)
+            return false;
+
+        var surface = GateSurface(hit.Name);
+        return ContentWords(prompt).Count(word => surface.Contains(word)) >= _options.MinOverlap;
     }
+
+    /// <summary>
+    /// The note's identity fields — slug, title, aliases, tags — which is where spec 6.4 puts the
+    /// overlap test. The old gate ran it over <c>hit.Text</c>, and a 1500 character body shares two
+    /// content words with very nearly any prompt, so the test passed 5 of 5 no-answer canaries. The
+    /// slug is carried alongside the title because it is the ASCII fold of it, and a prompt typed
+    /// without Turkish diacritics only ever matches that form.
+    /// </summary>
+    private HashSet<string> GateSurface(string name)
+    {
+        _surfaces ??= LoadCorpus().ToDictionary(note => note.Name, Surface, StringComparer.Ordinal);
+
+        // A hit that is not a corpus note — a synthetic one in a scar test — still gets its name.
+        return _surfaces.TryGetValue(name, out var surface) ? surface : Surface(name);
+    }
+
+    private HashSet<string> Surface(Note note) =>
+        Tokenize($"{Slug(note.Name)} {note.Title} {string.Join(' ', note.Aliases)} {string.Join(' ', note.Tags)}")
+            .ToHashSet(StringComparer.Ordinal);
+
+    private HashSet<string> Surface(string name) => Tokenize(Slug(name)).ToHashSet(StringComparer.Ordinal);
+
+    private static string Slug(string name) => Path.GetFileNameWithoutExtension(name).Replace('-', ' ');
 
     /// <summary>Why the hook stays silent, or <c>null</c> when the prompt may be served.</summary>
     internal string? GateReason(string prompt)
@@ -298,52 +337,86 @@ public sealed class Retrieve
         return _corpus = notes;
     }
 
+    // Index-side tokens keep every occurrence: BM25 needs a term frequency, and over the
+    // de-duplicated list of Tokenize the saturation factor is a constant (Y-040 stays a
+    // weight test, this makes it a frequency test too).
     private Dictionary<string, string[]> FieldTokens(Note note) => new(StringComparer.Ordinal)
     {
-        ["title"] = Tokenize(note.Title).ToArray(),
-        ["aliases"] = Tokenize(string.Join(' ', note.Aliases)).ToArray(),
-        ["tags"] = Tokenize(string.Join(' ', note.Tags)).ToArray(),
-        ["body"] = Tokenize(Notes.IndexableBody(note)).ToArray()
+        ["title"] = _fold.TokenizeAll(note.Title).ToArray(),
+        ["aliases"] = _fold.TokenizeAll(string.Join(' ', note.Aliases)).ToArray(),
+        ["tags"] = _fold.TokenizeAll(string.Join(' ', note.Tags)).ToArray(),
+        ["body"] = _fold.TokenizeAll(Notes.IndexableBody(note)).ToArray()
     };
 
     /// <summary>
-    /// Per-field corpus statistics for one query. They used to be recomputed inside the score of
+    /// Row-level corpus statistics for one query. They used to be recomputed inside the score of
     /// every (term, note, field) triple, which made one query over 542 notes cost 690 ms against
-    /// the 300 ms budget of spec 6.4; the arithmetic below is unchanged, only its position is.
+    /// the 300 ms budget of spec 6.4; hoisting them out is what bought that back.
     /// </summary>
-    private static Dictionary<string, FieldStats> Statistics(Dictionary<string, Dictionary<string, string[]>> fields, string[] terms)
+    private static CorpusStats Statistics(Dictionary<string, Dictionary<string, string[]>> fields, string[] terms)
     {
-        var stats = new Dictionary<string, FieldStats>(StringComparer.Ordinal);
-        foreach (var (field, _) in Weights)
-        {
-            var documents = fields.Values.Select(entry => entry[field]).ToArray();
-            var containing = terms.ToDictionary(term => term,
-                term => documents.Count(tokens => tokens.Contains(term, StringComparer.Ordinal)), StringComparer.Ordinal);
-            stats[field] = new FieldStats(documents.Length,
-                documents.Length == 0 ? 0 : documents.Average(tokens => (double)tokens.Length), containing);
-        }
+        var length = fields.ToDictionary(pair => pair.Key,
+            pair => Weights.Sum(weight => pair.Value[weight.Field].Length), StringComparer.Ordinal);
 
-        return stats;
+        var containing = terms.ToDictionary(term => term,
+            term => fields.Values.Count(entry => Weights.Any(weight => entry[weight.Field].Contains(term, StringComparer.Ordinal))),
+            StringComparer.Ordinal);
+
+        return new CorpusStats(fields.Count, fields.Count == 0 ? 0 : length.Values.Average(), containing, length);
     }
 
-    private static double Score(string term, Dictionary<string, string[]> note, Dictionary<string, FieldStats> stats)
+    /// <summary>
+    /// BM25F in the shape SQLite's <c>bm25()</c> computes it (spec 6.4 names that query as the
+    /// index authority, so the in-process ranker has to agree with it): the field weights scale
+    /// the term frequency, the weighted frequency is summed across the four columns, and the
+    /// saturation and length normalisation are then applied <em>once</em> against the row.
+    ///
+    /// The previous form saturated each field separately and summed the results, which turned the
+    /// title weight into an unsaturated 8x multiplier — one common word in a title outscored four
+    /// rare words in the note that answered the question. Same weights, same k1 and b, same
+    /// tokens; only the order of the operations changed, and gate 5 moved 0.720 -> 0.832 (@3).
+    /// Document frequency is likewise per row and not per field, as bm25() counts it.
+    /// </summary>
+    private static double Score(string term, string name, Dictionary<string, string[]> note, CorpusStats stats)
     {
-        var total = 0.0;
+        var weighted = 0.0;
+        var occurrences = 0;
         foreach (var (field, weight) in Weights)
         {
-            var tokens = note[field];
-            var frequency = tokens.Count(token => string.Equals(token, term, StringComparison.Ordinal));
+            var frequency = note[field].Count(token => string.Equals(token, term, StringComparison.Ordinal));
             if (frequency == 0)
                 continue;
 
-            var statistic = stats[field];
-            var containing = statistic.Frequency[term];
-            var idf = Math.Log(1 + (statistic.Documents - containing + 0.5) / (containing + 0.5));
-            var norm = statistic.Average <= 0 ? 1 : 1 - B + B * tokens.Length / statistic.Average;
-            total += weight * idf * (frequency * (K1 + 1)) / (frequency + K1 * norm);
+            weighted += weight * frequency;
+            occurrences += frequency;
         }
 
-        return total;
+        if (occurrences == 0)
+            return 0;
+
+        var containing = stats.Frequency[term];
+        // bm25()'s idf, which goes negative for a term carried by more than half the corpus and is
+        // floored there rather than allowed to subtract from the score.
+        var idf = Math.Log((stats.Documents - containing + 0.5) / (containing + 0.5));
+        if (idf <= 0)
+            idf = IdfFloor;
+
+        var norm = stats.Average <= 0 ? 1 : 1 - B + B * stats.Length[name] / stats.Average;
+        return idf * (weighted * (K1 + 1)) / (weighted + K1 * norm);
+    }
+
+    /// <summary>
+    /// The terms a query is ranked with: content words only. The raw prompt still reaches
+    /// <see cref="GateReason"/> untouched, because `skip:*` is an intent decision over the
+    /// sentence, not over its terms. Stopwords and two- or three-letter tokens matched 407 of
+    /// 542 notes per query and put the score of a note that shares only "nedir" next to the
+    /// score of the note that answers it. A query with no content word at all (a bare "ne
+    /// zaman?") falls back to its full token list rather than returning nothing.
+    /// </summary>
+    private string[] QueryTerms(string query)
+    {
+        var content = Tokenize(query).Where(word => !Stopwords.Contains(word, StringComparer.Ordinal)).Distinct().ToArray();
+        return content.Length > 0 ? content : Tokenize(query).Distinct().ToArray();
     }
 
     private string[] ContentWords(string text) =>

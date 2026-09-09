@@ -50,7 +50,7 @@ Answer and judge stages checkpoint incrementally and support `--resume`. Conditi
 
 ## Acceptance gates
 
-Gate 5 requires the 125-question gold set to be evaluated against the 2.0 index, with recall@3 at least 0.80 and recall@5 at least 0.88. It is now measured: see "Recall parity (gate 5)" below. **It does not pass.**
+Gate 5 requires the 125-question gold set to be evaluated against the 2.0 index, with recall@3 at least 0.80 and recall@5 at least 0.88. It is measured, and after lane R2 **it passes**: recall@3 0,832 and recall@5 0,888. See "Recall parity (gate 5)" below for both the 2026-09-09 baseline and the R2 measurement.
 
 Gate 10 requires `oom bench --backend local` to measure 30 flush transcripts and five compile dailies, write `bench/results/<date>.json`, and leave the backend lists consistent with the result. The harness exists as `yerel_olcum.py` and has been smoke-run on synthetic input; the `oom bench` CLI subcommand of spec 6.12 still does not exist, and the 30-transcript run over real transcripts has not been made. Gate 10 therefore remains **planned** and must not be reported as passed.
 
@@ -63,6 +63,7 @@ No benchmark result is a default merely because code for the feature exists. Rec
 ```bash
 python bench/kos20.py                       # full gate 5 measurement
 python bench/kos20.py --max-queries 5        # smoke
+python bench/kos20.py --probe                # + the 30-prompt hook-gate probe set
 ```
 
 The run is named `oom-2.0` and is written as a TREC run file to `bench/.out/oom-2.0.run`, in the same format `kos.py` produces, so the two are comparable where a v0 checkpoint still exists locally. **The v0 side was not run in this measurement: `bench/.versions/` is absent from this tree (it is gitignored), so there is no v0 number to compare against and the table below is a 2.0 absolute measurement, not a parity delta.**
@@ -94,6 +95,60 @@ The gap is mostly ordering, not candidate generation. The full-depth recall curv
 recall@20 already reaches 0,880 — the gold note is usually retrieved and ranked 6–20. Seven of 125 questions never place the gold note inside the top 100; four of those score it at exactly zero, i.e. no shared token at all. Those seven are short, pronoun-heavy conversational prompts whose words do not occur in the note, and they cap any purely lexical fix at about 0,944.
 
 Latency: batch 3,0 s for 130 queries (~23 ms/query); a single `retrieve --query` process costs ~340 ms, almost all of it process start.
+
+## Recall parity (gate 5) — re-measured 2026-09-09 after lane R2
+
+Same executable source tree, same vault, same gold set, same harness; only `src/Oom/Retrieve/Retrieve.cs` and `src/Oom/Notes/TurkishFold.cs` changed. Raw result: `bench/results/recall-2026-09-09-r2.json`; the pre-change baseline reproduced by this lane is `bench/results/recall-2026-09-09-r2-baseline.json`.
+
+| küme | n | recall@3 | recall@5 | MRR@5 |
+| --- | ---: | ---: | ---: | ---: |
+| **genel** | 125 | **0,832** | **0,888** | 0,755 |
+| tek-not | 99 | 0,808 | 0,879 | 0,733 |
+| çok-not | 26 | 0,923 | 0,923 | 0,840 |
+
+Thresholds: recall@3 ≥ 0,80 → **PASS** (+0,032). recall@5 ≥ 0,88 → **PASS** (+0,008).
+
+Per-change measurements, each one applied on top of the one above it and re-measured:
+
+| # | change | recall@3 | recall@5 | MRR@5 | kept |
+| --- | --- | ---: | ---: | ---: | --- |
+| 0 | baseline (`f8347df`) | 0,696 | 0,744 | 0,667 | — |
+| a | real term frequency into BM25 (index tokens no longer de-duplicated) | 0,712 | 0,760 | 0,679 | kept |
+| b | content-word query filter, stopwords **and** the ≥ 4 character rule | 0,648 | 0,696 | 0,603 | reverted |
+| b1 | stopword filter only, no length rule | 0,720 | 0,760 | 0,676 | kept |
+| c | prefix terms at reduced weight (0,7 / 0,5 / 0,35 / 0,2 / 0,1 / 0) | ≤ 0,720 | ≤ 0,752 | ≤ 0,670 | reverted |
+| d | length normalisation over prefix-free token counts | 0,832 | 0,888 | 0,755 | reverted (no effect) |
+| e | BM25F: one saturation over the row instead of one per field | **0,832** | **0,888** | 0,755 | kept |
+
+Change (e) is the one that moved the number, and it is a correction rather than a tuning. Spec 6.4 names `bm25(notes_fts, 0.0, 8.0, 6.0, 3.0, 1.0)` as the index query, and SQLite's `bm25()` scales the term frequency by the column weight, sums the weighted frequency across columns, and then applies the saturation and the length normalisation **once** against the row. The in-process `Rank` instead saturated each field separately and summed the results, which turned the title weight into an unsaturated 8× multiplier: one common word in a title outscored four rare words in the note that answered the question. Same weights, same `k1` = 1,2 and `b` = 0,75, same tokens — only the order of the operations changed. Document frequency likewise moved from per-field to per-row, and the idf took `bm25()`'s form (`log((N − n + 0,5) / (n + 0,5))`, floored at 1e-6 where it would go negative).
+
+`k1` and `b` were swept and left alone. On 125 questions the best alternatives were worth at most ±0,016 — one or two questions — which is inside the noise of this instrument and is not evidence for changing a documented constant.
+
+Depth curve, before and after:
+
+| k | 1 | 3 | 5 | 10 | 20 | 50 | 100 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 0,624 | 0,696 | 0,744 | 0,848 | 0,880 | 0,912 | 0,944 |
+| after R2 | 0,672 | 0,832 | 0,888 | 0,912 | 0,936 | 0,944 | 0,968 |
+
+The remaining 14 misses at k=5 split into two kinds. Four questions (`q033`, `q051`, `q108`, `q119`) never place the gold note inside the top 100 and are lexically unreachable — short, pronoun-heavy prompts that share no token with the note ("Gülüm benim anakartım hangi marka model" against a note about a freeze-and-stutter diagnosis). No BM25 parameter reaches them; they need a different signal. The other ten are ordering misses with the gold note at rank 6–78.
+
+## Hook gate — 30-prompt probe set (spec 10.1 #17)
+
+`bench/probe-30.jsonl` is the probe set spec 10.1 #17 asks for and that `bench/` previously lacked: 30 invented prompts in the style of real chat prompts, each carrying whether it *should* inject and why. Eight are genuine memory questions; the other 22 must stay silent. The prompts are written for this file — no vault text, no note body, no copied gold question.
+
+`python bench/kos20.py --probe` runs each prompt through `oom.exe retrieve --hook` and reports three numbers, because the injection count alone can be made perfect by injecting nothing:
+
+| measure | result | target |
+| --- | ---: | ---: |
+| prompts injected | 8/30 | ≤ 8 |
+| real questions that injected | 8/8 | 8/8 |
+| false positives among the 22 | 0/22 | 0/22 |
+| `kanarya` no-answer rows (gold set) | 0/5 | 0/5 |
+
+Baseline for the same instrument: 5/5 canaries and 20/20 gold questions injected — the gate passed everything. Two defects caused it. The overlap test ran over `hit.Text`, the note body, and a 1500-character body shares two content words with very nearly any prompt; it now runs over the note's identity fields (slug, title, aliases, tags) as spec 6.4 says. And `strictScore` was tested first and short-circuited the overlap test, at 25,0 against raw scores that ran 60–300, so it never bound.
+
+`strictScore` is now the note's score divided by the number of ranked query terms — the mean per-term contribution — because the raw sum grows with the length of the prompt, so one constant over it binds on short prompts and never on long ones. Raw result: `bench/results/recall-2026-09-09-r2-gate.json`.
 
 ## Local model measurement (gate 10)
 

@@ -36,6 +36,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXE = ROOT / "publish" / "win-x64" / "Oom.exe"
 DEFAULT_GOLD = ROOT / ".brief" / "gold-sorular.jsonl"
+DEFAULT_PROBE = ROOT / "bench" / "probe-30.jsonl"
 DEFAULT_VAULT = r"E:\OdenaOS"
 RUN_TAG = "oom-2.0"
 CANARY = "kanarya"
@@ -161,6 +162,59 @@ def hook_probe(exe: Path, vault: str, rows: list[dict[str, Any]], sample: int) -
         "injection_rate_on_gold": round(counts["gold"][0] / counts["gold"][1], 4) if counts["gold"][1] else None,
         "counts": {key: {"injected": value[0], "n": value[1]} for key, value in counts.items()},
         "kanarya_detail": detail,
+    }
+
+
+def probe_gate(exe: Path, vault: str, path: Path) -> dict[str, Any]:
+    """Spec 10.1 #17: at most 8 injections over a 30-prompt probe set.
+
+    Unlike `hook_probe`, this is the instrument the spec actually asks for. Each row
+    carries the prompt, whether it *should* inject (`enjekte`) and why, so the run
+    reports three separate numbers: the injection count against the cap of 8, the
+    false positives among the prompts that must stay silent, and the true positives
+    among the real questions -- which all have to keep injecting for a lower
+    injection count to mean anything.
+    """
+    rows = []
+    with path.open("r", encoding="utf-8") as handle:
+        for index, line in enumerate(handle, 1):
+            text = line.strip()
+            if not text:
+                continue
+            row = json.loads(text)
+            if "prompt" not in row or "enjekte" not in row:
+                raise SystemExit(f"{path}:{index}: 'prompt' and 'enjekte' are required")
+            rows.append(row)
+    if len(rows) != 30:
+        raise SystemExit(f"{path}: the probe set is {len(rows)} prompts, spec 10.1 #17 wants 30")
+
+    detail = []
+    for row in rows:
+        payload = json.dumps(
+            {"session_id": f"bench-probe30-{row['id']}", "hook_event_name": "UserPromptSubmit", "prompt": row["prompt"]},
+            ensure_ascii=False,
+        )
+        completed = subprocess.run(
+            [str(exe), "--vault", vault, "retrieve", "--hook"],
+            input=payload, capture_output=True, text=True, encoding="utf-8", cwd=str(ROOT),
+        )
+        injected = completed.stdout.strip().startswith("{")
+        detail.append({"id": row["id"], "sinif": row.get("sinif", ""), "expected": bool(row["enjekte"]),
+                       "injected": injected, "agrees": injected == bool(row["enjekte"])})
+
+    injected = [d for d in detail if d["injected"]]
+    positives = [d for d in detail if d["expected"]]
+    negatives = [d for d in detail if not d["expected"]]
+    return {
+        "path": str(path),
+        "n": len(rows),
+        "cap": 8,
+        "injected": len(injected),
+        "within_cap": len(injected) <= 8,
+        "true_positives": {"injected": sum(1 for d in positives if d["injected"]), "n": len(positives)},
+        "false_positives": {"injected": sum(1 for d in negatives if d["injected"]), "n": len(negatives)},
+        "all_real_questions_inject": all(d["injected"] for d in positives),
+        "detail": detail,
     }
 
 
@@ -295,6 +349,8 @@ def main() -> int:
     parser.add_argument("--max-queries", type=int)
     parser.add_argument("--latency-sample", type=int, default=5, help="single-call timings for the batch comparison")
     parser.add_argument("--hook-sample", type=int, default=20, help="ordinary gold questions in the hook probe; 0 skips it")
+    parser.add_argument("--probe", nargs="?", const=str(DEFAULT_PROBE), default=None,
+                        help="30-prompt probe set for the hook gate (spec 10.1 #17); bare flag uses bench/probe-30.jsonl")
     parser.add_argument("--out")
     parser.add_argument("--run-file", default=str(ROOT / "bench" / ".out" / "oom-2.0.run"))
     parser.add_argument("--work-dir", default=str(ROOT / "bench" / ".data"))
@@ -313,6 +369,13 @@ def main() -> int:
 
     hook = (hook_probe(exe, arguments.vault, rows, arguments.hook_sample) if arguments.hook_sample
             else {"status": "not run", "why": "--hook-sample 0"})
+
+    probe: dict[str, Any] | None = None
+    if arguments.probe:
+        probe_path = Path(arguments.probe)
+        if not probe_path.is_file():
+            raise SystemExit(f"probe set not found: {probe_path}")
+        probe = probe_gate(exe, arguments.vault, probe_path)
 
     curve: dict[str, Any] | None = None
     if arguments.curve_top and arguments.curve_top > arguments.top:
@@ -383,6 +446,7 @@ def main() -> int:
         },
         "machine": {"os": platform.platform(), "python": platform.python_version()},
         "hook_gate_probe": hook,
+        "probe_30": probe,
         "canaries": [
             {
                 "id": record["id"],
@@ -419,6 +483,13 @@ def main() -> int:
         print("\nrecall@k (diagnostic, depth %d): %s" % (
             curve["depth"], "  ".join(f"@{k}={v:.3f}" for k, v in curve["recall_at"].items())))
         print(f"gold outside the top {curve['depth']}: {len(curve['beyond_depth'])} of {curve['n']} -> {curve['beyond_depth']}")
+    if probe:
+        print(f"\nprobe-30 (spec 10.1 #17): {probe['injected']}/30 injected, cap 8 "
+              f"({'PASS' if probe['within_cap'] else 'FAIL'}); "
+              f"real questions {probe['true_positives']['injected']}/{probe['true_positives']['n']}, "
+              f"false positives {probe['false_positives']['injected']}/{probe['false_positives']['n']}")
+        disagree = [d["id"] for d in probe["detail"] if not d["agrees"]]
+        print(f"probe disagreements: {disagree or 'none'}")
     if hook.get("counts"):
         print(f"hook probe (substitute): kanarya false-positive {hook['false_positive_rate_on_kanarya']:.2f} "
               f"({hook['counts']['kanarya']['injected']}/{hook['counts']['kanarya']['n']}), "
