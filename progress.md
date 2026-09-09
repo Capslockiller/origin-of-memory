@@ -279,3 +279,90 @@ Bütçeyi aşan modüller ve gerekçesi: `Sweep` 469/350 (keşif, kapsama mutaba
 Ruling: Spec 4.1'in `backend.claude.configDir` varsayılanı (`.oom\claude-config`) canlı vault'ta oturum kimlik bilgisinin Google Drive ile senkronlanan bir dizine kopyalanması demek. Kod varsayılanını değiştirmedim (spec bağlayıcı), yalnız mutlak ve `%VAR%`'lı değeri destekledim ve canlı koşum için `%LOCALAPPDATA%\oom\claude-config` öneriyorum. Kalıcı çözüm bir spec düzeltmesi ister.
 Ruling: Y-068 `src/Oom` altındaki bütün `*.cs` dosyalarını sayıyor, `obj/` içindeki üretilmiş dosyalar dâhil (şu an 72 satır). Ürün kodu 7.318, ölçülen 7.390. Önerilen en küçük test değişikliği: sayımdan `obj` ve `bin` dizinlerini dışla.
 Ruling: `sweep`'in ikinci koşumu Spec 6.3 gereği değişmemiş dosyayı hiç açmıyor, bu yüzden sonuç `no-new-turns` değil "atlandı"dır; brief'in beklediği `NoNewTurns`, dosyanın mtime'ı değişip içeriği değişmediğinde görülür ve kanıtta ayrıca ölçüldü (üçüncü koşum, `nonewturns=1`).
+
+## Lane BENCH — bench 2.0'a taşındı, kapı 5 ölçüldü, kapı 10 harness'ı kuruldu
+
+### Ne yapıldı
+- `bench/kos20.py` (392 satır, stdlib): matrisin 2.0 arka ucu. v0 harness'ı (`kos.py`) `bench/.versions/` altındaki `retrieve.py` sürümlerini içe aktarıp Python'da sıralıyordu; 2.0 sıralaması `src/Oom/Retrieve/Retrieve.cs`'te ve içe aktarılabilir bir Python yüzeyi yok, bu yüzden `kos20.py` exe'yi sürüyor. Koşum adı `oom-2.0`, TREC run dosyası `bench/.out/oom-2.0.run` (kos.py ile aynı biçim).
+- `bench/yerel_olcum.py` (528 satır, stdlib): spec 6.12'nin üç ayağı ve karar kuralı; 3 sentetik transkript ve 2 sentetik daily üstünde `qwen3:8b` ile duman koşusu yapıldı.
+- `bench/README.md`: "2.0 harness", "Recall parity (gate 5) — measured 2026-09-09", "Local model measurement (gate 10)" bölümleri eklendi; gate 5 ve gate 10 için "planned" ibareleri gerçek durumla değiştirildi.
+- `src/Oom` **hiç değiştirilmedi**, dolayısıyla test satırı yok. `retrieve --batch <jsonl> --json` zaten `Program.RunRetrieve` içinde vardı (`{id, soru}` veya `query` satırları okur, girdi sırasında satır başına bir JSON yazar); brief'in izin verdiği CLI eklemesine gerek kalmadı.
+
+### Veri kuralı
+`E:\OdenaOS` yalnız `retrieve` üstünden ve salt okunur kullanıldı; `sweep`/`compile`/`flush`/`ingest`/`save`/`install` hiç çalıştırılmadı. Koşum sonrası vault'ta en yeni concept dosyası hâlâ 8 Eyl 23:17 ve durum kökündeki `retrieve_served` 0 satır — kanca ölçümü dâhil hiçbir şey yazılmadı. Sonuç dosyalarında yalnız sayı, not slug'ı, soru kimliği ve gold set'in kendi `soru` alanı var; not gövdesi veya transkript metni yok.
+
+### Ölçüm — kapı 5 (recall paritesi), 2026-09-09
+Exe `e64566c`'ten; vault `E:\OdenaOS` (542 concept); gold set 130 satır, 125'i puanlandı, 5 `kanarya` satırı yapısı gereği boş `gold` taşıdığı için recall paydasından çıkarıldı (README'nin "125 soruluk gold set" ifadesiyle birebir uyuyor). Ham sonuç: `bench/results/recall-2026-09-09.json`.
+
+| küme | n | recall@3 | recall@5 | MRR@5 |
+| --- | ---: | ---: | ---: | ---: |
+| genel | 125 | **0,696** | **0,744** | 0,667 |
+| tek-not | 99 | 0,667 | 0,717 | 0,645 |
+| çok-not | 26 | 0,808 | 0,846 | 0,753 |
+
+Eşikler: recall@3 ≥ 0,80 → **KALDI** (−0,104); recall@5 ≥ 0,88 → **KALDI** (−0,136).
+
+Derinlik eğrisi: @1 0,624 · @3 0,696 · @5 0,744 · @10 0,848 · @20 0,880 · @50 0,912 · @100 0,944.
+
+Kanca ölçümü: spec'in istediği 30 promptluk probe seti `bench/` içinde yok, bu yüzden atlandı. Yerine gold set'in kendi kanarya satırları `retrieve --hook` üstünden geçirildi: **5/5 kanaryada enjeksiyon var** (yanlış pozitif oranı 1,00), 20 gerçek gold sorusunda da 1,00.
+
+### Ölçüm — kapı 10 (yerel model), duman koşusu
+`qwen3:8b`, Ollama `http://localhost:11434/v1`. Ham sonuç: `bench/results/yerel-2026-09-09.json`.
+
+| ayak | n | sonuç | eşik | geçti |
+| --- | ---: | ---: | ---: | --- |
+| (a) beş bölümlü şekil uyumu | 3 | 1,000 | 0,95 | evet |
+| (b) çift-kör yargı | 0 | **koşulmadı** | 3,5 | — |
+| (c) text-mode compile uyumu | 2 | 0,500 | 0,95 | hayır |
+
+(b) uygulandı (`judge_pairs` kör A/B eşleşmesini kuruyor) ama bilerek çağrılmadı: Claude referans özetleri ve Claude yargıç çağrısı ister, bu şerit Claude kotası harcamıyor. (b) koşmadığı için spec 6.12'nin `backend.flush` kararı **belirsiz**, geçmiş değil.
+
+Sentetik duman koşusu hiçbir şeye karar vermez. Tek anlamlı gözlem: iki compile hatası da kesilme değil sözleşme hatasıydı (`finish_reason: stop`) — `qwen3:8b` bloklar arasında `=== END FILE ===` yazmadı, bir koşumda da slug'a Türkçe karakter koydu ve `^knowledge/concepts/[a-z0-9-]+\.md$` izin listesi reddetti.
+
+### Tam koşum komutu (Master'ın kararı — bu şerit koşmadı)
+Spec 6.12'nin 30 transkript + 5 daily koşumu gerçek transkript ve gerçek daily okur ve yerel modele gönderir (yalnız yerel, buluta çıkmaz). Repo kökünden:
+
+```bash
+python bench/yerel_olcum.py \
+  --transcripts 30 --dailies 5 \
+  --transcript-dir "$USERPROFILE/.claude/projects" \
+  --daily-dir "E:/OdenaOS/daily" \
+  --model qwen3:8b --url http://localhost:11434/v1 --timeout 600
+```
+
+`--transcript-dir` yalnız okunur; harness `%USERPROFILE%\.claude` altına yazmaz. (b) ayağı bu komutta da koşmaz; yargı puanı için Claude referans özetleri ayrıca üretilmeli.
+
+### Teşhis — kapı 5 neden kalıyor (yalnız analiz, ayar yapılmadı)
+
+Sayılar nedeni ayırıyor: recall@20 zaten 0,880, yani gold not çoğunlukla **bulunuyor ama 6–20 arasına sıralanıyor**. Boşluğun büyük kısmı aday üretimi değil, sıralama.
+
+1. **Terim frekansı yok.** `TurkishFold.Tokenize` çıktıyı `seen` HashSet'iyle tekilleştiriyor ve `Retrieve.FieldTokens` doğrudan onu besliyor; dolayısıyla `Retrieve.Score` içindeki `frequency` her zaman 0 ya da 1. BM25'in doyum terimi sabite iniyor: bir kavramı 15 kez geçen not, bir kez geçenle aynı puanı alıyor. Sıralamadaki en büyük tek kusur bu — konusallık sinyali tamamen kayıp, geriye yalnız IDF ve uzunluk kalıyor.
+2. **Sorgu tarafında içerik süzgeci yok.** `Rank`, ham promptun `Tokenize(...).Distinct()` çıktısını kullanıyor. `Stopwords` listesi ve `ContentWords` (≥ 4 harf, durak sözcüksüz) var ama yalnız `ShouldInject`'te, yani kanca kapısında kullanılıyor; sıralamaya hiç girmiyor. Sonuç ölçüldü: sorgu başına **542 nottan ortalama 407'si sıfırdan büyük puan alıyor** (korpusun %75'i). IDF bunu söndürüyor ama yok etmiyor ve (1) yüzünden tek güçlü konusal terim, onlarca cılız terimin toplamına yenilebiliyor.
+3. **Önek belirteçleri tam belirteçle aynı ağırlıkta.** 5 harften uzun her belirteç ayrıca 5 harflik önekini de üretiyor ve `Score`'a aynı alan ağırlığıyla giriyor. Bu recall@100'ü büyütüyor (0,944), tepe kesinliği düşürüyor.
+4. **Uzunluk normalizasyonu tekil belirteç sayısı üstünden.** `tokens.Length` hem tekilleştirilmiş hem önekle şişmiş; kendi içinde tutarlı ama (1) ile birlikte iki not arasındaki tek ayırt edici sinyal uzunluk kalıyor.
+5. **`minOverlap` kapı 5'in nedeni değil.** `MinOverlap` yalnız `ShouldInject`'te okunuyor; ölçülen `--json`/`--batch` yolu `Query` üstünden gidiyor ve `ShouldInject`'i hiç çağırmıyor.
+6. **İndeks eksikliği değil.** Durum kökünde 542 `notes` satırı, vault'ta 542 concept dosyası, gold set'in 154 slug'ının 154'ü dosya olarak mevcut.
+7. **Sözcüksel tavan ~0,944.** 125 sorunun 7'si gold notu ilk 100'e hiç sokamıyor, 4'ü tam sıfır puanla (ortak belirteç yok). Bunlar kısa, zamirle konuşan promptlar ("gearlar nasıl upgrade ediliyor", "anakartım hangi marka model"); kullanıcının sözcükleri notta hiç geçmiyor. Saf BM25 bunları çözemez; oturum bağlamı ya da anlamsal katman ister (spec §6.12 hibrit deneyi tam da burayı hedefliyor).
+
+Ayrıca kanca tarafında ölçülen bulgu: `ShouldInject`, `hit.Score >= StrictScore` (25,0) olduğunda `minOverlap` kontrolüne hiç varmadan `true` dönüyor. Bu puanlama fonksiyonunun ölçeği sorgu uzunluğuyla büyüdüğü için puanlar rutin olarak 60–300 aralığında; kanaryaların en yüksek puanı 80–181. Sonuç: mutlak sabit olan 25,0 eşiği pratikte hiç ısırmıyor ve kanaryaların 5'inde de enjeksiyon oluyor.
+
+### En kötü 10 ıska (gold notun gerçek sırası / ilk sıranın puanı / gold puanı)
+
+| id | sınıf | gold sırası | top1 puan | gold puan | gold slug |
+| --- | --- | ---: | ---: | ---: | --- |
+| q033 | tek-not | yok (0 puan) | 63,8 | — | n_gizli |
+| q051 | tek-not | yok (0 puan) | 73,3 | — | n_gizli |
+| q108 | tek-not | yok (0 puan) | 179,5 | — | n_gizli |
+| q119 | çok-not | yok (0 puan) | 91,8 | — | n_gizli |
+| q116 | tek-not | 157 | 169,4 | 1,8 | n_gizli |
+| q113 | çok-not | 121 | 178,3 | 18,7 | n_gizli |
+| q128 | tek-not | 112 | 91,5 | 3,9 | n_gizli |
+| q115 | tek-not | 77 | 82,7 | 1,0 | n_gizli |
+| q024 | çok-not | 59 | 96,0 | 26,6 | n_gizli |
+| q088 | tek-not | 58 | 89,1 | 9,7 | n_gizli |
+
+İlk dördü (1)–(3) ile açıklanamaz; sözcük örtüşmesi hiç yok, madde 7'ye giriyorlar. Kalan altısı ile 6–20 bandındaki 13 soru (1) ve (2)'nin doğrudan kurbanı: gold not bulunuyor, konusallık ölçülemediği için yukarı çıkamıyor.
+
+Ruling: Kapı 5 ölçüldü ve **geçmedi**. Şerit yalnız ölçüm şeridi olduğu için getirme ayarı yapılmadı; aşağıdaki teşhis analizdir, düzeltme değildir.
+Ruling: Kapı 10 için spec 6.12 komutu `oom bench --backend local` diyor; o alt komut hâlâ yok ve `yerel_olcum.py` onun yerine geçmez, yalnız ölçümü şimdilik taşır. Bu bir spec borcudur ve kapatılmadan kapı 10 "geçti" denemez.
+Ruling: v0 karşılaştırması yapılamadı — `bench/.versions/` bu ağaçta yok (gitignore'lu). Tablodaki sayılar 2.0'ın mutlak ölçümüdür, v0'a göre parite farkı değildir.

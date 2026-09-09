@@ -50,11 +50,74 @@ Answer and judge stages checkpoint incrementally and support `--resume`. Conditi
 
 ## Acceptance gates
 
-Gate 5 requires the v0 125-question gold set to be evaluated against the 2.0 index, with recall@3 at least 0.80 and recall@5 at least 0.88. The historical matrix provides retrieval methodology and regression evidence, but the current scripts do not yet run that exact gold set against `src/Oom`; the 2.0 gate remains planned.
+Gate 5 requires the 125-question gold set to be evaluated against the 2.0 index, with recall@3 at least 0.80 and recall@5 at least 0.88. It is now measured: see "Recall parity (gate 5)" below. **It does not pass.**
 
-Gate 10 requires `oom bench --backend local` to measure 30 flush transcripts and five compile dailies, write `bench/results/<date>.json`, and leave the backend lists consistent with the result. `Program` currently prints a pointer to `bench/`, and no `bench/results/` implementation is present in this tree. Gate 10 therefore remains planned and must not be reported as passed.
+Gate 10 requires `oom bench --backend local` to measure 30 flush transcripts and five compile dailies, write `bench/results/<date>.json`, and leave the backend lists consistent with the result. The harness exists as `yerel_olcum.py` and has been smoke-run on synthetic input; the `oom bench` CLI subcommand of spec 6.12 still does not exist, and the 30-transcript run over real transcripts has not been made. Gate 10 therefore remains **planned** and must not be reported as passed.
 
 No benchmark result is a default merely because code for the feature exists. Record the dataset revision, parameters, model identity, machine, raw result path, and the acceptance threshold whenever a gate is measured.
+
+## 2.0 harness
+
+`kos20.py` is the 2.0 backend of the retrieval matrix. The v0 harness (`kos.py`) imported extracted `retrieve.py` checkpoints from `bench/.versions/` and ranked in Python; the 2.0 ranking lives in `src/Oom/Retrieve/Retrieve.cs` and has no importable Python surface, so `kos20.py` drives the executable instead:
+
+```bash
+python bench/kos20.py                       # full gate 5 measurement
+python bench/kos20.py --max-queries 5        # smoke
+```
+
+The run is named `oom-2.0` and is written as a TREC run file to `bench/.out/oom-2.0.run`, in the same format `kos.py` produces, so the two are comparable where a v0 checkpoint still exists locally. **The v0 side was not run in this measurement: `bench/.versions/` is absent from this tree (it is gitignored), so there is no v0 number to compare against and the table below is a 2.0 absolute measurement, not a parity delta.**
+
+Ranking comes from `oom.exe --vault <vault> retrieve --batch <jsonl> --top <k>`, which already existed in `Program.RunRetrieve`; no CLI change was needed for this lane and `src/Oom` was not touched. The batch mode reads `{id, soru}` (or `query`) lines and writes one JSON line per query in input order, sharing one process and one corpus load. That matters: one process start costs ~340 ms, so 130 separate `--query` calls take ~44 s while the batch takes ~3 s (~23 ms per query, corpus load amortised).
+
+The path is read-only over the vault. `Retrieve.Query` parses `<vault>/knowledge/concepts/*.md` into memory and ranks; the served-dedupe table is a process-local static dictionary, so repeated runs do not suppress each other's hits, and `retrieve_served` in the state root was still empty after the full run plus the hook probe.
+
+## Recall parity (gate 5) — measured 2026-09-09
+
+Executable built from `e64566c`; vault `E:\OdenaOS` (542 concept files); gold set `.brief/gold-sorular.jsonl`, 130 rows of which 125 are scored and 5 are `kanarya` negative controls with an empty `gold` by construction and excluded from recall. Raw result: `bench/results/recall-2026-09-09.json`.
+
+| küme | n | recall@3 | recall@5 | MRR@5 |
+| --- | ---: | ---: | ---: | ---: |
+| **genel** | 125 | **0,696** | **0,744** | 0,667 |
+| tek-not | 99 | 0,667 | 0,717 | 0,645 |
+| çok-not | 26 | 0,808 | 0,846 | 0,753 |
+
+Thresholds: recall@3 ≥ 0,80 → **FAIL** (−0,104). recall@5 ≥ 0,88 → **FAIL** (−0,136).
+
+Index completeness is not the cause: the state root holds 542 `notes` rows for 542 concept files, and all 154 gold slugs exist as files.
+
+The gap is mostly ordering, not candidate generation. The full-depth recall curve:
+
+| k | 1 | 3 | 5 | 10 | 20 | 50 | 100 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| recall@k | 0,624 | 0,696 | 0,744 | 0,848 | 0,880 | 0,912 | 0,944 |
+
+recall@20 already reaches 0,880 — the gold note is usually retrieved and ranked 6–20. Seven of 125 questions never place the gold note inside the top 100; four of those score it at exactly zero, i.e. no shared token at all. Those seven are short, pronoun-heavy conversational prompts whose words do not occur in the note, and they cap any purely lexical fix at about 0,944.
+
+Latency: batch 3,0 s for 130 queries (~23 ms/query); a single `retrieve --query` process costs ~340 ms, almost all of it process start.
+
+## Local model measurement (gate 10)
+
+`yerel_olcum.py` implements the three legs of spec 6.12 and its decision rule. The harness is Python under `bench/` rather than a C# `bench` subcommand, because `bench/` is the documented home for tools that measure the product without shipping in it, and because adding a module to `src/Oom` would have put a rebuild and the test-parity obligation inside a measurement lane. **This is a deviation from spec 6.12, which names the command `oom bench --backend local`; that subcommand is still owed.**
+
+The harness copies the prompt and the validator out of `src/Oom` rather than importing them, so it re-reads those C# files on every run and refuses to measure when the copied strings no longer appear verbatim (`--no-check-drift` disables the guard). A drift failure means the harness is stale, never that the model failed.
+
+```bash
+python bench/yerel_olcum.py --transcripts 3 --dailies 2    # synthetic smoke
+```
+
+Smoke result, `qwen3:8b` via Ollama at `http://localhost:11434/v1`, 3 synthetic Claude Code transcripts and 2 synthetic dailies under the gitignored `bench/.data/`. Raw result: `bench/results/yerel-2026-09-09.json`.
+
+| leg | n | result | threshold | pass |
+| --- | ---: | ---: | ---: | --- |
+| (a) five-section flush shape | 3 | 1,000 | 0,95 | yes |
+| (b) double-blind judge | 0 | **not run** | 3,5 | — |
+| (c) text-mode compile conformance | 2 | 0,500 | 0,95 | no |
+
+Leg (b) is implemented (`judge_pairs` builds the blind A/B pairing) and deliberately not called: it needs Claude reference summaries and Claude judge calls, and this lane spends no Claude quota. Because leg (b) did not run, the `backend.flush` decision of spec 6.12 is **undecided**, not passed.
+
+**A synthetic smoke decides nothing.** n=3 and n=2 are far below the 30 and 5 the spec requires, and the inputs are invented. The one substantive observation is that both compile failures were contract failures rather than truncations (`finish_reason: stop`): `qwen3:8b` omitted `=== END FILE ===` between blocks, and in an earlier run emitted a slug containing Turkish characters, which the `^knowledge/concepts/[a-z0-9-]+\.md$` allowlist rejects.
+
+The full run of spec 6.12 is the owner's decision — it reads real transcripts and real dailies and sends them to the local model. The exact command is in `progress.md` under `## Lane BENCH`.
 
 ## Mutation check (gate 9)
 
