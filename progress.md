@@ -107,3 +107,25 @@ Blocked-by: lane D Install.ValidateConfiguration (Y-067 — the source-tree path
 Build: `dotnet build Oom.sln -c Release` — 0 warnings, 0 errors.
 Test: Başarısız! - Başarısız: 71, Başarılı: 28, Atlanan: 0, Toplam: 99 — was 96/3, now 71/28; no previously green test turned red (Y-068, Y-081, Y-094 still green).
 Line budget: Guards 320/400, State 492/500, Runner 401/450; rest (Program 172 + Notes 255 + TurkishFold 87 + Infrastructure 197 = 711) / 750; `src/Oom/` total 2.095 / 7.500.
+
+<!-- yazan: codex · gpt-5 -->
+## Lane D
+
+Doctor: 195 lines, Y-031, Y-032, Y-034, Y-066, Y-078, Y-086, Y-088 green.
+Install: 437 lines, Y-065, Y-067, Y-070, Y-071, Y-072, Y-074, Y-083 green.
+Ingest: 248 C# lines + 5 sample lines, Y-076, Y-084 green.
+Notify: 51 lines, Y-056 blocked by lane A before Notify.Send.
+Save: 86 lines, Y-085 blocked by lane A Guards.Gate; SaveSessionJson blocked by lane B Flush.FlushSession.
+Mcp: 136 lines, no direct scar; memory_search blocked by lane A Guards.Gate and lane B Retrieve.Query until integration.
+Contracts/LaneD.cs: 2 lines, all owned stubs moved to component folders.
+
+Ruling: Y-099 requires `.gitignore`, which is outside Lane D's owned/stageable files; BackupPath itself returns `.oom/backup/...` correctly, so the repository assertion remains red for integration.
+Blocked-by: lane A — Y-010, Y-011, Y-018, Y-019, Y-020, Y-021, Y-023, Y-024, Y-026, Y-033, Y-044, Y-049, Y-052, Y-053, Y-054, Y-055, Y-056, Y-057, Y-058, Y-059, Y-060, Y-061, Y-062, Y-063, Y-064, Y-073, Y-079, Y-080, Y-085, Y-087, Y-095, Y-096, Y-097, Y-098.
+Blocked-by: lane B — Y-001, Y-002, Y-003, Y-004, Y-005, Y-006, Y-007, Y-008, Y-009, Y-012, Y-013, Y-014, Y-015, Y-017, Y-035, Y-036, Y-037, Y-038, Y-039, Y-040, Y-041, Y-042, Y-043, Y-045, Y-046, Y-047, Y-048, Y-050, Y-051, Y-069, Y-075, Y-077, Y-082, Y-089, Y-090, Y-091, Y-092.
+Blocked-by: lane C — Y-016, Y-022, Y-025, Y-027, Y-028, Y-029, Y-030, Y-093.
+Blocked-by: environment — `.git/worktrees/oom-lane-D` is read-only in the sandbox; `git add` cannot create `index.lock`, so the required single commit could not be created in this session.
+
+Build: `dotnet build Oom.sln -c Release` — succeeded, 0 warnings, 0 errors with `NUGET_PACKAGES` pointed at the workspace offline cache (network access is denied).
+Test: `dotnet test Oom.sln -c Release --no-build` — Başarısız: 80, Başarılı: 19, Atlanan: 0, Toplam: 99.
+New green Y list: Y-031, Y-032, Y-034, Y-065, Y-066, Y-067, Y-070, Y-071, Y-072, Y-074, Y-076, Y-078, Y-083, Y-084, Y-086, Y-088.
+Previously green and preserved: Y-068, Y-081, Y-094.
