@@ -1,0 +1,187 @@
+{
+  "tool": "bench/mutate.py",
+  "gate": 9,
+  "date": "2026-09-09",
+  "command": "dotnet test Oom.sln -c Release --no-restore -v q",
+  "mutant_definitions": "bench/mutants.json",
+  "baseline": {
+    "line": "failed 7 / passed 92 / total 99 in 3.7s",
+    "counts": {
+      "failed": 7,
+      "passed": 92,
+      "skipped": 0,
+      "total": 99
+    },
+    "failing": [
+      "Y-035 · Güncel düzeltme aranır ve eski kavram top üçe giremez",
+      "Y-046 · Aynı saniyedeki yardımcı başlangıç asgari bağlam alır",
+      "Y-050 · El katmanı denetimi mtime yerine içeriğe bakar",
+      "Y-042 · Episodik ve kavram recall zemini aynı koşumda korunur",
+      "Y-039 · Dedupe sorgu imzası ve not adına birlikte anahtarlanır",
+      "Y-069 · Temiz Windows VM zinciri kurulumdan yeni oturum enjeksiyonuna kadar çalışır",
+      "Y-098 · Runner alt süreç stdin'ini kapatır ve zaman aşımında asılı kalmaz"
+    ],
+    "failing_scars": [
+      "Y-035",
+      "Y-046",
+      "Y-050",
+      "Y-042",
+      "Y-039",
+      "Y-069",
+      "Y-098"
+    ],
+    "seconds": 3.7
+  },
+  "mutants": [
+    {
+      "id": "M1-concept-path-slug-slash",
+      "boundary": "spec 6.5-4 compile output path allowlist",
+      "file": "src/Oom/Compile/Compile.cs",
+      "description": "Loosen the concept path regex so a '/' is legal inside the slug: knowledge/concepts/nested/note.md would be accepted.",
+      "applied": true,
+      "test_line": "failed 8 / passed 91 / total 99 in 3.7s",
+      "killed": true,
+      "killing_tests": [
+        "Y-028 · Alt dizin concept yolu bütün koşumu reddeder"
+      ],
+      "killing_scars": [
+        "Y-028"
+      ],
+      "note": "",
+      "seconds": 3.7,
+      "counts": {
+        "failed": 8,
+        "passed": 91,
+        "skipped": 0,
+        "total": 99
+      }
+    },
+    {
+      "id": "M2-concept-path-prefix-dropped",
+      "boundary": "spec 6.5-4 compile output path allowlist",
+      "file": "src/Oom/Compile/Compile.cs",
+      "description": "Drop the knowledge/concepts/ prefix and the start anchor, so any traversal or absolute path ending in a lowercase .md name (../escape.md, C:/absolute.md) is accepted.",
+      "applied": true,
+      "test_line": "failed 9 / passed 90 / total 99 in 3.8s",
+      "killed": true,
+      "killing_tests": [
+        "Y-028 · Alt dizin concept yolu bütün koşumu reddeder",
+        "Y-026 · Direktif girdisi karantinaya düşer ve güvensiz yollar reddedilir"
+      ],
+      "killing_scars": [
+        "Y-028",
+        "Y-026"
+      ],
+      "note": "",
+      "seconds": 3.8,
+      "counts": {
+        "failed": 9,
+        "passed": 90,
+        "skipped": 0,
+        "total": 99
+      }
+    },
+    {
+      "id": "M3-directive-refuse-in-only",
+      "boundary": "spec 6.7 guard chain directive refusal",
+      "file": "src/Oom/Guards/Guards.cs",
+      "description": "Refuse a directive only on Direction.In, so a directive in the model's compile output (Direction.Out) is no longer refused.",
+      "applied": true,
+      "test_line": "failed 9 / passed 90 / total 99 in 3.8s",
+      "killed": true,
+      "killing_tests": [
+        "Y-027 · DIRECTIVE_SHAPED terfiyi durdurur ve yalnız karantinaya yazar",
+        "Y-095 · Unicode guard directive guard'dan önce çalışır"
+      ],
+      "killing_scars": [
+        "Y-027",
+        "Y-095"
+      ],
+      "note": "",
+      "seconds": 3.8,
+      "counts": {
+        "failed": 9,
+        "passed": 90,
+        "skipped": 0,
+        "total": 99
+      }
+    },
+    {
+      "id": "M4-directive-never-refuses",
+      "boundary": "spec 6.7 guard chain directive refusal",
+      "file": "src/Oom/Guards/Guards.cs",
+      "description": "Remove the refusal entirely: the directive finding is still reported but the run is never quarantined.",
+      "applied": true,
+      "test_line": "failed 10 / passed 89 / total 99 in 3.8s",
+      "killed": true,
+      "killing_tests": [
+        "Y-027 · DIRECTIVE_SHAPED terfiyi durdurur ve yalnız karantinaya yazar",
+        "Y-026 · Direktif girdisi karantinaya düşer ve güvensiz yollar reddedilir",
+        "Y-095 · Unicode guard directive guard'dan önce çalışır"
+      ],
+      "killing_scars": [
+        "Y-027",
+        "Y-026",
+        "Y-095"
+      ],
+      "note": "",
+      "seconds": 3.8,
+      "counts": {
+        "failed": 10,
+        "passed": 89,
+        "skipped": 0,
+        "total": 99
+      }
+    },
+    {
+      "id": "M5-claude-config-dir-dropped",
+      "boundary": "spec 6.6 claude -p isolation environment",
+      "file": "src/Oom/Runner/Runner.cs",
+      "description": "Drop CLAUDE_CONFIG_DIR from the child environment, so the isolated claude -p call inherits the user's own config, hooks and skills.",
+      "applied": true,
+      "test_line": "failed 8 / passed 91 / total 99 in 3.7s",
+      "killed": true,
+      "killing_tests": [
+        "Y-011 · Claude runner plan modundan yalıtılır ve biçimsiz yanıt fallback'e gider"
+      ],
+      "killing_scars": [
+        "Y-011"
+      ],
+      "note": "",
+      "seconds": 3.7,
+      "counts": {
+        "failed": 8,
+        "passed": 91,
+        "skipped": 0,
+        "total": 99
+      }
+    },
+    {
+      "id": "M6-cwd-inside-vault",
+      "boundary": "spec 6.6 claude -p isolation environment",
+      "file": "src/Oom/Runner/Runner.cs",
+      "description": "Run the child process with the vault itself as its working directory instead of a directory outside the vault.",
+      "applied": true,
+      "test_line": "failed 8 / passed 91 / total 99 in 3.8s",
+      "killed": true,
+      "killing_tests": [
+        "Y-011 · Claude runner plan modundan yalıtılır ve biçimsiz yanıt fallback'e gider"
+      ],
+      "killing_scars": [
+        "Y-011"
+      ],
+      "note": "",
+      "seconds": 3.8,
+      "counts": {
+        "failed": 8,
+        "passed": 91,
+        "skipped": 0,
+        "total": 99
+      }
+    }
+  ],
+  "killed": 6,
+  "survived": 0,
+  "result": "green",
+  "src_clean_after_run": true
+}

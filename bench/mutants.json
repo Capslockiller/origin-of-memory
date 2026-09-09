@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "note": "Gate 9 mutant set: two mutants per spec boundary. Each 'search' must match exactly once in 'file'; mutate.py aborts otherwise. Newlines are normalized to the target file's own line ending before matching.",
+  "mutants": [
+    {
+      "id": "M1-concept-path-slug-slash",
+      "boundary": "spec 6.5-4 compile output path allowlist",
+      "file": "src/Oom/Compile/Compile.cs",
+      "description": "Loosen the concept path regex so a '/' is legal inside the slug: knowledge/concepts/nested/note.md would be accepted.",
+      "compile_visible": false,
+      "search": "@\"^knowledge/concepts/[a-z0-9-]+\\.md$\"",
+      "replace": "@\"^knowledge/concepts/[a-z0-9/-]+\\.md$\""
+    },
+    {
+      "id": "M2-concept-path-prefix-dropped",
+      "boundary": "spec 6.5-4 compile output path allowlist",
+      "file": "src/Oom/Compile/Compile.cs",
+      "description": "Drop the knowledge/concepts/ prefix and the start anchor, so any traversal or absolute path ending in a lowercase .md name (../escape.md, C:/absolute.md) is accepted.",
+      "compile_visible": false,
+      "search": "@\"^knowledge/concepts/[a-z0-9-]+\\.md$\"",
+      "replace": "@\"[a-z0-9-]+\\.md$\""
+    },
+    {
+      "id": "M3-directive-refuse-in-only",
+      "boundary": "spec 6.7 guard chain directive refusal",
+      "file": "src/Oom/Guards/Guards.cs",
+      "description": "Refuse a directive only on Direction.In, so a directive in the model's compile output (Direction.Out) is no longer refused.",
+      "compile_visible": false,
+      "search": "return new GateResult(cleaned, findings, directive && component == ComponentKind.Compile);",
+      "replace": "return new GateResult(cleaned, findings, directive && component == ComponentKind.Compile && direction == Direction.In);"
+    },
+    {
+      "id": "M4-directive-never-refuses",
+      "boundary": "spec 6.7 guard chain directive refusal",
+      "file": "src/Oom/Guards/Guards.cs",
+      "description": "Remove the refusal entirely: the directive finding is still reported but the run is never quarantined.",
+      "compile_visible": false,
+      "search": "return new GateResult(cleaned, findings, directive && component == ComponentKind.Compile);",
+      "replace": "return new GateResult(cleaned, findings, false);"
+    },
+    {
+      "id": "M5-claude-config-dir-dropped",
+      "boundary": "spec 6.6 claude -p isolation environment",
+      "file": "src/Oom/Runner/Runner.cs",
+      "description": "Drop CLAUDE_CONFIG_DIR from the child environment, so the isolated claude -p call inherits the user's own config, hooks and skills.",
+      "compile_visible": false,
+      "search": "            [\"CLAUDE_CONFIG_DIR\"] = isolatedConfigDir,\n            [RecursionGuard] = \"oom\"",
+      "replace": "            [RecursionGuard] = \"oom\""
+    },
+    {
+      "id": "M6-cwd-inside-vault",
+      "boundary": "spec 6.6 claude -p isolation environment",
+      "file": "src/Oom/Runner/Runner.cs",
+      "description": "Run the child process with the vault itself as its working directory instead of a directory outside the vault.",
+      "compile_visible": false,
+      "search": "        var workingDirectory = OutsideVault(vaultPath);",
+      "replace": "        var workingDirectory = vaultPath;"
+    }
+  ]
+}

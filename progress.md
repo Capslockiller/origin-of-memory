@@ -165,3 +165,32 @@ Test: `dotnet test Oom.sln -c Release -v n` — Toplam test sayısı: 99, Geçti
 Sınıf başına: yazma-yolu yeşil 18/kırmızı 0 · özetleyici yeşil 6/kırmızı 0 · derleyici yeşil 16/kırmızı 0 · getirme yeşil 7/kırmızı 3 · kanca yeşil 6/kırmızı 2 · kota yeşil 6/kırmızı 0 · durum-deposu yeşil 7/kırmızı 0 · kurulum yeşil 11/kırmızı 2 · test-disiplini yeşil 8/kırmızı 0 · süreç-işletme yeşil 7/kırmızı 0.
 Kırmızı 7: Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098 (Lane INT hükümleriyle eşleşiyor).
 `docs/scars.md` (99 satırlık tablo) oluşturuldu; `README.md`/`README.tr.md` içindeki "henüz yazılmadı" cümlesi `docs/scars.md`'ye işaret edecek şekilde güncellendi.
+
+## Lane MUT
+
+Gate 9 (mutation check) is now measurable and measured. Tool: `bench/mutate.py`, definitions: `bench/mutants.json`, result: `bench/results/mutation-2026-09-09.json`. Command per run: `dotnet test Oom.sln -c Release --no-restore -v q`.
+
+Baseline: failed 7 / passed 92 / total 99 (~3 s). Baseline reds: Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098 — known, out of scope, and excluded by construction because a mutant is judged only on failures new relative to this set.
+
+Six mutants, two per boundary, all killed:
+
+| id | boundary | mutation | test line | killed by |
+| --- | --- | --- | --- | --- |
+| M1-concept-path-slug-slash | Spec 6.5-4 `Compile.ConceptPath` | slug allows `/`, so `knowledge/concepts/nested/note.md` passes | failed 8 / passed 91 | Y-028 |
+| M2-concept-path-prefix-dropped | Spec 6.5-4 `Compile.ConceptPath` | prefix and start anchor dropped, so `../escape.md` and `C:/absolute.md` pass | failed 9 / passed 90 | Y-028, Y-026 |
+| M3-directive-refuse-in-only | Spec 6.7 `Guards.Gate` | refuse only on `Direction.In`, so a directive in compile's model output is not refused | failed 9 / passed 90 | Y-027, Y-095 |
+| M4-directive-never-refuses | Spec 6.7 `Guards.Gate` | refusal removed entirely; the directive finding is still reported | failed 10 / passed 89 | Y-027, Y-026, Y-095 |
+| M5-claude-config-dir-dropped | Spec 6.6 `Runner.BuildClaudeRequest` | `CLAUDE_CONFIG_DIR` dropped from the child environment | failed 8 / passed 91 | Y-011 |
+| M6-cwd-inside-vault | Spec 6.6 `Runner.BuildClaudeRequest` | working directory becomes the vault itself instead of a path outside it | failed 8 / passed 91 | Y-011 |
+
+Result: 6 killed / 0 survived — gate 9 green on this mutant set. Run twice, byte-identical verdicts both times; `git status --porcelain -- src` empty and `git diff --quiet -- src` clean after each run. `src/` was never left mutated: the original bytes are restored in a `finally` block and the restore is verified byte-for-byte.
+
+Coverage gap found while anchoring the 6.6 mutants (measured with three throwaway probe mutants outside `bench/mutants.json`, results not checked in). Spec 6.6 names five properties of the isolated `claude -p` invocation; only two of them are asserted by any test (`CLAUDE_CONFIG_DIR` and the cwd, both by Y-011). The other three are unasserted — each probe ran green at the baseline 7 failures:
+
+Survived: `--max-turns` changed from `1` to `3` — proposed test: extend Y-011 to assert that `BuildClaudeRequest` emits `--max-turns` immediately followed by `1`.
+Survived: `--tools` changed from `string.Empty` to `all` — proposed test: extend Y-011 to assert that the `--tools` argument is present and its value is the empty string.
+Survived: `OOM_INVOKED_BY` dropped from the child environment — proposed test: extend Y-011 to assert `request.Environment["OOM_INVOKED_BY"] == "oom"`, which is the recursion guard `Program`/`Retrieve` read back.
+
+Tests were not touched in this lane (out of ownership); the three proposals above are for the test owner to decide. Adding them would let three of the six gate-9 mutants be re-anchored on the currently unmeasured properties.
+
+Files added by lane MUT: `bench/mutate.py` (new), `bench/mutants.json` (new), `bench/results/mutation-2026-09-09.json` (new), `bench/README.md` (appended section "Mutation check (gate 9)"), `progress.md` (this section). Nothing under `src/`, `tests/`, `.github/`, `*.csproj`, `Oom.sln`, `README*.md` or `CHANGELOG.md` was modified.
