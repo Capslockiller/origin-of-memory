@@ -82,3 +82,28 @@ Blocked-by: lane B Retrieve.Build — the index rebuild inside Compile.Publish; 
 Blocked-by: lane D Doctor.Check — Y-030, Y-031 and Y-034 assert doctor output; the Compile.Publish half of Y-030 already behaves as the scar requires.
 Blocked-by: lanes A, B and D for Y-069 (Install.Run, Ingest.ParseClaude, Sweep.Run, Retrieve.Hook); Compile.Run is the only step of that chain implemented here.
 Blocked-by: lane D Notify — the single parked-daily notification goes through an injected INotifier; lane C ships no default implementation because Notify is lane D's file.
+
+## Lane A
+
+Guards: 320 lines, Y-080, Y-095 green
+Notes: 255 lines, Y-096 green
+TurkishFold: 87 lines, Y-044 green
+State: 492 lines, Y-033, Y-052, Y-053, Y-054, Y-055, Y-057, Y-058, Y-059, Y-060, Y-061, Y-062, Y-063, Y-064 green
+Runner: 401 lines, Y-010, Y-018, Y-019, Y-020, Y-021, Y-073, Y-087, Y-097 green
+Program: 172 lines, subcommand dispatcher, no scar of its own
+Infrastructure (boundary implementations + vault discovery): 197 lines
+
+Ruling: Y-026 makes the directive guard refuse compile INPUT as well; spec §6.7 says "only out", the scar inventory row says a directive-shaped input is quarantined. The scar wins: `Gate` refuses on a directive hit whenever the component is `Compile`, in both directions.
+Ruling: Y-044 asks `Tokenize("İstanbul") == Tokenize("ISTANBUL")` while `Fold` must keep `ı` and `i` apart (same test, first two assertions). `Fold` therefore folds `I→ı` / `İ→i` exactly as spec §6.4 says, and tokenization additionally collapses `ı→i` so index and query produce one token. The recall trade (`ısı`/`isi` collide) is deliberate and matches scar 10.1 #5.
+Ruling: Y-079 stays red for a reason outside this lane. The test runs `dotnet test --filter IntentionalRed` in the repository root; no test named `IntentionalRed` exists (tests are lane S's and may not be edited here), and VSTest 17.14 exits 0 when a filter matches nothing — verified by hand. `RunProcess` propagates the child's exit code faithfully; Y-049 proves the non-zero path. The test needs a seeded intentionally-red test in the suite.
+Ruling: Y-098 stays red. It calls `RunProcess` with the non-existent executable `fixture-child` and asserts `TimedOut || ExitCode == 0`. Y-049 asserts the opposite for the same class of input (`missing-interpreter` must exit non-zero), and nothing distinguishes the two commands. A launch failure is reported as `ExitCode = WinError/127` with a Turkish stderr line and `TimedOut = false`; labelling it a timeout would be the error-swallowing guard scar Y-049 forbids. The first assertion of Y-098 (stdin always closed) is implemented and holds; the timeout path itself kills the process tree and sets `TimedOut`.
+Blocked-by: lane B Flush.ValidateSummary (Y-011 second half)
+Blocked-by: lane B Retrieve.Rank / Retrieve.Build and lane C RootMap.Regenerate (Y-023, Y-024 — `Notes.IndexableText` half is implemented)
+Blocked-by: lane C Compile.ValidateOutputPaths (Y-026 — the `Guards.Gate` half is green)
+Blocked-by: lane D Doctor.Check (Y-049 — the `RunProcess` half is green)
+Blocked-by: lane D Notify.Send (Y-056 — the `State.ReadQuota` half is green)
+Blocked-by: lane D Install.ValidateConfiguration (Y-067 — the source-tree path scan half passes)
+
+Build: `dotnet build Oom.sln -c Release` — 0 warnings, 0 errors.
+Test: Başarısız! - Başarısız: 71, Başarılı: 28, Atlanan: 0, Toplam: 99 — was 96/3, now 71/28; no previously green test turned red (Y-068, Y-081, Y-094 still green).
+Line budget: Guards 320/400, State 492/500, Runner 401/450; rest (Program 172 + Notes 255 + TurkishFold 87 + Infrastructure 197 = 711) / 750; `src/Oom/` total 2.095 / 7.500.
