@@ -366,3 +366,11 @@ Ayrıca kanca tarafında ölçülen bulgu: `ShouldInject`, `hit.Score >= StrictS
 Ruling: Kapı 5 ölçüldü ve **geçmedi**. Şerit yalnız ölçüm şeridi olduğu için getirme ayarı yapılmadı; aşağıdaki teşhis analizdir, düzeltme değildir.
 Ruling: Kapı 10 için spec 6.12 komutu `oom bench --backend local` diyor; o alt komut hâlâ yok ve `yerel_olcum.py` onun yerine geçmez, yalnız ölçümü şimdilik taşır. Bu bir spec borcudur ve kapatılmadan kapı 10 "geçti" denemez.
 Ruling: v0 karşılaştırması yapılamadı — `bench/.versions/` bu ağaçta yok (gitignore'lu). Tablodaki sayılar 2.0'ın mutlak ölçümüdür, v0'a göre parite farkı değildir.
+
+## Lane D3 (Part B only, orchestrator split)
+Owner decision (2026-09-09): Install/Uninstall/`--from-v0` stay out of `main` (line budget 7 500 stands); lane D3's full work incl. the D2 rebase is preserved on the `oom-lane-D3-oom` worktree. Only Part B landed here:
+- Flush.EventTime → local time (heading, `ts:` anchor, daily filename); Y-008 green.
+- SweepRun coverage row over the last 7 days + `kapsama-tum-zamanlar` item; Program.Snapshot reads the newest coverage row.
+- Runner.ReadUsage sums all modelUsage entries; `in_tok` = input + cacheCreation + cacheRead; `cache_w` recorded.
+- OomSettings.LoadError → doctor `config hata json` (fail loud) instead of silent defaults.
+Test: Başarısız 7, Başarılı 92, Toplam 99 (same 7 reds). src/Oom 7 376 lines.

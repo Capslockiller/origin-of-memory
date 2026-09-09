@@ -387,20 +387,39 @@ public sealed class Runner
         }
     }
 
-    /// <summary>The tokens the last Claude call actually spent, straight from <c>modelUsage</c> (spec 6.6).</summary>
-    public (long Input, long Output, long CacheRead) LastUsage { get; private set; }
+    /// <summary>
+    /// What the last Claude call actually spent. <c>Input</c> is the <em>whole</em> prompt the
+    /// model read — <c>inputTokens + cacheCreationInputTokens + cacheReadInputTokens</c> — and
+    /// the two cache halves are kept beside it. Claude Code's <c>inputTokens</c> counts only the
+    /// uncached remainder, which is why a 58 000 character prompt was recorded as <c>in_tok=10</c>
+    /// in the live acceptance run: the other ~15 000 tokens were a cache read nobody was told about.
+    /// </summary>
+    public (long Input, long Output, long CacheRead, long CacheWrite) LastUsage { get; private set; }
 
     private void Record(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, DateTimeOffset started, string outcome, string usageSource, string purpose) =>
         _state?.RecordCall(backend, component, tier, model, inputChars, outputChars, (long)(_clock.Now - started).TotalMilliseconds, outcome, usageSource, purpose,
-            LastUsage.Input, LastUsage.Output, LastUsage.CacheRead);
+            LastUsage.Input, LastUsage.Output, LastUsage.CacheRead, LastUsage.CacheWrite);
 
-    private static (long Input, long Output, long CacheRead) ReadUsage(JsonElement root, string model)
+    /// <summary>
+    /// <c>modelUsage</c> is keyed by model id and a single call may carry more than one entry
+    /// (a mid-call fallback), so every entry is summed rather than the first one taken.
+    /// </summary>
+    private static (long Input, long Output, long CacheRead, long CacheWrite) ReadUsage(JsonElement root, string model)
     {
-        if (!root.TryGetProperty("modelUsage", out var usage) || usage.ValueKind is not JsonValueKind.Object
-            || !usage.TryGetProperty(model, out var entry) || entry.ValueKind is not JsonValueKind.Object)
+        if (!root.TryGetProperty("modelUsage", out var usage) || usage.ValueKind is not JsonValueKind.Object)
             return default;
 
-        return (Count(entry, "inputTokens"), Count(entry, "outputTokens"), Count(entry, "cacheReadInputTokens"));
+        long input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+        foreach (var property in usage.EnumerateObject())
+        {
+            if (property.Value.ValueKind is not JsonValueKind.Object) continue;
+            input += Count(property.Value, "inputTokens");
+            output += Count(property.Value, "outputTokens");
+            cacheRead += Count(property.Value, "cacheReadInputTokens");
+            cacheWrite += Count(property.Value, "cacheCreationInputTokens");
+        }
+
+        return (input + cacheRead + cacheWrite, output, cacheRead, cacheWrite);
 
         static long Count(JsonElement element, string name) =>
             element.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.Number ? value.GetInt64() : 0;

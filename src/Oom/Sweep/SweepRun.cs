@@ -18,6 +18,7 @@ public sealed record SweepReport(int Files, int Changed, int Sessions, int Skipp
 /// </summary>
 public sealed class SweepRun
 {
+    private const int CoverageWindowDays = 7;
     private static readonly Regex Anchor = new(@"<!-- session:(?<id>\S+) ts:\S+ turns:(?<start>\d+)-(?<end>\d+)", RegexOptions.Compiled);
     private static readonly Regex NonWord = new("[^A-Za-z0-9]", RegexOptions.Compiled);
 
@@ -147,18 +148,39 @@ public sealed class SweepRun
         var queued = dryRun ? 0 : DrainQueue(now, budget - results.Count, results, ref covered, uncovered);
         var dailies = results.Where(entry => entry.DailyPath is not null).Select(entry => entry.DailyPath!).Distinct().ToArray();
         var total = covered + uncovered.Count;
+        var window = Coverage(candidates, uncovered, now);
         var summary = $"tarama: {candidates.Count} dosya, {changed} değişmiş, {results.Count} oturum, {queued} kuyruk, {covered}/{total} kapsandı, {skipped} atlandı";
 
         if (!dryRun && _state is not null)
         {
-            _state.RecordCoverage(now, total, covered, uncovered);
+            // Spec 6.8 measures coverage over the last seven days. The all-time pair is the
+            // ingest backlog, not a health metric: an archive of 2022 sessions made the live
+            // run print "kapsama %0" while every recent session was in fact summarised.
+            _state.RecordCoverage(now, window.Total, window.Covered, window.Uncovered);
             _state.RecordFlush(now, "sweep", "sweep", "summary", results.Count, characters, "sweep");
-            _state.WriteHealthConcurrently([new HealthItem("sweep", HealthLevel.Info, "sweep-summary", "son koşum", summary)]);
+            _state.WriteHealthConcurrently([
+                new HealthItem("sweep", HealthLevel.Info, "sweep-summary", "son koşum", summary),
+                new HealthItem("sweep", HealthLevel.Info, "kapsama-tum-zamanlar", "tüm zamanlar",
+                    $"Tüm zamanlar kapsama: {covered}/{total} — arşiv geri alımı ilerledikçe kapanır.")]);
             _state.SweepRetention(now);
         }
 
         return new SweepReport(candidates.Count, changed, results.Count, skipped,
             new SweepResult(total, covered, uncovered, skipped, results), dailies, summary);
+    }
+
+    /// <summary>
+    /// The seven-day coverage window of spec 6.8: only sessions whose last turn is within seven
+    /// days of <paramref name="now"/> are measured. Everything older is backlog for <c>ingest</c>
+    /// and is reported separately, so a deep archive can never drag the health metric to zero.
+    /// </summary>
+    private static (int Total, int Covered, IReadOnlyList<string> Uncovered) Coverage(
+        IReadOnlyList<SweepCandidate> candidates, IReadOnlyList<string> uncovered, DateTimeOffset now)
+    {
+        var recent = candidates.Where(candidate => now - candidate.ModifiedAt <= TimeSpan.FromDays(CoverageWindowDays))
+            .Select(candidate => candidate.SessionId).ToHashSet(StringComparer.Ordinal);
+        var missed = uncovered.Where(recent.Contains).Distinct(StringComparer.Ordinal).ToArray();
+        return (recent.Count, recent.Count - missed.Length, missed);
     }
 
     /// <summary>Each daily anchor is a durable cursor: <c>turns:a-b</c> says b was already summarised.</summary>

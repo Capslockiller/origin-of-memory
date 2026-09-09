@@ -297,11 +297,11 @@ public sealed partial class State : IDisposable
 
     /// <summary>One ledger row per model call; content is never written (spec 6.6).</summary>
     public void RecordCall(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, long elapsedMs, string outcome, string usageSource, string purpose,
-        long inputTokens = 0, long outputTokens = 0, long cacheRead = 0) =>
-        Write("INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, ms, outcome, usage_source, purpose) " +
-              "VALUES ($ts, $backend, $component, $tier, $model, $in, $out, $intok, $outtok, $cache, $ms, $outcome, $usage, $purpose)",
+        long inputTokens = 0, long outputTokens = 0, long cacheRead = 0, long cacheWrite = 0) =>
+        Write("INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose) " +
+              "VALUES ($ts, $backend, $component, $tier, $model, $in, $out, $intok, $outtok, $cacher, $cachew, $ms, $outcome, $usage, $purpose)",
             ("$ts", Stamp(_clock.Now)), ("$backend", backend), ("$component", component.ToString()), ("$tier", tier.ToString()), ("$model", model),
-            ("$in", inputChars), ("$out", outputChars), ("$intok", inputTokens), ("$outtok", outputTokens), ("$cache", cacheRead),
+            ("$in", inputChars), ("$out", outputChars), ("$intok", inputTokens), ("$outtok", outputTokens), ("$cacher", cacheRead), ("$cachew", cacheWrite),
             ("$ms", elapsedMs), ("$outcome", outcome), ("$usage", usageSource), ("$purpose", purpose));
 
     /// <summary>One <c>flush_log</c> row per session outcome (spec 6.3-8).</summary>

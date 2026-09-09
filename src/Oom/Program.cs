@@ -356,8 +356,10 @@ internal static class Program
     {
         var flushes = state.Scalar("SELECT COUNT(*) FROM flush_log WHERE outcome <> 'summary'");
         var rejected = state.Scalar("SELECT COUNT(*) FROM flush_log WHERE outcome IN ('retry','parked')");
-        var covered = state.Scalar("SELECT IFNULL(SUM(covered), 0) FROM coverage");
-        var total = state.Scalar("SELECT IFNULL(SUM(total), 0) FROM coverage");
+        // The newest coverage row is the 7-day window the sweep just measured (spec 6.8);
+        // summing every row ever written mixed windows and reported a coverage nobody has.
+        var covered = state.Scalar("SELECT IFNULL((SELECT covered FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
+        var total = state.Scalar("SELECT IFNULL((SELECT total FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
         var invalid = Concepts(vault).Count - Corpus(vault).Count;
         var database = VaultPaths.StateDatabase();
         List<DoctorObservation> observations =
@@ -372,6 +374,11 @@ internal static class Program
             Observe(now, "sweep", "flush-log", "rows", $"{flushes} flush_log satırı"),
             .. settings.UnknownKeys.Select(key => new DoctorObservation(
                 new HealthItem("config", HealthLevel.Warning, "unknown-key", key, $"oom.json içinde bilinmeyen anahtar: {key}"), now)),
+            // Kurallar: fail loud. A vault whose oom.json cannot be parsed runs on the defaults,
+            // and the owner has to be told that, not left to guess why sweep.roots looks wrong.
+            .. settings.LoadError is null ? Array.Empty<DoctorObservation>() : [new DoctorObservation(
+                new HealthItem("config", HealthLevel.Error, "hata", "json",
+                    $"oom.json okunamadı, varsayılanlar kullanılıyor — {settings.LoadError}"), now)],
             .. HealthLedger.Read()
         ];
 

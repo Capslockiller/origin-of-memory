@@ -47,6 +47,14 @@ public sealed record OomSettings(
     /// <summary>Keys the file carried that spec 4.1 does not define (spec 4.1: warning, not error).</summary>
     public IReadOnlyList<string> UnknownKeys { get; init; } = [];
 
+    /// <summary>
+    /// Why <c>oom.json</c> could not be read, when it exists but is unusable — invalid JSON,
+    /// an unreadable file. Falling back to the defaults is right, doing it silently is not:
+    /// the live acceptance run served a whole session from defaults while a broken file sat in
+    /// the vault. <c>doctor</c> turns this into the <c>config hata json</c> row.
+    /// </summary>
+    public string? LoadError { get; init; }
+
     /// <summary>The spec 4.1 defaults, used verbatim when <c>oom.json</c> is absent or unreadable.</summary>
     public static OomSettings Defaults(string? vault = null) => new(
         new BackendSettings(
@@ -91,7 +99,7 @@ public sealed record OomSettings(
         }
         catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
         {
-            return defaults;
+            return defaults with { LoadError = $"{path}: {error.Message}" };
         }
     }
 

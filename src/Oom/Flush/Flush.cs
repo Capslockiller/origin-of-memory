@@ -280,14 +280,16 @@ public sealed class Flush
         return marked || full.StartsWith(temp + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Event time comes from the transcript's last turn; file and scan time are fallbacks (Y-008).</summary>
-    public DateTimeOffset EventTime(Session session, DateTimeOffset fileTime, DateTimeOffset scanTime)
-    {
-        if (session.Turns.Count > 0)
-            return session.Turns.Max(turn => turn.Timestamp);
-
-        return fileTime != default ? fileTime : scanTime;
-    }
+    /// <summary>
+    /// Event time comes from the transcript's last turn; file and scan time are fallbacks (Y-008).
+    /// Claude Code stamps turns in UTC, but spec 7 writes the heading and the <c>ts:</c> anchor in
+    /// the machine's zone, so the answer is converted: a 12:54Z turn is the 15:54 block the owner
+    /// lived through. Y-008's explicit +03:00 fixtures compare the instant and keep their date.
+    /// </summary>
+    public DateTimeOffset EventTime(Session session, DateTimeOffset fileTime, DateTimeOffset scanTime) =>
+        TimeZoneInfo.ConvertTime(session.Turns.Count > 0
+            ? session.Turns.Max(turn => turn.Timestamp)
+            : fileTime != default ? fileTime : scanTime, TimeZoneInfo.Local);
 
     /// <summary>Hook input may arrive with a BOM; oom itself never writes one (Y-089).</summary>
     public IngressRecord ReadHookInput(byte[] input)
