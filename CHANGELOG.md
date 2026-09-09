@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+<!-- yazan: claude · fable-5.1 (orkestratör) -->
+- **2.0(S)** `908742e` — 99 scar tests under `tests/Oom.Tests/Scars/` written red before any code, one `Fact` per row of the owner's scar inventory; public contract stubs in `src/Oom/Contracts/`.
+- **2.0(B)** `70680d5` — write path: `Flush` (contiguous-range cursor, five-heading shape validation, retry queue, daily append under a mutex), `Sweep` (stamps, coverage reconciliation, `schtasks` XML without a duration), `Retrieve` (FTS5 BM25 with the leading `0.0` weight, hook gate), `Context`, hook templates.
+- **2.0(C)** `eb9a0b7` — `Compile` (text-mode file transcript, path regex rejecting the whole run, all-or-nothing publication with backup and rollback, 20-hour rule), `RootMap`, `Bridge`.
+- **2.0(A)** `6501eab` — `State` (SQLite under `%LOCALAPPDATA%\oom\<vault-hash>\`), `Runner` (isolated `claude -p`, OpenAI-compatible local backend), `Guards` chain, strict `Notes` parser, `TurkishFold`, CLI dispatcher.
+- **2.0(D)** `9f1c36a` — `Ingest` (claude and codex parsers with fixed samples), `Doctor`, `Notify`, `Mcp` (read-only stdio), `Install` (precondition gate, hooks, task, AUMID shortcut, uninstall, v0 backup gate), `Save`.
+- **2.0(INT)** `e6291d7`, `a739c5b` — cross-lane integration; two fixture corrections (Y-008, Y-093), `IntentionalRed` seed excluded by `default.runsettings`, `.oom/backup/` ignored. Measured on `a739c5b`: 92 green / 7 red of 99; the seven remaining rulings are in `progress.md`.
+- **2.0(E)** `9906576` — README (EN/TR), SECURITY, CONTRIBUTING, AGENTS, `bench/README`, `docs/architecture.md`, `docs/install.md`.
+
 ### Changed
 
 <!-- yazan: claude · fable-5.1 -->
