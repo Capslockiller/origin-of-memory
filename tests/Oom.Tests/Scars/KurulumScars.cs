@@ -36,7 +36,9 @@ public sealed class KurulumScars
     public void Y068_ModuleLineBudgetsAndSingleParserAreEnforced()
     {
         var root = ScarFixture.RepositoryRoot();
-        var files = Directory.EnumerateFiles(Path.Combine(root, "src", "Oom"), "*.cs", SearchOption.AllDirectories).ToArray();
+        var files = Directory.EnumerateFiles(Path.Combine(root, "src", "Oom"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(part => part is "obj" or "bin")) // authored C# only, not compiler output (owner-approved 2026-09-09)
+            .ToArray();
         Assert.True(files.Sum(path => File.ReadLines(path).Count()) <= 7_500);
         var parserDefinitions = files.SelectMany(path => File.ReadLines(path)).Count(line => line.Contains(" Note Parse(", StringComparison.Ordinal));
         Assert.Equal(1, parserDefinitions);
