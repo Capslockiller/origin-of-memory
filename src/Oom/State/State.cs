@@ -15,7 +15,8 @@ namespace Oom.Contracts;
 /// </summary>
 public sealed partial class State : IDisposable
 {
-    private const int SchemaVersion = 1;
+    // 2: the five read-only views of spec 2.2-2 (gate 12-2); tables themselves unchanged.
+    private const int SchemaVersion = 2;
     private const int ReplaceAttempts = 5;
     private const int ReplaceBackoffMs = 200;
     private const int StaleWarningHours = 24;
@@ -496,7 +497,14 @@ public sealed partial class State : IDisposable
             "CREATE TABLE IF NOT EXISTS notified(class TEXT, key TEXT, ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS retrieve_served(session_id TEXT, query_sig TEXT, note TEXT, ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS locks(name TEXT PRIMARY KEY, machine TEXT, pid INTEGER, ts TEXT);" +
-            "CREATE TABLE IF NOT EXISTS kota(ts TEXT, \"window\" TEXT, used_pct REAL, resets_at TEXT);";
+            "CREATE TABLE IF NOT EXISTS kota(ts TEXT, \"window\" TEXT, used_pct REAL, resets_at TEXT);" +
+            // Spec 2.2-2: phase 2 packages read these five views, never the tables behind them.
+            // A SQLite view without an INSTEAD OF trigger is read-only, which is the contract.
+            "CREATE VIEW IF NOT EXISTS v_calls AS SELECT ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose FROM calls;" +
+            "CREATE VIEW IF NOT EXISTS v_flush_log AS SELECT ts, session_id, reason, outcome, turns, chars, backend FROM flush_log;" +
+            "CREATE VIEW IF NOT EXISTS v_coverage AS SELECT ts, total, covered, uncovered_json FROM coverage;" +
+            "CREATE VIEW IF NOT EXISTS v_health AS SELECT ts, component, level, code, key, detail FROM health;" +
+            "CREATE VIEW IF NOT EXISTS v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;";
         command.ExecuteNonQuery();
     }
 }

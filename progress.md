@@ -643,3 +643,46 @@ Karar: `backend.flush = undecided — leg (b) not run`, `backend.compile = drop`
 Ruling: Üretimdeki saat artık tek; `OOM_FAKE_NOW` ile koşulan sentetik tarama daily başlığını, `flush_log`, `calls` ve `coverage` damgalarını aynı sahte ana bağlıyor, kontrol koşumu ise hepsini gerçek saate kaydırıyor.
 Ruling: Lane BENCH'in `oom bench` spec borcu kapandı — komut ürün içinde, ölçtüğü yol ürünün kendi yolu ve sonucu `bench/results/`'a yazıyor. Kapı 10 hâlâ **geçmedi**: bu koşum sentetiktir (n=3/n=2, spec 30/5 ister) ve (b) ayağı koşmadı, bu yüzden `backend.flush` belirsiz kalıyor.
 Ruling: Sentetik koşum hiçbir karar vermez; `oom.json`'a hiçbir şey yazılmadı, `backend` listelerine dokunulmadı. Spec 6.12'nin tam koşumu Master'ın kararıdır.
+## Lane G12 — kabul kapıları 11 ve 12 ölçülebilir hâle geldi
+
+`tests/Oom.Tests/Gates/` yeni klasöründe iki dosya: `Gate11Contracts.cs` (8 test) ve `Gate12Boundary.cs` (8 test). Bütün fixture'lar temp altında sentetik ve test sonunda siliniyor; hiçbir model çağrısı, hiçbir gerçek transkript, hiçbir ağ erişimi yok. `dotnet test Oom.sln -c Release` = **108 yeşil / 7 kırmızı / toplam 115** — 92 yara yeşil değişmedi, 7 bilinen kırmızı (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) aynen duruyor, 16 yeni kapı testinin hepsi yeşil.
+
+### Kapı 11 — sözleşmeler (spec 11-11)
+
+| madde | test | sonuç | ürün değişikliği |
+| --- | --- | --- | --- |
+| claude sabit örneği | `Gate11ClaudeFixedSampleParses` | geçti | yok |
+| codex sabit örneği | `Gate11CodexFixedSampleParses` | geçti | yok |
+| gerçek Claude Code biçimi (sidechain/meta/araç dışarıda) | `Gate11ClaudeRealShapeExcludesSidechainMetaAndToolLines` | geçti | yok |
+| bilinmeyen satır türü hoş görülür | `Gate11UnknownLineTypeIsTolerated` | geçti | yok |
+| yarım son satır patlatmaz | `Gate11TruncatedLastLineDoesNotThrow` | geçti | **evet** — `CodexParser` yarım JSON satırında `FormatException` atıyordu, artık o satırı atlıyor |
+| MCP üç aracı sahte istemciyle uçtan uca | `Gate11McpStdioLoopAnswersThreeToolsAndEndsAtEndOfInput` | geçti | yok (`Mcp.Run(TextReader, TextWriter)` zaten vardı) |
+| MCP not adı dizin yürüyüşünü reddeder | `Gate11McpRefusesPathTraversalInNoteName` | geçti | yok |
+| `save --session-json` normal flush yolundan daily bloğuna | `Gate11SaveSessionJsonWritesImportedDailyBlock` | geçti | **evet** — `Save` hand-off dosyasını geri okuyordu, her dış oturum daily'de `içe aktarım:claude` oluyordu; artık oturum kendisi olarak yazma yoluna giriyor |
+
+MCP testi: `initialize` → `notifications/initialized` (yanıtsız) → `tools/list` (tam üç araç) → `tools/call memory_search` (limit 9, beşe kırpılıyor; ikinci çağrı ham anahtarla yapılıyor ve yalnız `Guards.Gate(In)`'in ürettiği `[SIR:anthropic-key]` maskesi eşleştiği için o not dönüyor — sorgunun kapıdan geçtiğinin gözlemlenebilir kanıtı) → `memory_root_map` → `memory_note` → bilinmeyen araç adı (`-32602`) → bozuk satır (`-32700`) → EOF'ta döngü biter. Vault sentetik: 20 kavram notu, kök harita, `hub-config.json`.
+
+`save --session-json` testi modelsiz koşuyor: `Runner(configured: false)` ile yazma yolu kendi extractive geri düşüşünü alıyor (`fallback_backend: extractive` özette doğrulanıyor), blok `, içe aktarım:web-disari` son eki ve `<!-- session:… turns:0-5 source:web-disari -->` çapasıyla yazılıyor, imleç 6'ya ilerliyor, aynı dosyayla ikinci çağrı `NoNewTurns` dönüyor.
+
+### Kapı 12 — sınır (spec 11-12)
+
+| madde | test | sonuç | ürün değişikliği |
+| --- | --- | --- | --- |
+| `doctor --json` şeması | `Gate12DoctorJsonCarriesItsSchema` | geçti | yok |
+| `context --json` şeması | `Gate12ContextJsonCarriesItsSchema` | geçti | yok |
+| `retrieve --query --json` şeması | `Gate12RetrieveJsonCarriesItsSchema` | geçti | yok |
+| `state.db` beş salt okunur görünümü | `Gate12StateDatabaseExposesReadOnlyViews` | geçti | **evet** — `v_calls`, `v_flush_log`, `v_coverage`, `v_health`, `v_kota` hiç yoktu; `State` şemasına eklendi, `user_version` 1 → 2 |
+| görünümler yazılamaz | `Gate12ViewsRefuseWrites` | geçti | yukarıdakiyle aynı |
+| `extensions.contextLine` komutu çalışır | `Gate12ExtensionContextLineIsExecuted` | geçti | **evet** — değer komut olarak değil düz metin olarak bağlama basılıyordu; artık çalıştırılıyor, ilk satırı alınıyor |
+| hata veren/olmayan uzantı hiçbir şey eklemez | `Gate12FailingExtensionAddsNothing` | geçti | yukarıdakiyle aynı |
+| `src/Oom` paket adı tanımaz | `Gate12CoreKnowsNoPackageName` | geçti | yok — `oom-kota`, `oom-rapor`, `oom-ingest-extra`, `oom-pano` hiçbiri yok |
+
+Üç JSON şeması testi kütüphaneyi değil yayımlanan `oom.exe`'yi alt süreç olarak koşuyor: sözleşme paketin gördüğü çıktının kendisi. Alan listeleri testin içinde yazılı ve varlık iddia ediyor, tam küme değil — spec 2.2 alan eklemeye izin verir, silmeye ve yeniden adlandırmaya vermez. `doctor --json` item'ları bugün karışık harf düzeninde (`Component`, `Code`, `Key`, `Detail` büyük; `level`, `stale` küçük); yeniden adlandırma yasak olduğu için test bugünkü adları sabitliyor.
+
+`extensions.contextLine` çalıştırması: komut satırı tırnak duyarlı bölünüyor, çocuk süreç `OOM_INVOKED_BY` taşıyor (bir uzantı `oom`'a geri kabuk açarsa orada durur), 5 saniye zaman aşımı var, yalnız ilk boş olmayan satır alınıyor ve 200 karakterde kesiliyor. Çıkış kodu sıfır değilse, süreç başlamadıysa ya da çıktı boşsa hiçbir şey eklenmiyor; kapanış cümlesi (`Hafıza protokolü zorunludur.`) bloğun son satırı kalıyor.
+
+Satır bütçesi (D13): `src/Oom` yazılmış C# 8 438 / 9 000; `Mcp` 136 / 300; `State` 510 / 700; `Program` 748; `Save` 89; `CodexParser` 76.
+
+Ruling: Kapı 11 ve kapı 12 artık ölçülüyor ve ikisi de yeşil; dördü de gerçek boşluktu — codex yarım satırı, `save --session-json` kaynak etiketi, beş `state.db` görünümü ve `extensions.contextLine`'ın hiç çalıştırılmaması. Ürün yalnız bir test boşluğu gösterdiği yerde değişti.
+Ruling: `state.db` şema sürümü 2'ye çıktı; görünümler `CREATE VIEW IF NOT EXISTS` olduğu için mevcut bir veritabanı ilk açılışta kendiliğinden kazanıyor, tablolara dokunulmadı.
+Blocked-by: yok.

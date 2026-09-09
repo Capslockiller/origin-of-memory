@@ -16,8 +16,11 @@ internal static class CodexParser
         foreach (var line in Lines(jsonl))
         {
             JsonDocument document;
+            // A rollout file the running session is still appending to ends in a half-written
+            // line; that is a normal read, not a corrupt archive, so the line is skipped and the
+            // turns before it are still imported (gate 11-1).
             try { document = JsonDocument.Parse(line); }
-            catch (JsonException exception) { throw new FormatException("Codex rollout satırı geçerli JSON değil.", exception); }
+            catch (JsonException) { continue; }
             using (document)
             {
                 var root = document.RootElement;

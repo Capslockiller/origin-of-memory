@@ -12,6 +12,12 @@ namespace Oom;
 internal static class Program
 {
     private const string RecursionGuard = "OOM_INVOKED_BY";
+
+    /// <summary>An extension line is a status line, not a report: one line, and a short one (spec 2.2-4).</summary>
+    private const int ExtensionLineChars = 200;
+
+    /// <summary>SessionStart waits for no extension: a slow command is dropped, not endured.</summary>
+    private static readonly TimeSpan ExtensionTimeout = TimeSpan.FromSeconds(5);
     private static readonly UTF8Encoding Utf8 = new(false);
 
     /// <summary>Commands a hook may trigger; inside an oom-invoked process they are silent (scar 10.1 #19).</summary>
@@ -140,7 +146,7 @@ internal static class Program
         Context.PublishStatusLine(state.ReadStatusLine(now));
         var options = settings.Context with { PendingNotification = state.ReadPendingNotification(now) };
         var result = new Context(options).Build(vault, now);
-        var text = WithExtensions(result.Text, settings);
+        var text = WithExtensions(result.Text, settings, vault);
 
         if (args.Contains("--json"))
             Console.WriteLine(JsonSerializer.Serialize(new { schema_version = 1, sections = result.Sections, chars = text.Length, text }));
@@ -435,15 +441,86 @@ internal static class Program
     /// The one extension point of spec 2.2-4: a package may add a single context line. The
     /// lines go in front of the closing sentence, which stays the last line of the block (spec 7).
     /// </summary>
-    private static string WithExtensions(string text, OomSettings settings)
+    private static string WithExtensions(string text, OomSettings settings, string vault)
     {
         if (settings.Extensions.Count == 0)
             return text;
 
         const string closing = "Hafıza protokolü zorunludur.";
-        var lines = string.Concat(settings.Extensions.Select(extension => $"[{extension.Name}] {extension.ContextLine}\n"));
+        var lines = string.Concat(settings.Extensions.Select(extension => ExtensionLine(extension, vault)));
+        if (lines.Length == 0)
+            return text;
+
         var index = text.LastIndexOf(closing, StringComparison.Ordinal);
         return index < 0 ? text + lines : text[..index] + lines + text[index..];
+    }
+
+    /// <summary>
+    /// Runs one extension. <c>contextLine</c> is a command, not a literal (spec 2.2-4): it is
+    /// run once with a short timeout and only its first line is taken. A command that is
+    /// missing, fails, times out or prints nothing adds nothing at all - SessionStart is the
+    /// one block the owner cannot work around, so an extension may never break it. The child
+    /// carries the recursion guard, so an extension that shells back into oom stops there.
+    /// </summary>
+    private static string ExtensionLine(ExtensionSettings extension, string vault)
+    {
+        var command = SplitCommand(extension.ContextLine);
+        if (command.Length == 0)
+            return string.Empty;
+
+        try
+        {
+            var result = new WindowsProcessRunner().Run(
+                new ProcessRequest(command[0], command[1..], vault,
+                    new Dictionary<string, string>(StringComparer.Ordinal) { [RecursionGuard] = "context" }, string.Empty),
+                ExtensionTimeout);
+            if (result.TimedOut || result.ExitCode != 0)
+                return string.Empty;
+
+            var line = result.StandardOutput.Replace("\r", string.Empty, StringComparison.Ordinal)
+                .Split('\n').FirstOrDefault(candidate => candidate.Trim().Length > 0)?.Trim();
+            return string.IsNullOrEmpty(line)
+                ? string.Empty
+                : $"[{extension.Name}] {(line.Length > ExtensionLineChars ? line[..ExtensionLineChars] : line)}\n";
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Splits a configured command line into executable and arguments, honouring quotes.</summary>
+    private static string[] SplitCommand(string command)
+    {
+        var parts = new List<string>();
+        var current = new StringBuilder();
+        var quoted = false;
+        foreach (var character in command)
+        {
+            if (character == '"')
+            {
+                quoted = !quoted;
+                continue;
+            }
+
+            if (!quoted && char.IsWhiteSpace(character))
+            {
+                if (current.Length > 0)
+                {
+                    parts.Add(current.ToString());
+                    current.Clear();
+                }
+
+                continue;
+            }
+
+            current.Append(character);
+        }
+
+        if (current.Length > 0)
+            parts.Add(current.ToString());
+
+        return [.. parts];
     }
 
     /// <summary>

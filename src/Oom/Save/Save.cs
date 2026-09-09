@@ -73,7 +73,10 @@ public sealed class Save
             timestamp = turn.Timestamp
         }));
         File.WriteAllText(tempPath, string.Join('\n', lines), Utf8);
-        try { return flush.FlushSession(session.Id, tempPath, FlushReason.Ingest); }
+        // The external session enters the write path as itself: re-reading the hand-off file
+        // would relabel every imported session "claude" and the daily block would claim an
+        // import it never made (spec 6.10, gate 11-3).
+        try { return flush.FlushSession(session with { Turns = safeTurns }, tempPath, FlushReason.Ingest); }
         finally { if (File.Exists(tempPath)) File.Delete(tempPath); }
     }
 
