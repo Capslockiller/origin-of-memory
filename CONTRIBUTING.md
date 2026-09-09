@@ -1,93 +1,85 @@
+<!-- yazan: codex · gpt-5 -->
+
 # Contributing
 
-Thanks for considering a contribution to Origin of Memory.
+Origin of Memory 2.0 is a Windows-native C#/.NET rebuild. Changes are accepted against the 2.0 line only when their behavior is covered by a scar, acceptance measurement, or an explicit specification change.
 
-## Running tests
+## Build and test
 
-Tests are written with `pytest` and live under `scripts/tests/`. Pytest
-configuration is defined in `pyproject.toml` (`testpaths = ["scripts/tests"]`),
-so you can run the full suite from the repo root:
+Run from the repository root:
 
 ```powershell
-python -m pytest
+dotnet build Oom.sln -c Release
+dotnet test Oom.sln -c Release
 ```
 
-No extra flags or working-directory tricks are needed — just make sure
-you're in the repository root when you run the command.
+The test suite uses xUnit. Python under `bench/` is measurement tooling and is not part of the shipped executable.
 
-## Code style
+## Scar-first rule
 
-- **Stdlib-only, runtime-wise.** The Python code under `scripts/` must not
-  depend on third-party packages at runtime. `pytest` is a dev/test-only
-  dependency; nothing under `scripts/` should `import` anything outside the
-  Python 3.12 standard library.
-- **Bilingual naming is intentional.** You'll find a mix of Turkish and
-  English identifiers, file names, and comments throughout the codebase
-  (e.g. `flush`, `ingest`, alongside Turkish domain terms). This is a
-  deliberate choice, not an inconsistency to "fix" — please match the
-  existing convention in the file/module you're editing rather than
-  translating it wholesale.
-- Keep functions small and testable; prefer pure functions in `scripts/`
-  that are easy to exercise from `scripts/tests/`.
+The historical failure inventory is represented in `tests/Oom.Tests/Scars/` as `Y-001` through `Y-099`. Every scar has exactly one xUnit `Fact`.
 
-## Versioning
+1. Add or update the scar test before implementation.
+2. Confirm that the test is red for the missing behavior.
+3. Implement only the behavior needed by the owning component.
+4. Run the full solution and report the exact passed, failed, skipped, and total counts.
 
-This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-from `0.1.0` onward. The public line is the git tag and the
-[CHANGELOG](CHANGELOG.md) heading — nothing else. Internal planning documents
-sometimes use milestone names like "v0.5"; **those are not versions** and must
-never be written into a tag, a changelog heading or a release title.
+A release note, code review, or explanation is not evidence that a scar is closed; the mapped test must be green.
 
-While the major version is `0`, the minor number carries breaking changes and
-the patch number carries fixes — the usual pre-1.0 reading of semver.
+## Lane discipline
 
-**What counts as breaking here.** The project ships no library API, so the
-contract is the surface an installed vault and its hooks depend on:
+Work is divided into isolated lanes:
 
-- **The hook contract.** The event names registered in
-  `<user>\.claude\settings.json`, the arguments each hook is invoked with, and
-  the stdout shape a hook writes back into a session. Removing a hook, renaming
-  a script under `hooks/`, or changing what a hook prints are breaking.
-- **The plan-JSON shape.** The `-Answers` plan consumed by `kur.ps1`
-  (see [docs/setup-wizard.md](docs/setup-wizard.md)). Removing a field, making
-  an optional field required, or changing a field's accepted values is
-  breaking. Adding an optional field with a default is not.
-- **Environment variable names.** Every `BEYIN_*` variable is a public knob.
-  Renaming or removing one is breaking; a deprecated alias that still works and
-  warns (as `BEYIN_MODEL_BACKEND=gemini` does) is not.
-- **Vault layout.** The directory names and file locations an installed vault
-  is expected to have — `daily/`, `knowledge/concepts/`, `knowledge/hubs/`,
-  `.claude/scripts/`, `.state/`. Moving one of these, or changing a file format
-  in a way that an existing vault cannot be read through, is breaking.
+| Lane | Ownership |
+| --- | --- |
+| S | `tests/Oom.Tests/Scars/**` |
+| A | `State`, `Runner`, `Guards`, `Notes`, `Program` |
+| B | `Context`, `Retrieve`, `Flush`, `Sweep`, hook templates |
+| C | `Compile`, `RootMap`, `Bridge` |
+| D | `Ingest`, `Doctor`, `Notify`, `Mcp`, `Save`, `Install` |
+| E | `README.md`, `README.tr.md`, `SECURITY.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/**`, `bench/` documentation |
 
-Things that are deliberately **not** breaking: the on-disk shape of `.state/`
-health and bookkeeping files (they are rebuilt), the FTS index schema (a stale
-index is detected and rebuilt), prompt wording, and anything under `docs/`.
+Use one worktree per lane. Do not edit another lane's files. Each lane produces one commit with this subject form:
 
-Every user-visible change gets a CHANGELOG entry under `[Unreleased]`, grouped
-Added / Changed / Fixed / Security, one line each, naming the env var or file it
-touches. Releases are cut by the maintainer: the `[Unreleased]` block becomes a
-dated version heading, a fresh empty `[Unreleased]` is left behind, and the
-compare links at the bottom of the file are updated.
+```text
+2.0(<lane>): <what>
+```
 
-## Platform notes
+## Language and files
 
-This project is **Windows-native**. The `hooks/` directory contains
-PowerShell scripts that must stay compatible with **Windows PowerShell 5.1**
-(not just PowerShell 7+) — avoid syntax or cmdlets that only exist in newer
-PowerShell editions. `install.ps1` is also expected to run under 5.1.
+- Code, identifiers, and comments are English.
+- Every user-visible string is Turkish.
+- Text boundaries are UTF-8 without BOM; BOM is tolerated only on input.
+- The product is Windows-native. Do not add PowerShell scripts or a POSIX runtime path.
+- Never commit personal paths, credentials, vault content, generated state, benchmark data, or build output.
 
-## Submitting a pull request
+## Dependencies
 
-Before opening a PR, please make sure:
+The product dependency is `Microsoft.Data.Sqlite`; xUnit is the test framework. Adding a product dependency or changing the approved dependency set requires a specification change. Keep model, process, HTTP, and transcript-format boundaries isolated in their owning component.
 
-- [ ] `python -m pytest` passes locally with no failures.
-- [ ] No personal data (real names, private paths, tokens, machine-specific
-      identifiers, etc.) is included in code, tests, fixtures, or commit
-      messages.
-- [ ] A secret scan of your diff comes back clean — no API keys, tokens,
-      passwords, or credentials of any kind.
-- [ ] New behavior has accompanying tests in `scripts/tests/`.
+## Line budgets
 
-Small, focused pull requests are easier to review than large ones — if your
-change touches multiple unrelated areas, consider splitting it up.
+Tests are excluded from these binding limits. `src/Oom/` must remain at or below 7,500 C# lines.
+
+| Component | Maximum lines |
+| --- | ---: |
+| `Compile` | 800 |
+| `Flush` | 600 |
+| `Sweep` | 350 |
+| `Retrieve` | 600 |
+| `State` | 500 |
+| `Runner` | 450 |
+| `Guards` | 400 |
+| `Context` | 250 |
+| `RootMap` | 400 |
+| `Ingest` including both parsers | 700 |
+| `Doctor` | 450 |
+| `Mcp` | 300 |
+| `Install` | 450 |
+| All remaining production C# | 750 |
+
+A component over budget does not merge. Raising a budget is a specification change.
+
+## Pull requests
+
+Keep a change inside one responsibility boundary. Include the mapped scar or acceptance evidence, the full test result line, and a concise `[Unreleased]` changelog entry for user-visible behavior. Do not hide a failing command behind a pipeline whose last process can replace its exit code.
