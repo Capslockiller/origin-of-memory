@@ -157,3 +157,11 @@ Ruling: Y-098 var olmayan `fixture-child` programının ya timeout ya da exit 0 
 Test: `dotnet test Oom.sln -c Release -v minimal` (offline cache ile) — Başarısız: 7, Başarılı: 92, Atlanan: 0, Toplam: 99; kalanlar Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
 Y-079 seed: `dotnet test --filter IntentionalRed -c Release --no-restore -v minimal` — exit 1; Başarısız: 1, Toplam: 1.
 Line counts: `.gitignore` 23; `progress.md` 159; `Compile.cs` 568; `Doctor.cs` 196; `HealthLedger.cs` 68; `Flush.cs` 578; `Notes.cs` 259; `Oom.csproj` 19; `Retrieve.cs` 378; `VaultPaths.cs` 103; `Runner.cs` 405; `Sweep.cs` 190; `Oom.Tests.csproj` 27; `default.runsettings` 7; `DerleyiciScars.cs` 164; `ScarFixture.cs` 48; `IntentionalRed.cs` 9. Module totals: `src/Oom` 5.601/7.500; Compile 568/800; Doctor 264/450; Flush 578/600; Notes lane-A remainder 717/750; Retrieve 378/600; RootMap 322/400; Runner 405/450; Sweep 190/350.
+
+<!-- yazan: claude · sonnet -->
+## Lane SC
+
+Test: `dotnet test Oom.sln -c Release -v n` — Toplam test sayısı: 99, Geçti: 92, Başarısız: 7.
+Sınıf başına: yazma-yolu yeşil 18/kırmızı 0 · özetleyici yeşil 6/kırmızı 0 · derleyici yeşil 16/kırmızı 0 · getirme yeşil 7/kırmızı 3 · kanca yeşil 6/kırmızı 2 · kota yeşil 6/kırmızı 0 · durum-deposu yeşil 7/kırmızı 0 · kurulum yeşil 11/kırmızı 2 · test-disiplini yeşil 8/kırmızı 0 · süreç-işletme yeşil 7/kırmızı 0.
+Kırmızı 7: Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098 (Lane INT hükümleriyle eşleşiyor).
+`docs/scars.md` (99 satırlık tablo) oluşturuldu; `README.md`/`README.tr.md` içindeki "henüz yazılmadı" cümlesi `docs/scars.md`'ye işaret edecek şekilde güncellendi.

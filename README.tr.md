@@ -23,7 +23,7 @@ Yeniden kurulum sürüyor. `main`, 2.0 hattıdır. Önceki Python/PowerShell uyg
 Başarısız! - Başarısız:     7, Başarılı:    92, Atlanan:     0, Toplam:    99, Süre: 2 s - Oom.Tests.dll (net9.0)
 ```
 
-Bu sonuç bir sürüm iddiası değildir. Ölçüm orkestratör tarafından `main` üzerinde (`a739c5b`, 9 Eylül 2026) `dotnet test Oom.sln -c Release` ile yapıldı. Kalan yedi kırmızı yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) fixture kurmadan davranış iddia ediyor; hükümleri `progress.md` içinde, sahibin kararıyla şimdilik kırmızı bırakıldı. Bilinen entegrasyon boşlukları [docs/architecture.md](docs/architecture.md) ve [docs/install.md](docs/install.md) içindedir; yara bazındaki tablo (`docs/scars.md`) henüz yazılmadı.
+Bu sonuç bir sürüm iddiası değildir. Ölçüm orkestratör tarafından `main` üzerinde (`a739c5b`, 9 Eylül 2026) `dotnet test Oom.sln -c Release` ile yapıldı. Kalan yedi kırmızı yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) fixture kurmadan davranış iddia ediyor; hükümleri `progress.md` içinde, sahibin kararıyla şimdilik kırmızı bırakıldı. Bilinen entegrasyon boşlukları [docs/architecture.md](docs/architecture.md) ve [docs/install.md](docs/install.md) içindedir; yara bazındaki tablo [docs/scars.md](docs/scars.md) içindedir.
 
 ## Repo yerleşimi
 

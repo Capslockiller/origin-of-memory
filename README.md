@@ -20,7 +20,7 @@ Test measurement on 2026-09-09:
 Başarısız! - Başarısız:     7, Başarılı:    92, Atlanan:     0, Toplam:    99, Süre: 2 s - Oom.Tests.dll (net9.0)
 ```
 
-This is not a release claim. Measured by the orchestrator on `main` (commit `a739c5b`, 2026-09-09) with `dotnet test Oom.sln -c Release`. The seven remaining red scars (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) assert behaviour without building their fixtures; their rulings are recorded in `progress.md` and the owner decided to leave them red for now. Known integration gaps are marked in [docs/architecture.md](docs/architecture.md) and [docs/install.md](docs/install.md); a per-scar table (`docs/scars.md`) is still to be written.
+This is not a release claim. Measured by the orchestrator on `main` (commit `a739c5b`, 2026-09-09) with `dotnet test Oom.sln -c Release`. The seven remaining red scars (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) assert behaviour without building their fixtures; their rulings are recorded in `progress.md` and the owner decided to leave them red for now. Known integration gaps are marked in [docs/architecture.md](docs/architecture.md) and [docs/install.md](docs/install.md); the per-scar table is in [docs/scars.md](docs/scars.md).
 
 ## Repository layout
 
