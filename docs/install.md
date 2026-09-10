@@ -123,6 +123,12 @@ Re-running the migration is safe: the keyed tables use `INSERT OR REPLACE`, `cal
 
 Rebuilding `notes.db`, `index-full.md` and `hubs\` (also part of spec 13) is not done by the migration: those are derived artefacts and `oom doctor --fix` / the first compile regenerate them.
 
+## `--adopt`
+
+`oom install --vault <vault> --adopt` is for a vault whose `daily/` and `knowledge/` were copied in from another, already-compiled vault (not migrated with `--from-v0`) and then given a clean `oom install`. The fresh `state.db` knows nothing about that history, so every copied daily reads as uncompiled and `oom sweep`/`oom compile` would recompile all of them, duplicating the concepts already in `knowledge/`.
+
+`--adopt` runs no other install step. It reads the newest `created`/`updated` frontmatter stamp across every valid note in `knowledge/concepts/`, then marks every `daily/*.md` at or before that stamp as `adopted` in `daily_ingest` — a status distinct from a real `ingested` compile, so a forced recompile (clearing the row by hand, or `--fix`) can still run. A daily newer than the stamp is left alone and stays pending, because `knowledge/` has not caught up to it yet. Nothing under `daily/` or `knowledge/` is read for anything but that one timestamp, and nothing there is written or deleted. The same call also writes the vault's own `installed_at` stamp (`vault_meta` table) if one is not already recorded — the window `oom doctor`'s coverage numbers (Y-118) measure from.
+
 ## Verification
 
 The acceptance sequence is unchanged: install on a clean Windows 11 VM, create a session, run `oom sweep`, verify an anchored daily block, force compile time with `OOM_FAKE_NOW`, verify concept/root-map/index output, then verify retrieval in a new session. That chain is still red in the scar suite (`Y-069`).

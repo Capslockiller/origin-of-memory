@@ -96,4 +96,45 @@ public sealed class SurecIsletmeScars
         var source = File.ReadAllText(Path.Combine(ScarFixture.RepositoryRoot(), "src", "Oom", "Program.cs"));
         Assert.Contains("SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);", source, StringComparison.Ordinal);
     }
+
+    [Fact(DisplayName = "Y-118 · Kapsama vault'un kendi penceresini ölçer; vault öncesi dosya arşiv sayılır, hata üretmez")]
+    public void Y118_CoverageMeasuresTheVaultsOwnWindow()
+    {
+        var vault = ScarFixture.TempDirectory();
+        // Y-006 excludes every path under the system temp directory as the mechanism's own trace,
+        // so the fake sweep root has to sit outside %TEMP% — this repo's own gitignored obj/ does.
+        var root = Path.Combine(ScarFixture.RepositoryRoot(), "tests", "Oom.Tests", "obj", "y118-" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            Directory.CreateDirectory(root);
+            var now = DateTimeOffset.UtcNow;
+            var install = now.AddHours(-2);
+            var pre = Path.Combine(root, "pre.jsonl");
+            var post = Path.Combine(root, "post.jsonl");
+            File.WriteAllText(pre, ScarFixture.TranscriptJsonl(ScarFixture.Session("pre-vault", 3, lastTurnAt: now.AddDays(-40))));
+            File.WriteAllText(post, ScarFixture.TranscriptJsonl(ScarFixture.Session("post-vault", 3, lastTurnAt: now.AddMinutes(-10))));
+            File.SetLastWriteTimeUtc(pre, now.AddDays(-40).UtcDateTime);
+            File.SetLastWriteTimeUtc(post, now.AddMinutes(-10).UtcDateTime);
+
+            using var state = new State(null, null, Path.Combine(vault, "state.db"));
+            state.WriteVaultStamp(install);
+            // Vault öncesi dosya zaten damgalı ve başarısız — filtre olmasa oranı düşürürdü.
+            var preInfo = new FileInfo(pre);
+            state.WriteStamp(pre, ((DateTimeOffset)preInfo.LastWriteTime).ToString("O"), preInfo.Length, "retry");
+
+            var settings = OomSettings.Defaults(vault) with { Sweep = new SweepSettings(8, 8, 3, 20, [root]) };
+            new SweepRun(vault, settings, new Flush(state: state), state).Execute(dryRun: false);
+
+            Assert.Equal(1, state.Scalar("SELECT total FROM coverage ORDER BY ts DESC LIMIT 1"));
+            Assert.Equal(1, state.Scalar("SELECT covered FROM coverage ORDER BY ts DESC LIMIT 1"));
+            Assert.Contains("1 dosya", Assert.Single(state.ReadColumn("SELECT detail FROM health WHERE code = 'arsiv' ORDER BY rowid DESC LIMIT 1")));
+
+            var total = state.Scalar("SELECT total FROM coverage ORDER BY ts DESC LIMIT 1");
+            var covered = state.Scalar("SELECT covered FROM coverage ORDER BY ts DESC LIMIT 1");
+            var snapshot = new DoctorSnapshot([], total == 0 ? 1.0 : (double)covered / total, 0.0, 0, WindowTotal: (int)total);
+            var health = new Doctor(null, _ => snapshot, null).Check(now);
+            Assert.NotEqual(HealthLevel.Error, health.Items.Single(item => item.Code == "coverage").Level);
+        }
+        finally { ScarFixture.Remove(vault); ScarFixture.Remove(root); }
+    }
 }

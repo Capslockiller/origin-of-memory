@@ -358,6 +358,37 @@ public sealed class KurulumScars
         }
     }
 
+    [Fact(DisplayName = "Y-117 · Zaten derlenmiş vault benimsenince eski daily'ler yeniden kuyruğa girmez, yenisi bekler")]
+    public void Y117_AdoptionMarksAlreadyCompiledDailiesWithoutRequeuing()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            var daily = Path.Combine(vault, "daily");
+            Directory.CreateDirectory(daily);
+            foreach (var name in new[] { "2026-09-01.md", "2026-09-02.md", "2026-09-03.md" })
+                File.WriteAllText(Path.Combine(daily, name), "# günlük\n");
+            File.WriteAllText(Path.Combine(daily, "2026-09-10.md"), "# yeni günlük\n"); // stampin sonrası — bekler.
+
+            var concepts = Path.Combine(vault, "knowledge", "concepts");
+            Directory.CreateDirectory(concepts);
+            File.WriteAllText(Path.Combine(concepts, "kavram-1.md"),
+                "---\nyazan: codex\nmodel: gpt-6\ntitle: Kavram Bir\naliases: []\ntags: []\nsources: [2026-09-03.md]\ncreated: 2026-09-01\nupdated: 2026-09-03\n---\nGövde.");
+
+            using var state = new State(null, null, Path.Combine(vault, "state.db"));
+            var program = typeof(Save).Assembly.GetType("Oom.Program", throwOnError: true)!;
+            var adopt = program.GetMethod("AdoptCompiledVault", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+            var adopted = (int)adopt.Invoke(null, [vault, state, ScarFixture.Now])!;
+            Assert.Equal(3, adopted);
+
+            var settled = state.ReadColumn("SELECT name FROM daily_ingest WHERE status IN ('ingested','adopted')").ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var stillPending = Directory.EnumerateFiles(daily, "*.md").Select(path => Path.GetFileName(path)!).Where(name => !settled.Contains(name)).ToArray();
+            Assert.Equal(["2026-09-10.md"], stillPending);
+            Assert.NotEqual(default, state.VaultInstalledAt()); // benimseme vault'u damgalar (Y-118 kapsama bu damgayı okur).
+        }
+        finally { ScarFixture.Remove(vault); }
+    }
+
     private sealed class Y111Clock : IClock
     {
         public DateTimeOffset Now => new(2026, 9, 10, 12, 0, 0, TimeSpan.Zero);

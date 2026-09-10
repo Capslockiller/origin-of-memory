@@ -14,7 +14,8 @@ public sealed record DoctorSnapshot(
     int Parked = 0,
     int QueueLength = 0,
     int Quarantine = 0,
-    int InvalidFrontmatter = 0);
+    int InvalidFrontmatter = 0,
+    int WindowTotal = 0); // Y-118: the 7-day population size — a small one is "uyarı", never "hata".
 
 public sealed class Doctor
 {
@@ -35,7 +36,7 @@ public sealed class Doctor
         var snapshot = probe(now);
         var items = snapshot.Observations.Select(observation =>
             observation.Item with { Stale = now - observation.ObservedAt > TimeSpan.FromHours(24) }).ToList();
-        AddMetric(items, "coverage", snapshot.Coverage >= .95, $"Son 7 gün kapsama: {snapshot.Coverage:P1}");
+        items.Add(Item("doctor", snapshot.Coverage >= .95 ? HealthLevel.Info : snapshot.WindowTotal < 5 ? HealthLevel.Warning : HealthLevel.Error, "coverage", "7d", $"Son 7 gün kapsama: {snapshot.Coverage:P1}")); // Y-118: hata yalnız gerçek popülasyon üzerinde; sakin hafta uyarı.
         AddMetric(items, "rejection-rate", snapshot.RejectionRate <= .03, $"Son 7 gün ret: {snapshot.RejectionRate:P1}");
         AddCount(items, "daily", "pending", snapshot.Pending, HealthLevel.Warning, $"Bekleyen daily: {snapshot.Pending}");
         AddCount(items, "daily", "parked", snapshot.Parked, HealthLevel.Error, $"Park edilmiş daily: {snapshot.Parked}");

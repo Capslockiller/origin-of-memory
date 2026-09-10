@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 111, Geçti: 111, Başarısız: 0. Kapı testleriyle birlikte toplam 128 test, 128 geçti. Tarih: 2026-09-10, şerit CI, `b8b2103` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 118, Geçti: 118, Başarısız: 0. Kapı testleriyle birlikte toplam 135 test, 135 geçti. Tarih: 2026-09-10, şerit CI, `b8b2103` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -123,6 +123,8 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-114 | durum-deposu | `Ingest`'in digest-dedupe durumu (`MemoryIngestStateStore`) süreç ömürlüydü: her yeni `oom ingest` çalıştırılışı aynı en eski dosyaları yeniden "içe aktarım" sayıyor, arşiv hiç ilerlemiyordu — canlı makinede dört ardışık `ingest claude --max 25` hep "atlanan 0" verdi | DurumDeposuScars.Y114_IngestCompletionPersistsAcrossStateReopen | yeşil |
 | Y-115 | özetleyici | `Runner.CallLocal` bağlam penceresi göndermiyordu; `/chat/completions` gerçek Ollama'da `options.num_ctx`'i sessizce yok sayıyor — canlı kapı 10 koşumunda 5 daily'nin 4'ü HTTP 400 "context length", biri `llama-server`'ı çökertti (HTTP 500) | OzetleyiciScars.Y115_LocalCallCarriesContextWindowAndSettingWinsOverDefault | yeşil |
 | Y-116 | test-disiplini | `Bench` 30 keşfedilen `.jsonl`'in 17'sini (alt-ajan izi + tur yok) modele hiç göndermeden ölçüme "başarısız" yazıyordu: ham 0,400/0,95 iken gerçek 13 transkript 0,923 ölçüyordu, n dürüst değildi | TestDisipliniScars.Y116_BenchExcludesSubagentAndNoTurnFilesButKeepsRealTranscript | yeşil |
+| Y-117 | kurulum | Eski kasadan kopyalanan 182 daily `knowledge/concepts` içinde (554 not) zaten derlenmişti ama taze `state.db`'nin `daily_ingest`'i boştu; her `sweep` bunları yeniden derleme kuyruğuna alıyordu — canlı kasada `install --adopt` sonrası bekleyen 182'den 0'a düştü | KurulumScars.Y117_AdoptionMarksAlreadyCompiledDailiesWithoutRequeuing | yeşil |
+| Y-118 | süreç-işletme | Kapsama sorgusu makinedeki HER transkripti (canlı kasada 2019 dosya, vault'tan aylar önce) sayıyordu; taze vault'ta "tüm zamanlar 18/2019" ve "son 7 gün %5,7" doctor'un tek `hata` satırıydı — doğru popülasyon vault'un kendi kurulum penceresi | SurecIsletmeScars.Y118_CoverageMeasuresTheVaultsOwnWindow | yeşil |
 
 ## Sınıf başına durum
 
@@ -135,7 +137,7 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
 | durum-deposu | 8 | 0 |
-| kurulum | 19 | 0 |
+| kurulum | 20 | 0 |
 | test-disiplini | 9 | 0 |
-| süreç-işletme | 8 | 0 |
-| **Toplam** | **116** | **0** |
+| süreç-işletme | 9 | 0 |
+| **Toplam** | **118** | **0** |

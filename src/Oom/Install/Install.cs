@@ -112,7 +112,7 @@ public sealed class Install
             ClaudeIsolation.Prepare(Path.Combine(oom, "claude-config"));
             var executable = Path.Combine(oom, "oom.exe");
             InstallBinary(executable);
-            using (var _ = new State(clock, null, Path.Combine(stateRoot, "state.db"))) { }
+            using (var freshState = new State(clock, null, Path.Combine(stateRoot, "state.db"))) freshState.WriteVaultStamp(clock.Now); // Y-118: the vault's own coverage window starts here.
             InstallHooks(vault, executable);
             registrations.Add("hooks:4");
             scheduler.Register(TaskName, new Sweep().BuildScheduledTaskXml(executable));

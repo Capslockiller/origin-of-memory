@@ -135,6 +135,7 @@ internal static class Program
 
             case "install":
             {
+                if (args.Contains("--adopt")) { using var adoptState = OpenState(); Console.WriteLine($"benimseme: {AdoptCompiledVault(Value(args, "--vault") ?? vault, adoptState, now)} daily zaten derlenmiş olarak işaretlendi (adopted)"); return 0; } // Y-117
                 var target = Value(args, "--vault") ?? vault;
                 var install = new Install();
                 var uninstalling = args.Contains("--uninstall");
@@ -467,7 +468,7 @@ internal static class Program
             (int)state.Scalar("SELECT COUNT(*) FROM retry_queue WHERE attempts >= 5"),
             (int)state.Scalar("SELECT COUNT(*) FROM retry_queue"),
             (int)state.Scalar("SELECT COUNT(*) FROM quarantine"),
-            Math.Max(0, invalid));
+            Math.Max(0, invalid), (int)total); // Y-118: the 7d population size doctor uses to pick uyarı vs hata.
     }
 
     /// <summary>`doctor --fix` (spec 6.8): idempotent repairs of what the machine can repair alone.</summary>
@@ -661,12 +662,22 @@ internal static class Program
         if (!Directory.Exists(directory))
             return [];
 
-        var ingested = state.ReadColumn("SELECT name FROM daily_ingest WHERE status = 'ingested'")
+        var ingested = state.ReadColumn("SELECT name FROM daily_ingest WHERE status IN ('ingested','adopted')") // Y-117: adopted counts as compiled too.
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return [.. Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
             .Where(path => !ingested.Contains(Path.GetFileName(path)))
             .Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>Y-117: a daily already reflected in knowledge/ is marked "adopted" — never re-queued as if uncompiled — and distinct from "ingested" so a forced recompile can still run.</summary>
+    private static int AdoptCompiledVault(string vault, State state, DateTimeOffset now)
+    {
+        var corpus = Corpus(vault); var directory = Path.Combine(vault, "daily");
+        if (corpus.Count == 0 || !Directory.Exists(directory)) return 0;
+        var stamp = corpus.Max(note => note.Updated > note.Created ? note.Updated : note.Created); var due = Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly).Where(path => DateOnly.TryParseExact(Path.GetFileNameWithoutExtension(path), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date) && date <= stamp).ToArray();
+        foreach (var path in due) state.WriteDailyIngest(Path.GetFileName(path), "adopted", now);
+        state.WriteVaultStamp(state.VaultInstalledAt()); return due.Length; // Y-118: persists the real fallback stamp, never "now", so hours of already-genuine vault activity are not mislabeled archive.
     }
 
     private static string ReadIfPresent(string path) => File.Exists(path) ? File.ReadAllText(path, Utf8) : string.Empty;
@@ -775,7 +786,7 @@ internal static class Program
               doctor [--fix] [--json] [--quiet] Sağlık ve onarım
               save "<metin>" | --session-json   Daily'ye doğrudan kayıt
               mcp                               Salt okunur MCP sunucusu (stdio JSON-RPC)
-              install [--uninstall] [--from-v0] [--dry-run]  Kurulum ve göç
+              install [--uninstall] [--from-v0] [--dry-run] [--adopt]  Kurulum, göç, zaten derlenmiş vault'u benimseme
               bench [--backend claude|local] [--transcripts N] [--dailies N]
                     [--transcript-dir <yol>] [--daily-dir <yol>] [--out <dosya>] [--judge] [--dry-run]
                                                 Spec 6.12 ölçümü; sonuç bench/results/<tarih>.json

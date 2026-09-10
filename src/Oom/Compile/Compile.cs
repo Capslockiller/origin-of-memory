@@ -8,9 +8,6 @@ namespace Oom.Contracts;
 /// <summary>One row of the <c>locks</c> table (machine, pid, timestamp) as compile reads it.</summary>
 public sealed record CompileLock(string Machine, int Pid, DateTimeOffset Timestamp);
 
-/// <summary>A daily waiting in <c>daily_ingest</c>; compile selects at most three per run.</summary>
-public sealed record DailyCandidate(string Name, string Status, DateOnly Date, string Digest);
-
 /// <summary>
 /// Compile (spec 6.5): turns a daily into concept notes in text mode. The model never
 /// touches the file system; every path, guard and publication decision lives here.
@@ -302,14 +299,6 @@ public sealed class Compile
             corrected,
             body.ToString());
     }
-
-    /// <summary>At most three pending dailies in date order; parked and quarantined digests are skipped (spec 6.5-2).</summary>
-    internal IReadOnlyList<DailyCandidate> SelectDailies(IReadOnlyList<DailyCandidate> queue, IReadOnlyCollection<string> quarantinedDigests)
-        =>
-        [
-            .. queue.Where(daily => string.Equals(daily.Status, "pending", StringComparison.Ordinal) && !quarantinedDigests.Contains(daily.Digest))
-                .OrderBy(daily => daily.Date).ThenBy(daily => daily.Name, StringComparer.Ordinal).Take(_settings.MaxDailiesPerRun)
-        ];
 
     /// <summary>A lock row older than two hours whose owning process is gone is taken over (spec 6.5-1).</summary>
     internal static string ResolveLock(CompileLock? existing, DateTimeOffset now, Func<int, bool> processAlive)

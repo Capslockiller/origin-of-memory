@@ -325,6 +325,9 @@ public sealed partial class State : IDisposable, IIngestStateStore
             ("$p", path), ("$m", mtime), ("$s", size), ("$o", outcome));
     public bool Contains(string source, string digest) => Text("SELECT 1 FROM ingest_done WHERE source = $s AND digest = $d", ("$s", source), ("$d", digest)) is not null; // Y-114: IIngestStateStore.
     public void Complete(string source, string digest) => Write("INSERT INTO ingest_done(source, digest, ts) VALUES ($s, $d, $t) ON CONFLICT(source, digest) DO NOTHING", ("$s", source), ("$d", digest), ("$t", Stamp(_clock.Now)));
+    public void WriteVaultStamp(DateTimeOffset at) => Write("INSERT INTO vault_meta(key, value) VALUES ('installed_at', $t) ON CONFLICT(key) DO NOTHING", ("$t", Stamp(at))); // Y-117/Y-118: written once, at install or adoption.
+    public DateTimeOffset VaultInstalledAt() => Text("SELECT value FROM vault_meta WHERE key = 'installed_at'") is { } v ? DateTimeOffset.Parse(v, CultureInfo.InvariantCulture) : new DateTimeOffset(Directory.GetCreationTimeUtc(_workDirectory), TimeSpan.Zero); // Y-118: falls back to the state directory's own creation time for a vault stamped before this fix.
+    public void WriteDailyIngest(string name, string status, DateTimeOffset ts) => Write("INSERT INTO daily_ingest(name, status, ts) VALUES ($n, $s, $t) ON CONFLICT(name) DO UPDATE SET status = $s, ts = $t", ("$n", name), ("$s", status), ("$t", Stamp(ts))); // Y-117: e.g. "adopted", distinct from a real "ingested" compile.
     public void Dispose() => _connection.Dispose();
 
     private QuotaWindow ReadLiveWindow(string source, string response, DateTimeOffset now, List<HealthItem> warnings)
@@ -491,6 +494,7 @@ public sealed partial class State : IDisposable, IIngestStateStore
             "CREATE TABLE IF NOT EXISTS ingest_done(source TEXT, digest TEXT, ts TEXT, PRIMARY KEY(source, digest));" +
             "CREATE TABLE IF NOT EXISTS coverage(ts TEXT, total INTEGER, covered INTEGER, uncovered_json TEXT);" +
             "CREATE TABLE IF NOT EXISTS daily_ingest(name TEXT PRIMARY KEY, digest TEXT, status TEXT, attempts INTEGER, reasons TEXT, ts TEXT);" +
+            "CREATE TABLE IF NOT EXISTS vault_meta(key TEXT PRIMARY KEY, value TEXT);" +
             "CREATE TABLE IF NOT EXISTS compile_runs(ts TEXT, daily TEXT, status TEXT, created INTEGER, updated INTEGER, ms INTEGER);" +
             "CREATE TABLE IF NOT EXISTS quarantine(digest TEXT PRIMARY KEY, source TEXT, reason TEXT, ts TEXT, path TEXT);" +
             "CREATE TABLE IF NOT EXISTS calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT);" +
