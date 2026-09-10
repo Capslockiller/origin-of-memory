@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-10
+
+Origin of Memory 2.0 — the C# rewrite (single self-contained `oom.exe`, SQLite FTS5 retrieval per prompt, user-level hook install, scheduled sweep, MCP) leaves the acceptance chain: 128 tests (121 green, 7 fixture-less scars kept red on purpose), gate 5 recall@3 0.832 / @5 0.888 on the 550-note vault, clean-Windows Sandbox install → sweep → context → hook retrieval → real `claude -p` session verified, and the owner's live vault migrated to it (`E:\OdenaOS v2`).
+
+### Fixed (clean-Windows Sandbox, 2026-09-10 — scars Y-100..Y-111)
+- Y-100 native SQLite library embedded in the single-file publish (installed copy no longer dies with `DllNotFoundException`).
+- Y-101/Y-102 `save "<text>"` really writes the daily block and honours the global `--vault`; Y-106 `ingest` parses positionally the same way.
+- Y-103 `claude` resolved through PATH (npm `claude.cmd` installs no longer fail every flush).
+- Y-104 installer defaults come from one source (`sweep.roots` no longer empty on a clean install).
+- Y-105 uninstall removes hooks first and survives self-delete; Y-108 uninstall reports as uninstall.
+- Y-107 malformed `--session-json` returns rc 1 instead of crashing; Y-109 last-resort handler + `SetErrorMode` — no more Windows Error Reporting dialogs.
+- Y-110 retrieval gate scales with corpus size (19-note corpus 8/8, negatives 0/6, gate 5 unchanged).
+- Y-111 `--from-v0` migration moves only v0-owned files.
+
 ### Added
 
 <!-- yazan: claude · fable-5.1 (orkestratör) -->
