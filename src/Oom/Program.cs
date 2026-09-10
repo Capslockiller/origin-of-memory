@@ -101,11 +101,18 @@ internal static class Program
             {
                 var target = Value(args, "--vault") ?? vault;
                 var install = new Install();
-                var result = args.Contains("--uninstall")
+                var uninstalling = args.Contains("--uninstall");
+                var result = uninstalling
                     ? install.Uninstall(target)
                     : install.Run(target, args.Contains("--from-v0"), args.Contains("--dry-run"));
                 if (install.MigrationReport.Length > 0) Console.Write(install.MigrationReport);
-                Console.WriteLine(result.Success ? "kurulum tamam" : $"kurulum başarısız: {result.Error}");
+                // K7/Y-105: run from the installed copy, the exe cannot delete itself — the
+                // leftover path is reported so the user knows to remove it by hand.
+                var leftoverExe = result.Registrations.FirstOrDefault(r => r.StartsWith("exe-elle-sil:", StringComparison.Ordinal));
+                if (uninstalling && result.Success && leftoverExe is not null)
+                    Console.WriteLine($"kaldırma tamam — çalışan exe elle silinir: {leftoverExe["exe-elle-sil:".Length..]}");
+                else
+                    Console.WriteLine(result.Success ? "kurulum tamam" : $"kurulum başarısız: {result.Error}");
                 return result.Success ? 0 : 1;
             }
 

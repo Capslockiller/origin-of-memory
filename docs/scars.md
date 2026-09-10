@@ -110,6 +110,7 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | Y-102 | yazma-yolu | `--vault X save "metin"` çağrısında kayıt metni `args[1]`'den okundu, yani kasa yolundan; her koşum "eksik alan: karar, düzeltme, devir" dedi | YazmaYoluScars.Y102_SaveTextIsTheFirstPositionalAfterTheCommand | yeşil |
 | Y-103 | kurulum | Flush `claude`'u çıplak adla başlattı; npm yalnız `claude.cmd` bıraktığı makinede her oturum Retry'a düştü — çözümleyici (Y-073) bu yolda hiç çağrılmıyordu | KurulumScars.Y103_ClaudeRequestUsesResolvedExecutable | yeşil |
 | Y-104 | kurulum | Kurulumun yazdığı varsayılan `oom.json` kod varsayılanlarının elle yazılmış ikinci bir kopyasıydı: `sweep.roots: []` ile temiz kurulum hiçbir şey taramadı | KurulumScars.Y104_InstallerConfigurationComesFromCodeDefaults | yeşil |
+| Y-105 | kurulum | Kurulu kopyadan `--uninstall` kendi exe'sini silmeye çalışıp çöktü; kancalar yerinde kaldı | KurulumScars.Y105_UninstallFromInstalledCopySurvivesSelfDelete | yeşil |
 
 ## Sınıf başına durum
 
@@ -122,7 +123,7 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | kanca | 6 | 2 |
 | kota | 6 | 0 |
 | durum-deposu | 7 | 0 |
-| kurulum | 14 | 2 |
+| kurulum | 15 | 2 |
 | test-disiplini | 8 | 0 |
 | süreç-işletme | 7 | 0 |
-| **Toplam** | **97** | **7** |
+| **Toplam** | **98** | **7** |

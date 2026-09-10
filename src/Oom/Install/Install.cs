@@ -34,6 +34,7 @@ public sealed class Install
     private readonly Func<bool> eventLogRegistrar;
     private readonly Func<string> userSettingsPath;
     private readonly Func<string[]> mcpCandidates;
+    private readonly Func<string?> processPath;
     private const string TaskName = "OdenaOS Memory Sweep";
 
     /// <summary>Findings the last <see cref="Run"/> produced; the D3 fallback is reported here.</summary>
@@ -48,7 +49,7 @@ public sealed class Install
     public Install(IClock? clock = null, ITaskScheduler? scheduler = null, Func<bool>? windowsSupported = null,
         Func<string, bool>? commandAvailable = null, Func<bool>? fts5Available = null,
         IProcessRunner? processRunner = null, Func<string, bool>? shortcutRegistrar = null, Func<bool>? eventLogRegistrar = null,
-        Func<string>? userSettingsPath = null, Func<string[]>? mcpCandidates = null)
+        Func<string>? userSettingsPath = null, Func<string[]>? mcpCandidates = null, Func<string?>? processPath = null)
     {
         this.clock = clock ?? SystemClock.Instance;
         this.processRunner = processRunner ?? new WindowsProcessRunner();
@@ -62,6 +63,9 @@ public sealed class Install
         this.userSettingsPath = userSettingsPath ??
             (() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json"));
         this.mcpCandidates = mcpCandidates ?? McpCandidates;
+        // K7/Y-105 seam: --uninstall run from the installed copy must recognize its own exe by
+        // comparing to the running process's path, not by trusting a hardcoded name.
+        this.processPath = processPath ?? (() => Environment.ProcessPath);
     }
 
     public InstallResult Run(string vaultPath, bool fromV0 = false) => Run(vaultPath, fromV0, dryRun: false);
@@ -189,10 +193,31 @@ public sealed class Install
         var oom = Path.Combine(vault, ".oom");
         var stateRoot = StateRoot(vault);
         var removed = new List<string>();
-        foreach (var file in new[] { "oom.exe", "vault.json", "oom.json", "hub-config.json" }.Select(name => Path.Combine(oom, name)))
-            if (File.Exists(file)) { File.Delete(file); removed.Add(file); }
+        var registrations = new List<string>();
+        try { UninstallCore(vault, oom, stateRoot, removed, registrations); }
+        catch (Exception error)
+        {
+            // K7/Y-105: whatever went wrong, the hooks/task/MCP steps above already ran — the
+            // machine is not half-uninstalled. Report and still succeed rather than crash.
+            registrations.Add($"kaldırma-hata:{error.Message}");
+        }
+        return new InstallResult(true, removed, registrations);
+    }
+
+    private void UninstallCore(string vault, string oom, string stateRoot, List<string> removed, List<string> registrations)
+    {
+        // K7/Y-105: hooks, the scheduled task and the MCP entry come FIRST — before any file is
+        // touched — so a self-delete failure below never leaves a half-uninstalled machine with
+        // the hooks/task/MCP still wired to a binary the user believes is gone.
+        RemoveHooks();
+        registrations.Add("hooks:kaldırıldı");
+        if (scheduler is InstallRuntime.SchtasksScheduler schtasks) schtasks.Unregister(TaskName);
+        registrations.Add("task:kaldırıldı");
+        RemoveMcp();
+        registrations.Add("mcp:kaldırıldı");
         if (ShortcutRegistration.TryRemove()) removed.Add(ShortcutRegistration.ShortcutPath());
         ShortcutRegistration.TryRemoveEventLogSource();
+        registrations.Add("aumid:kaldırıldı");
         var claudeConfig = Path.Combine(oom, "claude-config");
         if (Directory.Exists(claudeConfig)) { Directory.Delete(claudeConfig, true); removed.Add(claudeConfig); }
         // Beside the state root, not inside it (the root itself is what gets moved), but named
@@ -202,12 +227,29 @@ public sealed class Install
             $"{Path.GetFileName(stateRoot)}-uninstall-{clock.Now:yyyyMMdd-HHmmss}");
         removed.AddRange(Archive(Path.Combine(oom, "quarantine"), Path.Combine(archive, "quarantine")));
         removed.AddRange(Archive(stateRoot, Path.Combine(archive, "state")));
-        if (Directory.Exists(oom) && !Directory.EnumerateFileSystemEntries(oom).Any()) Directory.Delete(oom);
-        RemoveHooks();
-        if (scheduler is InstallRuntime.SchtasksScheduler schtasks) schtasks.Unregister(TaskName);
-        RemoveMcp();
-        return new InstallResult(true, removed,
-            ["hooks:kaldırıldı", "task:kaldırıldı", "aumid:kaldırıldı", "mcp:kaldırıldı", $"kanıt:{archive}"]);
+        registrations.Add($"kanıt:{archive}");
+        // Files last. K7/Y-105: run from the installed copy, deleting our own running exe throws
+        // UnauthorizedAccessException and used to abort the whole uninstall — never let that
+        // exception escape here, and never call File.Delete on the file that is currently us.
+        var runningExe = processPath();
+        string? leftover = null;
+        foreach (var file in new[] { "oom.exe", "vault.json", "oom.json", "hub-config.json" }.Select(name => Path.Combine(oom, name)))
+        {
+            if (!File.Exists(file)) continue;
+            if (runningExe is not null && Path.GetFullPath(file).Equals(Path.GetFullPath(runningExe), StringComparison.OrdinalIgnoreCase))
+            {
+                leftover = file;
+                var renamed = $"{file}.uninstalled-{clock.Now:yyyyMMdd-HHmmss}";
+                try { File.Move(file, renamed); leftover = renamed; removed.Add(renamed); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { /* still ours to report */ }
+                continue;
+            }
+            try { File.Delete(file); removed.Add(file); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+        try { if (Directory.Exists(oom) && !Directory.EnumerateFileSystemEntries(oom).Any()) Directory.Delete(oom); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        if (leftover is not null) registrations.Add($"exe-elle-sil:{leftover}");
     }
 
     /// <summary>Moves a directory under the uninstall archive; falls back to a copy across volumes.</summary>

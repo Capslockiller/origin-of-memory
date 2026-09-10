@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
@@ -187,5 +188,74 @@ public sealed class KurulumScars
             Assert.DoesNotContain("%USERPROFILE%", loaded.Sweep.Roots[0]);
         }
         finally { ScarFixture.Remove(vault); }
+    }
+
+    /// <summary>Never registers anything real: keeps <see cref="Install.Uninstall"/> away from the machine's actual scheduled task.</summary>
+    private sealed class FakeScheduler : ITaskScheduler
+    {
+        public void Register(string name, string xml) { }
+    }
+
+    [Fact(DisplayName = "Y-105 · Kurulu kopyadan --uninstall kendi exe'sini silmeye çalışıp çökmüyor, kancalar önce kalkıyor")]
+    public void Y105_UninstallFromInstalledCopySurvivesSelfDelete()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var fakeProfile = ScarFixture.TempDirectory();
+        try
+        {
+            var oom = Path.Combine(vault, ".oom");
+            Directory.CreateDirectory(oom);
+            var exePath = Path.Combine(oom, "oom.exe");
+            File.WriteAllText(exePath, "sahte-ikili");
+            File.WriteAllText(Path.Combine(oom, "vault.json"), "{}");
+            File.WriteAllText(Path.Combine(oom, "oom.json"), "{}");
+            File.WriteAllText(Path.Combine(oom, "hub-config.json"), "{}");
+            Directory.CreateDirectory(Path.Combine(oom, "claude-config"));
+
+            // Fake user profile: oom's own hooks plus one unrelated tool's hook — RemoveHooks
+            // must take only its own entries and leave the other tool's hook in place.
+            var settingsPath = Path.Combine(fakeProfile, ".claude", "settings.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+            var root = JsonNode.Parse(HookTemplates.Render(exePath)) as JsonObject ?? new JsonObject();
+            var hooks = (JsonObject)root["hooks"]!;
+            hooks["SessionEnd"]!.AsArray().Add(new JsonObject
+            {
+                ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = "other-tool.exe hook", ["timeout"] = 5 })
+            });
+            File.WriteAllText(settingsPath, root.ToJsonString(), new UTF8Encoding(false));
+
+            var mcpPath = Path.Combine(fakeProfile, "mcp", "claude_desktop_config.json");
+
+            var install = new Install(
+                scheduler: new FakeScheduler(),
+                userSettingsPath: () => settingsPath,
+                mcpCandidates: () => [mcpPath],
+                processPath: () => exePath); // simulates running FROM the installed copy (K7)
+
+            // Hold an exclusive lock on the "running" exe — Windows refuses to delete (or rename)
+            // a file another handle has open, the same failure the real self-delete hits.
+            using (new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var result = install.Uninstall(vault);
+
+                Assert.True(result.Success);
+                var leftover = Assert.Single(result.Registrations, r => r.StartsWith("exe-elle-sil:", StringComparison.Ordinal));
+                var leftoverPath = leftover["exe-elle-sil:".Length..];
+                // Locked, so the rename fails too — the file survives under its original name.
+                Assert.Equal(exePath, leftoverPath);
+                Assert.True(File.Exists(exePath));
+
+                var settingsAfter = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+                var hooksAfter = settingsAfter?["hooks"] as JsonObject;
+                Assert.True(hooksAfter is null || (!hooksAfter.ContainsKey("UserPromptSubmit") && !hooksAfter.ContainsKey("PreCompact")));
+                if (hooksAfter?["SessionEnd"] is JsonArray sessionEnd)
+                    Assert.Contains(sessionEnd, group => group?["hooks"]?.AsArray().Any(entry => entry?["command"]?.ToString() == "other-tool.exe hook") == true);
+            }
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+            ScarFixture.Remove(fakeProfile);
+        }
     }
 }
