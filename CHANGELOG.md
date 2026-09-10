@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-11
+
+The release that follows the first real migration: a vault that already carried compiled knowledge was adopted, the archive backfill was made to advance, and the local-model gate was measured on real inputs instead of invented ones.
+
+### Added
+- `install --adopt` marks dailies that a previous mechanism already compiled, so a migrated vault does not queue months of recompilation (Y-117).
+- `ingest` discovers transcripts under the configured sweep roots, oldest first, with `--root` and `--max` (Y-112), and remembers what it imported in the state database so successive runs advance through the archive (Y-114, schema 3).
+- `backend.local.numCtx` — local calls now go to the native chat route and carry an explicit context window, with the prompt trimmed to fit (Y-115).
+
+### Fixed
+- Coverage is measured over the vault's own window; transcripts written before the vault existed are reported as archive, not as uncovered, and the health level reflects the population being measured (Y-118).
+- The reachability probe no longer turns a single task failure into a permanent hook error, and a later success heals the ledger row (Y-113).
+- The benchmark measures real transcripts: sub-agent traces and turn-less files are excluded and counted, not scored as failures (Y-116).
+
+### Measured
+- Gate 10 ran for real on 30 transcripts and 5 dailies: five-section flush shape 1.000/0.95 (pass), double-blind judge 1.50/3.50, compile conformance 0.600/0.95. The decision it exists to produce stands — `backend.flush = drop`, `backend.compile = drop` — so the shipped configuration keeps `claude` first. Raw: `bench/results/gate10-2026-09-11.json`.
+- Suite: 135 tests, 135 green, 118 scars green and none red.
+
 ## [2.0.1] - 2026-09-10
 
 Scrubbed local paths, usernames and machine/session identifiers from the tracked tree (gate 11-4: no absolute user path in the repo) — bench results, dev logs, and test/VM harness text now carry neutral placeholders instead of concrete `E:\`/`C:\Users\...` paths; behaviour and the acceptance evidence structure are unchanged. Seven scars closed in 2.0.0 stay closed; suite 128/128 green, CI green.
