@@ -368,7 +368,7 @@ def write_synthetic(directory: Path, count: int) -> list[Path]:
                     {
                         "type": role,
                         "sessionId": f"synthetic-{number:02d}",
-                        "cwd": "E:\\\\OdenaWorks\\\\sentetik",
+                        "cwd": "<repo>\\sentetik",
                         "timestamp": f"2026-09-09T10:{index:02d}:00.000Z",
                         "message": {"role": role, "content": [{"type": "text", "text": text}]},
                     },

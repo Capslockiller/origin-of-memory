@@ -20,9 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / '.brief' / 'gate'
 EXE = ROOT / 'publish/win-x64/oom.exe'
 DRIVER = ROOT / 'bench/gate/bin/Release/net9.0-windows10.0.19041.0/win-x64/Gate.exe'
-SOURCE = Path(r'E:\OdenaWorks\10-Aktif\origin-of-memory-2.0\bench\vm\.out\hafiza-obegi')
+SOURCE = Path(r'<repo>\bench\vm\.out\hafiza-obegi')
 SLICE = ROOT / '.brief/hafiza-obegi'
-VAULT = Path(r'E:\OdenaOS')
+VAULT = Path(r'<vault>')
 
 
 def digest(path):

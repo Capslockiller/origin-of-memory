@@ -81,7 +81,7 @@ rem ADIM 2 -- gercek oturum (SessionStart/UserPromptSubmit/SessionEnd hooklari)
 rem ==========================================================================
 :adim2
 if "%OOMVM_DRY%"=="1" goto :adim2_kuru
-claude -p "Bugun OdenaOS 2.0 zincir testi. Bir cumleyle selam ver." --max-turns 1 >"%OOMVM_OUT%\adim2-claude.txt" 2>>"%LOG%"
+claude -p "Bugun oom 2.0 zincir testi. Bir cumleyle selam ver." --max-turns 1 >"%OOMVM_OUT%\adim2-claude.txt" 2>>"%LOG%"
 set "RC=%ERRORLEVEL%"
 set "BOY=0"
 for %%f in ("%OOMVM_OUT%\adim2-claude.txt") do set "BOY=%%~zf"

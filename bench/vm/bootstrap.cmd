@@ -64,7 +64,7 @@ call :say "[bootstrap] vault iskeleti kuruldu"
 rem --- 3. minimal companion ------------------------------------------------
 set "CP=%OOMVM_VAULT%\%OOMVM_COMPANION%"
 >"%CP%\Last-Session.md" echo # Son Oturum
->>"%CP%\Last-Session.md" echo - Konu: OdenaOS 2.0 temiz Windows zinciri (kapi 7).
+>>"%CP%\Last-Session.md" echo - Konu: oturum temiz Windows zinciri (kapi 7).
 >>"%CP%\Last-Session.md" echo - Karar: zincir tek komutla kosulacak, her adim gunluge yazilacak.
 >>"%CP%\Last-Session.md" echo - Kalan: /login sonrasi zincir.cmd.
 >"%CP%\Threads.md" echo # Aktif Threadler

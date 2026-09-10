@@ -37,7 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXE = ROOT / "publish" / "win-x64" / "Oom.exe"
 DEFAULT_GOLD = ROOT / ".brief" / "gold-sorular.jsonl"
 DEFAULT_PROBE = ROOT / "bench" / "probe-30.jsonl"
-DEFAULT_VAULT = r"E:\OdenaOS"
+DEFAULT_VAULT = r"<vault>"
 RUN_TAG = "oom-2.0"
 CANARY = "kanarya"
 

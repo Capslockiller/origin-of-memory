@@ -123,7 +123,7 @@ Ruling: Y-099 requires `.gitignore`, which is outside Lane D's owned/stageable f
 Blocked-by: lane A — Y-010, Y-011, Y-018, Y-019, Y-020, Y-021, Y-023, Y-024, Y-026, Y-033, Y-044, Y-049, Y-052, Y-053, Y-054, Y-055, Y-056, Y-057, Y-058, Y-059, Y-060, Y-061, Y-062, Y-063, Y-064, Y-073, Y-079, Y-080, Y-085, Y-087, Y-095, Y-096, Y-097, Y-098.
 Blocked-by: lane B — Y-001, Y-002, Y-003, Y-004, Y-005, Y-006, Y-007, Y-008, Y-009, Y-012, Y-013, Y-014, Y-015, Y-017, Y-035, Y-036, Y-037, Y-038, Y-039, Y-040, Y-041, Y-042, Y-043, Y-045, Y-046, Y-047, Y-048, Y-050, Y-051, Y-069, Y-075, Y-077, Y-082, Y-089, Y-090, Y-091, Y-092.
 Blocked-by: lane C — Y-016, Y-022, Y-025, Y-027, Y-028, Y-029, Y-030, Y-093.
-Blocked-by: environment — `.git/worktrees/oom-lane-D` is read-only in the sandbox; `git add` cannot create `index.lock`, so the required single commit could not be created in this session.
+Blocked-by: environment — `.git/worktrees/<lane-D>` is read-only in the sandbox; `git add` cannot create `index.lock`, so the required single commit could not be created in this session.
 
 Build: `dotnet build Oom.sln -c Release` — succeeded, 0 warnings, 0 errors with `NUGET_PACKAGES` pointed at the workspace offline cache (network access is denied).
 Test: `dotnet test Oom.sln -c Release --no-build` — Başarısız: 80, Başarılı: 19, Atlanan: 0, Toplam: 99.
@@ -211,7 +211,7 @@ Global `--vault <yol>`: `VaultPaths.UseVault` (`Infrastructure/Boundaries.cs`, 2
 `src/Oom/Flush/FlushStore.cs` (113): `IFlushStore` iki uygulamayla — `DurableFlushStore` (state.db) ve `MemoryFlushStore`. Süreç geneli bellek deposu yalnız `State` verilmediğinde, yani testlerde kalır (Y-012 iki ayrı `new Flush()` arasında aynı imleci görmeye devam ediyor).
 
 ### 3. Transkript keşfi ve gerçek biçim [6.3]
-`src/Oom/Ingest/Parsers/ClaudeTranscript.cs` (125): gerçek Claude Code satır biçimi tek dosyada. `%USERPROFILE%\.claude\projects\E--OdenaWorks\` altındaki **bir** gerçek transkript salt okunur incelendi; hiçbir içerik kopyalanmadı, yalnız yapısı çıkarıldı: satır `type` değerleri `bridge-session · queue-operation · attachment · user · last-prompt · custom-title · atis-latch · assistant · system` (+ eski dosyalarda `summary`); konuşma yalnız `user`/`assistant`'ta, `message.role` ile, `message.content` string ya da `text`/`tool_use`/`tool_result`/`thinking` blok dizisi. Ayrıştırıcı `isSidechain` (alt ajan), `isMeta` (makine satırı) ve `toolUseResult` taşıyan satırları atlar; yalnız `text` bloklarını özete sokar; yarım yazılmış son satırı sessizce geçer. Sentetik örnek `src/Oom/Ingest/Samples/claude-code-real-shape.jsonl` (10 satır, tamamı uydurma). Lane D'nin `ClaudeParser`'ı (31, eskiden 74) artık aynı okuyucuya devrediyor: dış biçim değişirse kıran tek dosya var.
+`src/Oom/Ingest/Parsers/ClaudeTranscript.cs` (125): gerçek Claude Code satır biçimi tek dosyada. `%USERPROFILE%\.claude\projects\<repo-slug>\` altındaki **bir** gerçek transkript salt okunur incelendi; hiçbir içerik kopyalanmadı, yalnız yapısı çıkarıldı: satır `type` değerleri `bridge-session · queue-operation · attachment · user · last-prompt · custom-title · atis-latch · assistant · system` (+ eski dosyalarda `summary`); konuşma yalnız `user`/`assistant`'ta, `message.role` ile, `message.content` string ya da `text`/`tool_use`/`tool_result`/`thinking` blok dizisi. Ayrıştırıcı `isSidechain` (alt ajan), `isMeta` (makine satırı) ve `toolUseResult` taşıyan satırları atlar; yalnız `text` bloklarını özete sokar; yarım yazılmış son satırı sessizce geçer. Sentetik örnek `src/Oom/Ingest/Samples/claude-code-real-shape.jsonl` (10 satır, tamamı uydurma). Lane D'nin `ClaudeParser`'ı (31, eskiden 74) artık aynı okuyucuya devrediyor: dış biçim değişirse kıran tek dosya var.
 
 `src/Oom/Sweep/SweepRun.cs` (294): `sweep.roots` altında `*.jsonl` özyinelemeli tarama (`MaxRecursionDepth 6`, erişilemeyen dizin sessiz), oturum kimliğine göre tekilleştirme, `(mtime,size)` damgası eşleşen dosya hiç açılmaz, yaş kapısı yalnız damgalı kaynağa (Y-007), `minTurns`, `maxSessionsPerRun` bütçesi işlenen oturuma uygulanır, `locked` damgalanmaz, `coverage` satırı, `retry_queue` tahliyesi, `flush_log`'a tek özet satırı, `SweepRetention`. Mekanizma izi dışlaması iki katmanlı: `Flush.IsMechanismTranscript` yol işaretleri **ve** proje dizini adının kodlanmış temp önekiyle başlaması. Gerçek arşivde ölçüldü: 534 proje dizininin 217'si (v0'ın `beyin-flush-*` temp koşumları) bu kuralla dışlanıyor, 317'si kalıyor.
 
@@ -237,7 +237,7 @@ CLI sözleşmesi doğrulandı: `--tools ""`, `--permission-mode default`, `--max
 `src/Oom/Notify/WindowsNotifier.cs` (113): AUMID `OdenaStudio.OriginOfMemory` (Install'daki sabit). Start menüsünde kısayol varsa `Windows.UI.Notifications` ile toast; yoksa yalnız satır kuyruğa girer. Hiçbir yolda istisna dışarı sızmaz. `notified(class, key, ts)` ile 7 günlük tekilleştirme; kuyruğa giren satır `health(component='notify')` üstünden hem `doctor`'a hem bir sonraki SessionStart bloğunun `[Bildirim]` bölümüne düşer. Kurulumun kendisi kapsam dışı; hiçbir kısayol veya AUMID yazılmadı.
 
 ### 9. Sentetik uçtan uca kanıt
-`.e2e/build_vault.py` sentetik vault'u (20 geçerli kavram notu, companion beş dosya, `hub-config.json`, `oom.json`) ve gerçek biçimde 5 transkripti üretir; `.e2e/run.sh` tüm zinciri koşar, çıktısı `.e2e/proof.txt`. Hepsi `.gitignore`'a alındı. Sentetik vault'un durum kökü: `C:\Users\musta\AppData\Local\oom\600f1558446f9ae0\` (yalnız bu oluşturuldu).
+`.e2e/build_vault.py` sentetik vault'u (20 geçerli kavram notu, companion beş dosya, `hub-config.json`, `oom.json`) ve gerçek biçimde 5 transkripti üretir; `.e2e/run.sh` tüm zinciri koşar, çıktısı `.e2e/proof.txt`. Hepsi `.gitignore`'a alındı. Sentetik vault'un durum kökü: `<state-root>\` (yalnız bu oluşturuldu).
 
 ```
 $ oom --vault <sentetik> context                -> 1.030 karakter, Spec 7 bölümleri sırayla, kapanış satırı sonda
@@ -267,7 +267,7 @@ $ oom mcp   (initialize · tools/list · tools/call) -> üçü de yanıtlandı, 
 ### Bulgular
 - Claude Code 2.1.263 `--max-turns` seçeneğini `--help` çıktısında listelemiyor, ama kabul ediyor. `--tools ""` belgelenmiş ve çalışıyor.
 - `%USERPROFILE%\.claude\settings.json` şu anda dört oom kancasını bir scratchpad harness'ına kayıtlı tutuyor; bu şeridin işi değil, dokunulmadı. Canlı kabul koşumundan önce orkestratörün bu yolları yayımlanan exe'ye çevirmesi gerekir.
-- İzole `claude-config` dizini varsayılan olarak `<vault>\.oom\claude-config`'tir; `E:\OdenaOS` Google Drive ile senkron olduğundan oturum kimlik bilgisinin oraya kopyalanmaması için canlı koşumda `backend.claude.configDir` mutlak bir yola (`%LOCALAPPDATA%\oom\claude-config`) alınmalı — okuyucu artık mutlak ve `%VAR%`'lı değeri kabul ediyor.
+- İzole `claude-config` dizini varsayılan olarak `<vault>\.oom\claude-config`'tir; `<vault>` Google Drive ile senkron olduğundan oturum kimlik bilgisinin oraya kopyalanmaması için canlı koşumda `backend.claude.configDir` mutlak bir yola (`%LOCALAPPDATA%\oom\claude-config`) alınmalı — okuyucu artık mutlak ve `%VAR%`'lı değeri kabul ediyor.
 
 ### Ölçüm
 Test: `dotnet test Oom.sln -c Release` — Başarısız: 7, Başarılı: 92, Atlanan: 0, Toplam: 99; kırmızılar tam olarak Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
@@ -289,10 +289,10 @@ Ruling: `sweep`'in ikinci koşumu Spec 6.3 gereği değişmemiş dosyayı hiç a
 - `src/Oom` **hiç değiştirilmedi**, dolayısıyla test satırı yok. `retrieve --batch <jsonl> --json` zaten `Program.RunRetrieve` içinde vardı (`{id, soru}` veya `query` satırları okur, girdi sırasında satır başına bir JSON yazar); brief'in izin verdiği CLI eklemesine gerek kalmadı.
 
 ### Veri kuralı
-`E:\OdenaOS` yalnız `retrieve` üstünden ve salt okunur kullanıldı; `sweep`/`compile`/`flush`/`ingest`/`save`/`install` hiç çalıştırılmadı. Koşum sonrası vault'ta en yeni concept dosyası hâlâ 8 Eyl 23:17 ve durum kökündeki `retrieve_served` 0 satır — kanca ölçümü dâhil hiçbir şey yazılmadı. Sonuç dosyalarında yalnız sayı, not slug'ı, soru kimliği ve gold set'in kendi `soru` alanı var; not gövdesi veya transkript metni yok.
+`<vault>` yalnız `retrieve` üstünden ve salt okunur kullanıldı; `sweep`/`compile`/`flush`/`ingest`/`save`/`install` hiç çalıştırılmadı. Koşum sonrası vault'ta en yeni concept dosyası hâlâ 8 Eyl 23:17 ve durum kökündeki `retrieve_served` 0 satır — kanca ölçümü dâhil hiçbir şey yazılmadı. Sonuç dosyalarında yalnız sayı, not slug'ı, soru kimliği ve gold set'in kendi `soru` alanı var; not gövdesi veya transkript metni yok.
 
 ### Ölçüm — kapı 5 (recall paritesi), 2026-09-09
-Exe `e64566c`'ten; vault `E:\OdenaOS` (542 concept); gold set 130 satır, 125'i puanlandı, 5 `kanarya` satırı yapısı gereği boş `gold` taşıdığı için recall paydasından çıkarıldı (README'nin "125 soruluk gold set" ifadesiyle birebir uyuyor). Ham sonuç: `bench/results/recall-2026-09-09.json`.
+Exe `e64566c`'ten; vault `<vault>` (542 concept); gold set 130 satır, 125'i puanlandı, 5 `kanarya` satırı yapısı gereği boş `gold` taşıdığı için recall paydasından çıkarıldı (README'nin "125 soruluk gold set" ifadesiyle birebir uyuyor). Ham sonuç: `bench/results/recall-2026-09-09.json`.
 
 | küme | n | recall@3 | recall@5 | MRR@5 |
 | --- | ---: | ---: | ---: | ---: |
@@ -326,7 +326,7 @@ Spec 6.12'nin 30 transkript + 5 daily koşumu gerçek transkript ve gerçek dail
 python bench/yerel_olcum.py \
   --transcripts 30 --dailies 5 \
   --transcript-dir "$USERPROFILE/.claude/projects" \
-  --daily-dir "E:/OdenaOS/daily" \
+  --daily-dir "<vault>/daily" \
   --model qwen3:8b --url http://localhost:11434/v1 --timeout 600
 ```
 
@@ -368,7 +368,7 @@ Ruling: Kapı 10 için spec 6.12 komutu `oom bench --backend local` diyor; o alt
 Ruling: v0 karşılaştırması yapılamadı — `bench/.versions/` bu ağaçta yok (gitignore'lu). Tablodaki sayılar 2.0'ın mutlak ölçümüdür, v0'a göre parite farkı değildir.
 
 ## Lane D3 (Part B only, orchestrator split)
-Owner decision (2026-09-09): Install/Uninstall/`--from-v0` stay out of `main` (line budget 7 500 stands); lane D3's full work incl. the D2 rebase is preserved on the `oom-lane-D3-oom` worktree. Only Part B landed here:
+Owner decision (2026-09-09): Install/Uninstall/`--from-v0` stay out of `main` (line budget 7 500 stands); lane D3's full work incl. the D2 rebase is preserved on the `<lane-D3-oom>` worktree. Only Part B landed here:
 - Flush.EventTime → local time (heading, `ts:` anchor, daily filename); Y-008 green.
 - SweepRun coverage row over the last 7 days + `kapsama-tum-zamanlar` item; Program.Snapshot reads the newest coverage row.
 - Runner.ReadUsage sums all modelUsage entries; `in_tok` = input + cacheCreation + cacheRead; `cache_w` recorded.
@@ -384,10 +384,10 @@ Test: Başarısız 7, Başarılı 92, Toplam 99 (same 7 reds). src/Oom 7 376 lin
 - `bench/README.md`: kapı 5 yeniden ölçümü, değişiklik başına tablo ve probe bölümü eklendi.
 
 ### Veri kuralı
-`E:\OdenaOS` yalnız `retrieve` üstünden ve salt okunur kullanıldı; `sweep`/`compile`/`flush`/`ingest`/`save`/`install` hiç çalıştırılmadı. Koşum sonrası vault'ta en yeni concept dosyası hâlâ 8 Eyl 23:17, `.oom/oom.json` değişmemiş, durum kökündeki `retrieve_served` 0 satır. Repoya not gövdesi veya vault metni girmedi; sonuç dosyalarında sayı, slug ve gold set'in kendi `soru` alanı var.
+`<vault>` yalnız `retrieve` üstünden ve salt okunur kullanıldı; `sweep`/`compile`/`flush`/`ingest`/`save`/`install` hiç çalıştırılmadı. Koşum sonrası vault'ta en yeni concept dosyası hâlâ 8 Eyl 23:17, `.oom/oom.json` değişmemiş, durum kökündeki `retrieve_served` 0 satır. Repoya not gövdesi veya vault metni girmedi; sonuç dosyalarında sayı, slug ve gold set'in kendi `soru` alanı var.
 
 ### Yöntem
-Her değişiklik tek başına uygulandı ve yeniden ölçüldü (spec 1-8). Ölçüm aracı `bench/kos20.py`, exe üstünden, `E:\OdenaOS` vault'una karşı. Parametre taramaları için `Rank`'in salt okunur bir Python kopyası kullanıldı; kopya hem taban çizgisini (0,7200 / 0,7600 / 0,6763) hem de nihai yapılandırmayı (0,8320 / 0,8880 / 0,7555) C# ile virgülüne kadar ürettiği için tarama sonuçları güvenilir sayıldı, tutulan her değişiklik yine de C#'ta ölçüldü.
+Her değişiklik tek başına uygulandı ve yeniden ölçüldü (spec 1-8). Ölçüm aracı `bench/kos20.py`, exe üstünden, `<vault>` vault'una karşı. Parametre taramaları için `Rank`'in salt okunur bir Python kopyası kullanıldı; kopya hem taban çizgisini (0,7200 / 0,7600 / 0,6763) hem de nihai yapılandırmayı (0,8320 / 0,8880 / 0,7555) C# ile virgülüne kadar ürettiği için tarama sonuçları güvenilir sayıldı, tutulan her değişiklik yine de C#'ta ölçüldü.
 
 | # | değişiklik | recall@3 | recall@5 | MRR@5 | karar |
 | --- | --- | ---: | ---: | ---: | --- |
@@ -428,13 +428,13 @@ Ayrım ölçüldü. `minOverlap` ≥ 3 iken engellenmesi gereken en yüksek değ
 
 `Ruling:` **`strictScore` 25,0 → 1,0 ve anlamı ham skordan terim başına ortalamaya çevrildi.** Varsayılan `RetrieveOptions` kaydında (`src/Oom/Retrieve/Retrieve.cs`) değişti; `Configuration.Defaults` bu kaydı olduğu gibi kullanıyor, ayrı bir sabit yok.
 
-`Ruling:` **`E:\OdenaOS\.oom\oom.json` güncellenmeli — bu şerit vault'a yazmadığı için yapılmadı.** Dosya `minOverlap: 2` ve `strictScore: 25.0` değerlerini sabitliyor ve kod varsayılanını eziyor. Yeni normalizasyonla 25,0 hiçbir şeyi geçirmez: canlı vault'a karşı `retrieve --hook` şu an 0/30 enjekte ediyor (8 gerçek soru dâhil). Gereken iki satır:
+`Ruling:` **`<vault>\.oom\oom.json` güncellenmeli — bu şerit vault'a yazmadığı için yapılmadı.** Dosya `minOverlap: 2` ve `strictScore: 25.0` değerlerini sabitliyor ve kod varsayılanını eziyor. Yeni normalizasyonla 25,0 hiçbir şeyi geçirmez: canlı vault'a karşı `retrieve --hook` şu an 0/30 enjekte ediyor (8 gerçek soru dâhil). Gereken iki satır:
 
 ```json
 "retrieve": { "top": 3, "perNoteChars": 1500, "totalChars": 4500, "minOverlap": 3, "strictScore": 1.0 }
 ```
 
-Kapı ölçümü bu yüzden, aynı exe ile, `knowledge` dizini `E:\OdenaOS\knowledge`'a junction'lanmış ve `.oom/oom.json`'u yukarıdaki değerleri taşıyan salt okunur bir örtü vault üstünde alındı; aynı örtüde gold recall birebir 0,832 / 0,888 / 0,755 çıkıyor, yani örtü sıralamayı değiştirmiyor. Ham sonuçlar: `bench/results/recall-2026-09-09-r2.json` (canlı vault, sıralama) ve `bench/results/recall-2026-09-09-r2-gate.json` (örtü, kapı).
+Kapı ölçümü bu yüzden, aynı exe ile, `knowledge` dizini `<vault>\knowledge`'a junction'lanmış ve `.oom/oom.json`'u yukarıdaki değerleri taşıyan salt okunur bir örtü vault üstünde alındı; aynı örtüde gold recall birebir 0,832 / 0,888 / 0,755 çıkıyor, yani örtü sıralamayı değiştirmiyor. Ham sonuçlar: `bench/results/recall-2026-09-09-r2.json` (canlı vault, sıralama) ve `bench/results/recall-2026-09-09-r2-gate.json` (örtü, kapı).
 
 ### Kalan ıskalar
 k=5'te 14 ıska var. Dördü (`q033`, `q051`, `q108`, `q119`) gold notu ilk 100'e hiç sokmuyor ve sözlüksel olarak erişilemez — notla tek bir token bile paylaşmayan, zamir ağırlıklı kısa promptlar. Kalan onu sıralama ıskası, gold not 6–78. aralığında.
@@ -509,7 +509,7 @@ Kapsam: D2'nin Install/Uninstall/Göç taslağını `main` (`e64566c`) üzerine 
 
 ### Şerit kurulumu — sapma
 
-Bana verilen dizin `E:\OdenaWorks\10-Aktif\oom-lane-D3` **Oom deposunun değil, `E:\OdenaOS` kasasının** bir worktree'siydi (`gitdir: E:/OdenaOS/.git/worktrees/oom-lane-D3`, HEAD `74fbe242`). Brief `e64566c`'den ayrık bir Oom worktree'si tarif ediyor; o dizinde çalışmak `E:\OdenaOS`'in git yönetim alanına yazmak demekti ve sert kural bunu yasaklıyor. `E:\OdenaOS`'e hiç dokunmadım: doğru worktree'yi `origin-of-memory` deposundan **`E:\OdenaWorks\10-Aktif\oom-lane-D3-oom`** olarak açtım (`git worktree add --detach … e64566c`). Bütün iş oradadır. `E:\OdenaOS` HEAD'i oturum boyunca `74fbe242` kaldı.
+Bana verilen dizin `<repo>` **Oom deposunun değil, `<vault>` kasasının** bir worktree'siydi (`gitdir: <vault>/.git/worktrees/<lane-D3>`, HEAD `74fbe242`). Brief `e64566c`'den ayrık bir Oom worktree'si tarif ediyor; o dizinde çalışmak `<vault>`'in git yönetim alanına yazmak demekti ve sert kural bunu yasaklıyor. `<vault>`'e hiç dokunmadım: doğru worktree'yi `origin-of-memory` deposundan **`<repo>`** olarak açtım (`git worktree add --detach … e64566c`). Bütün iş oradadır. `<vault>` HEAD'i oturum boyunca `74fbe242` kaldı.
 
 ### A bölümü — birleştirme kararları (dosya dosya)
 
@@ -546,7 +546,7 @@ sonra userSettings   167f818ad90e98efc23164c8eb0d0b090f63377f24f9169f736ad9b3887
 önce  claudeDesktop  9ebc6344403835a4ad4c0d3c5a28cbdf0186c06d03102b78d1339fe7ff52a1de  3334 bayt
 sonra claudeDesktop  9ebc6344403835a4ad4c0d3c5a28cbdf0186c06d03102b78d1339fe7ff52a1de  3334 bayt
 önce/sonra  schtasks /Query | grep -ic oom = 0 · Start menüsü "oom" = 0
-E:\OdenaOS HEAD 74fbe242 (değişmedi; hiçbir komut oraya yazmadı)
+<vault> HEAD 74fbe242 (değişmedi; hiçbir komut oraya yazmadı)
 %LOCALAPPDATA%\oom yeni girdiler: ab4df82b2af7e36b (.e2e\vault), 063f3cc3ae06c9f9 (.e2e\v0vault), backup\ (uninstall kanıtı) — üçü de sentetik
 ```
 
@@ -578,7 +578,7 @@ Line counts: `Install.cs` 465; `Migration.cs` 382; `ShortcutRegistration.cs` 177
 
 ### Ruling ve Blocked-by
 
-Ruling: Bana verilen `oom-lane-D3` dizini `E:\OdenaOS` kasasının worktree'siydi, Oom deposunun değil. Sert kural gereği oraya hiç yazmadım; doğru worktree `oom-lane-D3-oom` olarak `origin-of-memory`'den `e64566c` üzerinde açıldı ve bütün iş oradadır.
+Ruling: Bana verilen `<lane-D3>` dizini `<vault>` kasasının worktree'siydi, Oom deposunun değil. Sert kural gereği oraya hiç yazmadım; doğru worktree `<lane-D3-oom>` olarak `origin-of-memory`'den `e64566c` üzerinde açıldı ve bütün iş oradadır.
 
 Ruling: `Install`'ın kendi durum şeması, kendi süreç işleticisi, kendi saati ve kendi `claude-config` yazıcısı silindi; hepsi INT-2/lane A'nın uygulamasını çağırıyor. `Migration.cs` kopya değildir — lane A `daily_ingest`, `sessions`, `sweep_stamps`, `calls`, `quarantine`, `retry_queue`, `coverage` için genel yazıcı sunmuyor, satırlar `Microsoft.Data.Sqlite` ile `State`'in kurduğu şemaya yazılıyor.
 
@@ -735,7 +735,7 @@ Gerçek (Y-109): `Program.Main`'in dispatch anahtarı hiçbir genel `try/catch` 
 <!-- yazan: codex · gpt-6 -->
 ## Lane GATE
 
-Gerçek: `fdf4b1f` üzerindeki yarım kalmış test Y-110 olarak adlandırıldı. `GetirmeScars.Y110_SmallCorpusGateKeepsRelevantTopHitAndRejectsUnrelatedPrompt` önce boş hook nedeniyle kırmızı (`.brief/gate/red-y110.trx`), sonra yeşil (`.brief/gate/green-y110.trx`). `strictScore`, BM25F toplamının önekler dâhil farklı sorgu terimi sayısına bölümünü; `minOverlap`, slug/başlık/aliases/tags üzerinde uzunluğu en az dört olan farklı içerik terimlerinin örtüşmesini karşılaştırıyordu. 19 notta yaygın terimlerin IDF tabanı nedeniyle doğru ilk notların S2/S3/S4 ortalamaları 0,652047/0,896436/0,246233; örtüşmeleri 3/5/9. Eski 1,0 kapısı üçünü reddetti. Kaynak: `src/Oom/Retrieve/Retrieve.cs`, salt okunur `E:/OdenaWorks/10-Aktif/origin-of-memory-2.0/bench/vm/.out/kiyas/oom/T3-getirme.log`, aynı kanıt ağacındaki `hafiza-obegi/OKU.md` ve `bench/results/recall-2026-09-10-gate.json`.
+Gerçek: `fdf4b1f` üzerindeki yarım kalmış test Y-110 olarak adlandırıldı. `GetirmeScars.Y110_SmallCorpusGateKeepsRelevantTopHitAndRejectsUnrelatedPrompt` önce boş hook nedeniyle kırmızı (`.brief/gate/red-y110.trx`), sonra yeşil (`.brief/gate/green-y110.trx`). `strictScore`, BM25F toplamının önekler dâhil farklı sorgu terimi sayısına bölümünü; `minOverlap`, slug/başlık/aliases/tags üzerinde uzunluğu en az dört olan farklı içerik terimlerinin örtüşmesini karşılaştırıyordu. 19 notta yaygın terimlerin IDF tabanı nedeniyle doğru ilk notların S2/S3/S4 ortalamaları 0,652047/0,896436/0,246233; örtüşmeleri 3/5/9. Eski 1,0 kapısı üçünü reddetti. Kaynak: `src/Oom/Retrieve/Retrieve.cs`, salt okunur `<repo>/bench/vm/.out/kiyas/oom/T3-getirme.log`, aynı kanıt ağacındaki `hafiza-obegi/OKU.md` ve `bench/results/recall-2026-09-10-gate.json`.
 
 Gerçek: canlı kasa ölçüm sırasında 542 değil 550 kavram içeriyordu; tarihsel 542 kopyası doğrulanamadı. Aynı 550 dosyada önce/sonra gate 5 (kapısız Query, mevcut kos20 sözleşmesi) 0,832/0,888; 19 notun `.brief/hafiza-obegi` kopyasında hook 5/8 → 8/8, altı negatif 0/6 → 0/6. Manifestler ve Query adları/skorları önce/sonra aynı. Seçilen aday ile gerçek Hook kararları 139 sorguda eşleşti. Canlı kasa hook recall'u ayrıca 0,432/0,440 olarak kaldı; gate 5 sonucu hook recall diye sunulamaz. Göreli skor 0,50/0,25; doğrusal/logaritmik külliyat ölçekleme; örtüşme oranı 0,50; sabit ortalama eşikleri 1/0,50/0,25/0,10/0 ölçüldü. Düşük sabit ve göreli kurallar iki kanaryayı (q089, q129) enjekte etti; logaritmik ölçek 7/8, örtüşme oranı 5/8 kaldı. Tam tablo ve yöntem: `bench/README.md`, GATE bölümü.
 
@@ -745,7 +745,7 @@ Gerçek: Release build/publish başarılı. Sahibin referansı 123/116/7; sandbo
 
 Ölçülemeyen / kapsam: tarihsel tam 542 notluk tekrar ve sandbox'ta uçtan uca CLI hook. Canlı kasanın CLI batch ölçümü çalıştı; dilimin CLI çağrısı Windows profil durum klasörünü oluştururken UnauthorizedAccessException verdi. Dilim aynı ürünün gerçek C# Query/Hook yollarıyla, IndexPath verilmeden ölçüldü. Profil durum yolu ve diğer şeritler bu kapı görevinin dışında tutuldu. Kasa, kanıt kaynağı ve Companion dosyalarına yazılmadı; bench ve geçici çıktılar bu worktree içinde.
 
-Gerçek: tek commit denemesi yapıldı; commit engellendi. `git add` ve `git commit`, bu worktree dışındaki `E:/OdenaWorks/10-Aktif/origin-of-memory/.git/worktrees/oom-lane-GATE/index.lock` için Permission denied verdi. Başlık ölçülen gerçek sayıya göre `2.0(GATE): Y-110 — retrieval gate corpus-scaled, measured on 550-note vault and 19-note slice` idi. Değişiklikler commit edilmeden bu worktree içinde duruyor.
+Gerçek: tek commit denemesi yapıldı; commit engellendi. `git add` ve `git commit`, bu worktree dışındaki `<repo>/.git/worktrees/<lane-GATE>/index.lock` için Permission denied verdi. Başlık ölçülen gerçek sayıya göre `2.0(GATE): Y-110 — retrieval gate corpus-scaled, measured on 550-note vault and 19-note slice` idi. Değişiklikler commit edilmeden bu worktree içinde duruyor.
 <!-- yazan: codex · gpt-5 -->
 Gerçek (Y-111): `install --from-v0` artık öncül depo `fa9e41f` içindeki kurulum yüzeyinden sabitlenmiş açık sahiplik listesini kullanıyor; yalnız listedeki dosyalar ile `.state`/`__pycache__` dizinleri yedeğe taşınıyor. `kota.py`, `kota_hiz.py`, `statusline_kota.py` ve listedeki olmayan diğer dosyalar yerinde kalıp `korunan (v0 dışı): …` satırında raporlanıyor; bu dosyaları kullanan `OdenaOS-Flush` dışındaki zamanlanmış görevler de silinmeden `dokunulmadı, elle karar` olarak hem gerçek hem kuru planda gösteriliyor.
 
@@ -762,7 +762,7 @@ Gerçek (Y-046): Kanca yolunda kimlik anahtarı yoktu. `Context.Start(HookStart,
 
 Gerçek (Y-050): Denetim zaten içerik özetine (SHA-256) bakıyordu, mtime'a değil; eksik olan fixture'dı. Fact artık kendi Companion kasasını kuruyor: ilk denetim temiz, dosyanın mtime'ı tazelenip içeriği aynı bırakılınca `companion-content-stale` çıkıyor, içerik gerçekten değişince bulgu kayboluyor. Yalnız mtime'a bakan bir denetim üçüncü ayakta kırmızı olurdu.
 
-Gerçek (Y-069): Temiz Windows makine bir birim testinin içinde ayağa kaldırılamaz; fixture, koşumun kaydı. `bench/results/vm-2026-09-10.json` zincirin on adımını, her adımın kanıt dosyasını, tarihini ve `ok`/`hata` durumunu yazıyor: Sandbox turu (kurulum · yükleme · getirme · yakalama · kaldırma — `bench/vm/.out/kiyas/oom/T1..T5`) ve canlı makine kurulumu (kurulum · tarama · bağlam · kanca getirmesi · gerçek `claude -p` oturumu — `E:\OdenaOS v2\.oom-kurulum\`). Fact bu dosyayı okuyor: on adımın adı eksikse, biri `ok` değilse, `hata` listesi doluysa veya exe SHA-256'sı biçim tutmuyorsa kırmızı. Sandbox turu 2'de KALDI bırakılan iki halka ayrıca kaydedildi: kurulu kopyadan uninstall Y-105 ile düzeldi (T5, rc=0), `claude -p` "Not logged in" ise Sandbox'ta login yasak olduğu için canlı makinede kanıtlandı (adım 10). Yayın exe'sinin SHA-256'sı zincirden sonra (19:34) üretildiği için ayrı alanda, zincirin çalıştırdığı ikili ayrı alanda kayıtlı — karıştırılmıyor.
+Gerçek (Y-069): Temiz Windows makine bir birim testinin içinde ayağa kaldırılamaz; fixture, koşumun kaydı. `bench/results/vm-2026-09-10.json` zincirin on adımını, her adımın kanıt dosyasını, tarihini ve `ok`/`hata` durumunu yazıyor: Sandbox turu (kurulum · yükleme · getirme · yakalama · kaldırma — `bench/vm/.out/kiyas/oom/T1..T5`) ve canlı makine kurulumu (kurulum · tarama · bağlam · kanca getirmesi · gerçek `claude -p` oturumu — `<vault-v2>\.oom-kurulum\`). Fact bu dosyayı okuyor: on adımın adı eksikse, biri `ok` değilse, `hata` listesi doluysa veya exe SHA-256'sı biçim tutmuyorsa kırmızı. Sandbox turu 2'de KALDI bırakılan iki halka ayrıca kaydedildi: kurulu kopyadan uninstall Y-105 ile düzeldi (T5, rc=0), `claude -p` "Not logged in" ise Sandbox'ta login yasak olduğu için canlı makinede kanıtlandı (adım 10). Yayın exe'sinin SHA-256'sı zincirden sonra (19:34) üretildiği için ayrı alanda, zincirin çalıştırdığı ikili ayrı alanda kayıtlı — karıştırılmıyor.
 
 Gerçek (Y-098): `WindowsProcessRunner` stdin'i her yolda kapatıyor. Yükü yazarken çocuk çoktan çıkmışsa `IOException` fırlıyor ve boru açık kalıyordu; yazma artık `try/finally` içinde ve kapatma `finally` içinde. Eski Fact hiç başlamayan bir dosya adı (`fixture-child`) kullandığı için ne zaman aşımını ne de stdin'i ölçüyordu; Fact artık iki gerçek çocuk koşuyor: `ping -n 20` 400 ms sınırında öldürülüyor (`TimedOut`), `findstr /c:payload` yalnız stdin EOF görünce bittiği için rc 0 ile dönüyor — stdin açık kalsaydı bu ayak zaman aşımına düşerdi.
 

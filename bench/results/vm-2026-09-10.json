@@ -17,8 +17,8 @@
     "not": "Zincir kanıtı 13:30 yayınıyla koşuldu; publish_exe aynı kaynaktan 19:34'te yeniden yayınlandı, zincirden sonradır. Karıştırılmasın diye ikisi ayrı kayıtlı."
   },
   "ortamlar": {
-    "sandbox": "Windows Sandbox (WDAGUtilityAccount), sıfırdan C:\\kiyas\\oom\\vault — kanıt kökü bench/vm/.out (izlenmiyor, .gitignore)",
-    "canli": "E:\\OdenaOS v2 — gerçek makinedeki kurulum, kanıt kökü E:\\OdenaOS v2\\.oom-kurulum (salt okunur)"
+    "sandbox": "Windows Sandbox (<sandbox-account>), sıfırdan C:\\kiyas\\oom\\vault — kanıt kökü bench/vm/.out (izlenmiyor, .gitignore)",
+    "canli": "<vault-v2> — gerçek makinedeki kurulum, kanıt kökü <vault-v2>\\.oom-kurulum (salt okunur)"
   },
   "adimlar": [
     {
@@ -75,9 +75,9 @@
       "no": "6",
       "ad": "canli-kurulum",
       "ortam": "canli",
-      "komut": "Oom.exe --vault 'E:\\OdenaOS v2' install",
+      "komut": "Oom.exe --vault '<vault-v2>' install",
       "durum": "ok",
-      "kanit": "E:\\OdenaOS v2\\.oom-kurulum\\install.txt",
+      "kanit": "<vault-v2>\\.oom-kurulum\\install.txt",
       "tarih": "2026-09-10T19:58+03:00",
       "sonuc": "kurulum tamam"
     },
@@ -87,7 +87,7 @@
       "ortam": "canli",
       "komut": "oom sweep",
       "durum": "ok",
-      "kanit": "E:\\OdenaOS v2\\.oom-kurulum\\sweep-1.txt",
+      "kanit": "<vault-v2>\\.oom-kurulum\\sweep-1.txt",
       "tarih": "2026-09-10T20:02+03:00",
       "sonuc": "2071 dosya, 20 oturum, 18/2019 kapsandı, ok=6 · dört daily yazıldı · indeks 144 ms"
     },
@@ -97,7 +97,7 @@
       "ortam": "canli",
       "komut": "oom context (SessionStart)",
       "durum": "ok",
-      "kanit": "E:\\OdenaOS v2\\.oom-kurulum\\context-1.txt",
+      "kanit": "<vault-v2>\\.oom-kurulum\\context-1.txt",
       "tarih": "2026-09-10T20:02+03:00",
       "sonuc": "[Bildirim] + [Hafıza — Son Oturum] ve devamı bölümleri basıldı"
     },
@@ -107,7 +107,7 @@
       "ortam": "canli",
       "komut": "oom retrieve --hook (UserPromptSubmit)",
       "durum": "ok",
-      "kanit": "E:\\OdenaOS v2\\.oom-kurulum\\retrieve-1.txt",
+      "kanit": "<vault-v2>\\.oom-kurulum\\retrieve-1.txt",
       "tarih": "2026-09-10T20:02+03:00",
       "sonuc": "hookSpecificOutput.additionalContext içinde [Hafıza — 1 not] · knowledge/concepts/... enjekte edildi"
     },
@@ -117,7 +117,7 @@
       "ortam": "canli",
       "komut": "claude -p (gerçek oturum, hafıza enjekte edilmiş)",
       "durum": "ok",
-      "kanit": "E:\\OdenaOS v2\\.oom-kurulum\\oturum-1.txt",
+      "kanit": "<vault-v2>\\.oom-kurulum\\oturum-1.txt",
       "tarih": "2026-09-10T20:02+03:00",
       "sonuc": "Model, enjekte edilen hafızadan 63. oturumu doğru özetledi — zincirin son halkası"
     }

@@ -3,7 +3,7 @@
 {"id": "p03", "prompt": "peki sonra", "enjekte": false, "sinif": "kisa", "why": "under 12 characters; spec 6.4 skip:short"}
 {"id": "p04", "prompt": "git status çalıştır ve çıktıyı göster", "enjekte": false, "sinif": "arac", "why": "leading tool verb; spec 6.4 skip:intent"}
 {"id": "p05", "prompt": "oku şu dosyayı ve bana kısaca özetle", "enjekte": false, "sinif": "arac", "why": "leading tool verb; spec 6.4 skip:intent"}
-{"id": "p06", "prompt": "E:\\OdenaWorks\\10-Aktif\\src\\main.cs D:\\yedek\\notlar.md C:\\tmp\\cikti.log", "enjekte": false, "sinif": "yol", "why": "path-weighted prompt; spec 6.4 skip:intent"}
+{"id": "p06", "prompt": "E:\\repo\\src\\main.cs D:\\yedek\\notlar.md C:\\tmp\\cikti.log", "enjekte": false, "sinif": "yol", "why": "path-weighted prompt; spec 6.4 skip:intent"}
 {"id": "p07", "prompt": "```python\nprint('merhaba dünya')\n```", "enjekte": false, "sinif": "kod", "why": "code fence; spec 6.4 skip:intent"}
 {"id": "p08", "prompt": "<system-reminder>oturum yenilendi</system-reminder>", "enjekte": false, "sinif": "zarf", "why": "machine envelope; spec 6.4 skip:intent"}
 {"id": "p09", "prompt": "merhaba nasılsın bugün keyifler nasıl", "enjekte": false, "sinif": "sohbet", "why": "chat phrase; spec 6.4 skip:intent"}

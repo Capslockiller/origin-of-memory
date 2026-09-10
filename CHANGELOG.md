@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-10
+
+Scrubbed local paths, usernames and machine/session identifiers from the tracked tree (gate 11-4: no absolute user path in the repo) — bench results, dev logs, and test/VM harness text now carry neutral placeholders instead of concrete `E:\`/`C:\Users\...` paths; behaviour and the acceptance evidence structure are unchanged. Seven scars closed in 2.0.0 stay closed; suite 128/128 green, CI green.
+
 ## [2.0.0] - 2026-09-10
 
-Origin of Memory 2.0 — the C# rewrite (single self-contained `oom.exe`, SQLite FTS5 retrieval per prompt, user-level hook install, scheduled sweep, MCP) leaves the acceptance chain: 128 tests (121 green, 7 fixture-less scars kept red on purpose), gate 5 recall@3 0.832 / @5 0.888 on the 550-note vault, clean-Windows Sandbox install → sweep → context → hook retrieval → real `claude -p` session verified, and the owner's live vault migrated to it (`E:\OdenaOS v2`).
+Origin of Memory 2.0 — the C# rewrite (single self-contained `oom.exe`, SQLite FTS5 retrieval per prompt, user-level hook install, scheduled sweep, MCP) leaves the acceptance chain: 128 tests (121 green, 7 fixture-less scars kept red on purpose), gate 5 recall@3 0.832 / @5 0.888 on the 550-note vault, clean-Windows Sandbox install → sweep → context → hook retrieval → real `claude -p` session verified, and the owner's live vault migrated to it (`<vault-v2>`).
 
 ### Fixed (clean-Windows Sandbox, 2026-09-10 — scars Y-100..Y-111)
 - Y-100 native SQLite library embedded in the single-file publish (installed copy no longer dies with `DllNotFoundException`).

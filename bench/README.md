@@ -74,7 +74,7 @@ The path is read-only over the vault. `Retrieve.Query` parses `<vault>/knowledge
 
 ## Recall parity (gate 5) — measured 2026-09-09
 
-Executable built from `e64566c`; vault `E:\OdenaOS` (542 concept files); gold set `.brief/gold-sorular.jsonl`, 130 rows of which 125 are scored and 5 are `kanarya` negative controls with an empty `gold` by construction and excluded from recall. Raw result: `bench/results/recall-2026-09-09.json`.
+Executable built from `e64566c`; vault `<vault>` (542 concept files); gold set `.brief/gold-sorular.jsonl`, 130 rows of which 125 are scored and 5 are `kanarya` negative controls with an empty `gold` by construction and excluded from recall. Raw result: `bench/results/recall-2026-09-09.json`.
 
 | küme | n | recall@3 | recall@5 | MRR@5 |
 | --- | ---: | ---: | ---: | ---: |
@@ -153,7 +153,7 @@ Baseline for the same instrument: 5/5 canaries and 20/20 gold questions injected
 <!-- yazan: codex · gpt-6 -->
 ## Retrieval gate — re-measured 2026-09-10 after lane GATE (Y-110)
 
-**Fact:** the requested 542-note reference is now a **550-note** live corpus at `E:\OdenaOS`. The historical 542-note snapshot was unavailable; no arbitrary eight notes were removed to manufacture that count. Both fresh baseline (`fdf4b1f`) and final runs used the same 550 concept files, the existing `.brief/gold-sorular.jsonl` (125 scored questions + five canaries), and a byte-identical copy of the 19-note TRIBUN slice under `.brief/hafiza-obegi`. Its eight positives and one negative come from `bench/vm/.out/hafiza-obegi/OKU.md` in the read-only evidence checkout. Raw result: `bench/results/recall-2026-09-10-gate.json` (both phases, executable/gold hashes, machine, per-file corpus hashes, query terms, document frequencies, scores, overlaps and per-query decisions).
+**Fact:** the requested 542-note reference is now a **550-note** live corpus at `<vault>`. The historical 542-note snapshot was unavailable; no arbitrary eight notes were removed to manufacture that count. Both fresh baseline (`fdf4b1f`) and final runs used the same 550 concept files, the existing `.brief/gold-sorular.jsonl` (125 scored questions + five canaries), and a byte-identical copy of the 19-note TRIBUN slice under `.brief/hafiza-obegi`. Its eight positives and one negative come from `bench/vm/.out/hafiza-obegi/OKU.md` in the read-only evidence checkout. Raw result: `bench/results/recall-2026-09-10-gate.json` (both phases, executable/gold hashes, machine, per-file corpus hashes, query terms, document frequencies, scores, overlaps and per-query decisions).
 
 **Fact — metric contract:** gate 5 is the existing `kos20.py` **gateless Query** recall measurement, not hook recall. Every candidate changes only the gate; the same measured rankings feed all candidate decisions. Do not interpret the gate-5 column below as post-gate recall. The actual hook metric is included separately so filtering losses remain visible. Recall follows the existing harness: a question succeeds when at least one gold slug occurs in the first k candidates; rejected candidates are not replaced from lower ranks.
 
