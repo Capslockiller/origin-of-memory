@@ -216,4 +216,15 @@ public sealed class YazmaYoluScars
         Assert.Equal(@"D:\kasa", CommandLine.Value(withVault, "--vault"));
         Assert.Null(CommandLine.Argument(["--vault", @"D:\kasa", "save"], 0));
     }
+
+    [Fact(DisplayName = "Y-106 · ingest kaynağı komuttan sonraki ilk konumsal argümandır, --vault yutulmaz")]
+    public void Y106_IngestSourceIsTheFirstPositionalAfterTheCommand()
+    {
+        Assert.Equal("codex", CommandLine.Argument(["ingest", "codex"], 0) ?? "claude");
+        Assert.Equal("codex", CommandLine.Argument(["--vault", @"D:\kasa", "ingest", "codex"], 0) ?? "claude");
+        Assert.Equal("claude", CommandLine.Argument(["ingest"], 0) ?? "claude");
+
+        var program = File.ReadAllText(Path.Combine(ScarFixture.RepositoryRoot(), "src", "Oom", "Program.cs"));
+        Assert.Contains("var source = Argument(args, 0) ?? \"claude\";", program, StringComparison.Ordinal);
+    }
 }

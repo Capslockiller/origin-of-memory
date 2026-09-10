@@ -1,6 +1,6 @@
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 104, Geçti: 97, Başarısız: 7. Çözüm testleriyle birlikte toplam 120 test, 113 geçti. Tarih: 2026-09-10, şerit FIX, `d00a461` üstü.
+Ölçüm: `dotnet test tests/Oom.Tests -c Release` — Toplam yara sayısı: 106, Geçti: 99, Başarısız: 7. Çözüm testleriyle birlikte toplam 123 test, 116 geçti. Tarih: 2026-09-10, şerit FIX, `4c18162` üstü.
 
 Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahibin (Master) kararıyla şimdilik kırmızıdır; şerit INT'in hükümleri `progress.md` içinde `## Lane INT` bölümünde kayıtlıdır: Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
 
@@ -111,12 +111,13 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | Y-103 | kurulum | Flush `claude`'u çıplak adla başlattı; npm yalnız `claude.cmd` bıraktığı makinede her oturum Retry'a düştü — çözümleyici (Y-073) bu yolda hiç çağrılmıyordu | KurulumScars.Y103_ClaudeRequestUsesResolvedExecutable | yeşil |
 | Y-104 | kurulum | Kurulumun yazdığı varsayılan `oom.json` kod varsayılanlarının elle yazılmış ikinci bir kopyasıydı: `sweep.roots: []` ile temiz kurulum hiçbir şey taramadı | KurulumScars.Y104_InstallerConfigurationComesFromCodeDefaults | yeşil |
 | Y-105 | kurulum | Kurulu kopyadan `--uninstall` kendi exe'sini silmeye çalışıp çöktü; kancalar yerinde kaldı | KurulumScars.Y105_UninstallFromInstalledCopySurvivesSelfDelete | yeşil |
+| Y-106 | yazma-yolu | `--vault X ingest codex` çağrısında kaynak `args[1]`'den okunduğu için kasa yolu kaynak sanıldı | YazmaYoluScars.Y106_IngestSourceIsTheFirstPositionalAfterTheCommand | yeşil |
 
 ## Sınıf başına durum
 
 | Sınıf | Yeşil | Kırmızı |
 |---|---|---|
-| yazma-yolu | 20 | 0 |
+| yazma-yolu | 21 | 0 |
 | özetleyici | 6 | 0 |
 | derleyici | 16 | 0 |
 | getirme | 7 | 3 |
@@ -126,4 +127,4 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | kurulum | 15 | 2 |
 | test-disiplini | 8 | 0 |
 | süreç-işletme | 7 | 0 |
-| **Toplam** | **98** | **7** |
+| **Toplam** | **99** | **7** |

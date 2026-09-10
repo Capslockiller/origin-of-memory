@@ -72,7 +72,7 @@ internal static class Program
 
             case "ingest":
             {
-                var source = args.Length > 1 ? args[1] : "claude";
+                var source = Argument(args, 0) ?? "claude";
                 var sessions = new Ingest().Run(source, [], ReadInt(args, "--max"));
                 Console.WriteLine($"içe aktarım: {sessions.Count} oturum");
                 return 0;
