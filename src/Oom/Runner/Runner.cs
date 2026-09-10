@@ -124,7 +124,7 @@ public sealed class Runner
     /// rejected 21% of v0's flushes (scars Y-011, 10.1 #27). No tools are ever
     /// granted: the model returns text, <c>oom.exe</c> writes the files.
     /// </summary>
-    public ProcessRequest BuildClaudeRequest(string prompt, string model, string vaultPath, string isolatedConfigDir)
+    public ProcessRequest BuildClaudeRequest(string prompt, string model, string vaultPath, string isolatedConfigDir, string? pathValue = null)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentException.ThrowIfNullOrWhiteSpace(vaultPath);
@@ -149,7 +149,12 @@ public sealed class Runner
             "--model", model!
         ];
 
-        return new ProcessRequest(ClaudeBackend, arguments, workingDirectory, environment, prompt);
+        // Y-103: the bare backend name used to become the file name, and where npm ships only
+        // claude.cmd Process.Start answered "Sistem belirtilen dosyayı bulamadı" — every session
+        // landed in Retry. ResolveExecutable (Y-073) already knew the answer; this path now asks
+        // it. The resolver stays pure: the environment is read here, at the call site.
+        var fileName = ResolveExecutable(ClaudeBackend, pathValue ?? Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        return new ProcessRequest(fileName, arguments, workingDirectory, environment, prompt);
     }
 
     /// <summary>

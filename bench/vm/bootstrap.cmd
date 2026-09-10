@@ -83,6 +83,7 @@ call :say "[bootstrap] companion dosyalari yazildi (%OOMVM_COMPANION%)"
 rem --- 4. exe ve yapilandirma ----------------------------------------------
 copy /y "%OOMVM_BIN%\oom.exe" "%OOMVM_VAULT%\.oom\oom.exe" >>"%LOG%" 2>&1
 if errorlevel 1 call :say "[bootstrap] HATA oom.exe kopyalanamadi"
+rem K1 kapandi (Y-100): dll artik exe'nin icinde; bu satir etkisiz kalir, silinmedi.
 if exist "%OOMVM_BIN%\e_sqlite3.dll" copy /y "%OOMVM_BIN%\e_sqlite3.dll" "%OOMVM_VAULT%\.oom\e_sqlite3.dll" >>"%LOG%" 2>&1
 
 set "VJ=%OOMVM_VAULT:\=\\%"

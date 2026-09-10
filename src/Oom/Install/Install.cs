@@ -459,7 +459,9 @@ public sealed class Install
         catch (SqliteException) { return false; }
     }
     private static InstallResult Failure(string error) => new(false, [], [], error);
-    private const string DefaultConfiguration = """
-        {"backend":{"flush":["claude","local"],"compile":["claude"],"claude":{"fast":"claude-haiku-4-5-20251001","smart":"claude-sonnet-5","configDir":".oom\\claude-config"},"local":{"url":"http://localhost:11434/v1","fast":"qwen3:8b","smart":"qwen3:14b","embed":"nomic-embed-text"}},"retrieveMode":"bm25","sweep":{"everyHours":8,"sinceHours":8,"minTurns":3,"maxSessionsPerRun":20,"roots":[]},"compile":{"eveningHour":18,"minIntervalHours":20,"maxDailiesPerRun":3},"context":{"companionDir":"🔮 850-Companion","capChars":16000,"statusLine":true},"retrieve":{"top":3,"perNoteChars":1500,"totalChars":4500,"minOverlap":2,"strictScore":25.0},"mcp":{"enabled":true},"notify":{"toast":true},"extensions":[]}
-        """;
+    /// <summary>
+    /// The <c>oom.json</c> a fresh install writes when the vault has none. The document is the
+    /// code defaults serialised (Y-104); the installer keeps no second copy of them.
+    /// </summary>
+    public static string DefaultConfiguration => OomSettings.DefaultJson();
 }

@@ -179,4 +179,41 @@ public sealed class YazmaYoluScars
         var result = new Flush().FlushSession("caps", "caps.jsonl", FlushReason.Sweep);
         Assert.Equal(FlushOutcome.NoTurns, result.Outcome);
     }
+
+    [Fact(DisplayName = "Y-101 · save kontrol noktasını günlük dosyaya yazar ve geri okuyup doğrular")]
+    public void Y101_CheckpointIsWrittenToDailyAndVerified()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            const string text = "karar: sandık kapandı\ndüzeltme: yerel kütüphane exe içinde\ndevir: şerit FIX";
+            var written = new Save().WriteCheckpointToVault(vault, text, ["karar", "düzeltme", "devir"], ScarFixture.Now);
+            Assert.True(written.Written, written.Error);
+            Assert.Null(written.Error);
+            var daily = Path.Combine(vault, "daily", $"{ScarFixture.Now:yyyy-MM-dd}.md");
+            Assert.True(File.Exists(daily), $"{daily} yazılmadı.");
+            var body = File.ReadAllText(daily);
+            Assert.Contains("karar: sandık kapandı", body);
+            Assert.Contains("devir: şerit FIX", body);
+
+            // A writer that cannot verify its own write never reports success.
+            var refused = new Save(checkpointWriter: _ => false).WriteCheckpoint(text, ["karar", "düzeltme", "devir"]);
+            Assert.False(refused.Written);
+            Assert.NotNull(refused.Error);
+        }
+        finally { ScarFixture.Remove(vault); }
+    }
+
+    [Fact(DisplayName = "Y-102 · save metni komuttan sonraki ilk konumsal argümandır, --vault yutulmaz")]
+    public void Y102_SaveTextIsTheFirstPositionalAfterTheCommand()
+    {
+        string[] plain = ["save", "karar: a"];
+        string[] withVault = ["--vault", @"D:\kasa", "save", "karar: a"];
+        Assert.Equal("save", CommandLine.Command(plain));
+        Assert.Equal("save", CommandLine.Command(withVault));
+        Assert.Equal("karar: a", CommandLine.Argument(plain, 0));
+        Assert.Equal("karar: a", CommandLine.Argument(withVault, 0));
+        Assert.Equal(@"D:\kasa", CommandLine.Value(withVault, "--vault"));
+        Assert.Null(CommandLine.Argument(["--vault", @"D:\kasa", "save"], 0));
+    }
 }

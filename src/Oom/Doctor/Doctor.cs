@@ -126,12 +126,25 @@ public sealed class Doctor
             Observe(now, "task", "task-current", "OdenaOS Memory Sweep", "Zamanlanmış görev etkin ve son koşumu güncel."),
             Observe(now, "state", "integrity-ok", "state.db", "Şema ve bütünlük denetimi geçti."),
             Observe(now, "state", "fts5-ok", "notes_fts", "FTS5 kullanılabilir."),
-            Observe(now, "runner", "claude-reachable", "claude", "Claude CLI erişilebilir."),
+            Observe(now, "runner", "claude-reachable", "claude", ClaudeReachability()),
             Observe(now, "runner", "ollama-reachable", "ollama", "Ollama erişilebilir."),
             Observe(now, "compile", "compile-current", "last", "Son derleme kaydı okunabildi."),
             Observe(now, "calls", "call-summary", "7d", "Backend çağrı özeti hazır."),
             .. HealthLedger.Read()
         ], 1.0, 0.0, 1);
+
+    /// <summary>
+    /// The same resolver the flush path uses (Y-103/Y-073): doctor must answer "can this machine
+    /// start claude?" the way <see cref="Runner.BuildClaudeRequest"/> asks it, not by a fixed
+    /// sentence. A machine carrying only <c>claude.cmd</c> is reachable; a bare name is not.
+    /// </summary>
+    private static string ClaudeReachability()
+    {
+        var resolved = new Runner().ResolveExecutable("claude", Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        return Path.IsPathRooted(resolved)
+            ? $"Claude CLI erişilebilir: {resolved}"
+            : "Claude CLI PATH içinde bulunamadı.";
+    }
 
     private static DoctorObservation Observe(DateTimeOffset now, string component, string code, string key, string detail) =>
         new(Item(component, HealthLevel.Info, code, key, detail), now);

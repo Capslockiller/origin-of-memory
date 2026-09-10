@@ -6,6 +6,10 @@
     <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <!-- D1: .NET 10 LTS hedef; SDK kurulunca tek satir degisir -->
     <PublishSingleFile>true</PublishSingleFile>
+    <!-- Y-100: without this the SQLite native library stays beside the exe, and the installer,
+         which copies the running file alone, produced a vault copy that died with
+         DllNotFoundException on a clean Windows. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <ImplicitUsings>enable</ImplicitUsings>

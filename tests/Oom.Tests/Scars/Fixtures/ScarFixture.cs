@@ -38,6 +38,21 @@ internal static class ScarFixture
         return current?.FullName ?? throw new InvalidOperationException("Oom.sln bulunamadı.");
     }
 
+    /// <summary>A fixture directory of this run's own, outside every real profile or vault.</summary>
+    internal static string TempDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "oom-scar-" + Guid.NewGuid().ToString("N")[..12]);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    internal static void Remove(string path)
+    {
+        try { if (Directory.Exists(path)) Directory.Delete(path, true); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
     internal static bool HasUtf8Bom(string path)
     {
         var bytes = File.ReadAllBytes(path);

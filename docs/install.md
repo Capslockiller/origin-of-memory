@@ -49,6 +49,20 @@ The four registrations come from `HookTemplates.Build`; `Install` consumes that 
 
 The flush commands still carry no `--session <id>`, which spec 5 asks for. The template belongs to lane B; `Install` writes it as it is and the gap is recorded in `progress.md` as a `Blocked-by:` line. `HookTemplates.LaunchDetached` already passes both `--session` and `--reason` to the detached child, so only the registered command string is short.
 
+## Companion file markers
+
+`context` does not read a companion file whole. Three of the five sections are cut out of the file by a heading, and a file that carries the text but not the heading produced an empty section with no explanation (clean-Windows Sandbox run, gate 7). The markers are part of the contract:
+
+| Section | File | Marker | What is taken |
+| --- | --- | --- | --- |
+| Son Oturum | `Last-Session.md` | `## Session:` | from the first such line, 49 lines |
+| Aktif Threadler | `Threads.md` | `## Active` | after it, every `### ` line and every line carrying `**Status:**`, 12 lines |
+| Kurallar | `Kurallar.md` | — | the first 60 lines |
+| Düzeltmeler | `Duzeltmeler.md` | — | the first 30 lines |
+| Son Journal | `Journal.md` | `## ` | from the **last** `## ` heading, 10 lines |
+
+The companion directory itself is `context.companionDir` in `oom.json` (default `🔮 850-Companion`). When a file is present but its marker is not, `context` now writes one line to stderr per section — `context: '<bölüm>' boş — dosyada '<marker>' başlığı yok` — and the block is built exactly as before. `Context.CompanionWarnings` returns the same lines for `doctor` and for tests.
+
 ## Scheduled task
 
 Install and `Sweep` now share a single XML builder, `Sweep.BuildScheduledTaskXml` (D4: an XML file passed to `schtasks /Create /XML`; no Task Scheduler COM interop). The XML has an eight-hour repetition with **no** `Duration` element (`Y-009`), `StartWhenAvailable` for a missed run, an `InteractiveToken` logon type so the task only runs while the user is signed in, a 30-minute `ExecutionTimeLimit`, and no battery restriction. The second, thinner XML that used to live inside `Install` (and carried `WakeToRun`) is gone.

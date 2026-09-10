@@ -52,6 +52,11 @@ public sealed class Context
 
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var companion = CompanionPath(vaultPath);
+        // A companion file without its heading used to print an empty section and say nothing.
+        // One stderr line per such section, and no behaviour change beyond it.
+        foreach (var warning in CompanionWarnings(vaultPath))
+            Console.Error.WriteLine(warning);
+
         var builder = new StringBuilder();
         Append(builder, "[Bildirim]", _options.PendingNotification);
         foreach (var (section, file, lines) in CompanionFiles)
@@ -111,6 +116,39 @@ public sealed class Context
 
         return items;
     }
+
+    /// <summary>
+    /// Sections whose companion file is present but carries none of the headings <see cref="Head"/>
+    /// looks for. Such a section used to print empty and silent.
+    /// </summary>
+    public IReadOnlyList<string> CompanionWarnings(string vaultPath)
+    {
+        var companion = CompanionPath(vaultPath);
+        if (companion is null)
+            return [];
+
+        var warnings = new List<string>();
+        foreach (var (section, file, lines) in CompanionFiles)
+        {
+            var marker = Marker(section);
+            var path = Path.Combine(companion, file);
+            if (marker.Length == 0 || !File.Exists(path) || Head(path, lines, section) is not null)
+                continue;
+
+            warnings.Add($"context: '{section}' boş — dosyada '{marker}' başlığı yok");
+        }
+
+        return warnings;
+    }
+
+    /// <summary>The heading <see cref="Head"/> needs for a section; empty when it reads from the top.</summary>
+    private static string Marker(string section) => section switch
+    {
+        "Son Oturum" => "## Session:",
+        "Aktif Threadler" => "## Active",
+        "Son Journal" => "## ",
+        _ => string.Empty
+    };
 
     /// <summary>Gives one flexible body what is left of the budget and reports the rest.</summary>
     private static (string? Body, int Room, bool Trimmed) Fit(string? body, int room, bool trimmed)

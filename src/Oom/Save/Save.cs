@@ -33,6 +33,38 @@ public sealed class Save
         return new CheckpointResult(verified, verified, verified ? null : "Kontrol noktası yazıldıktan sonra doğrulanamadı.");
     }
 
+    /// <summary>
+    /// The CLI checkpoint path (Y-101). <see cref="WriteCheckpoint"/> on its own only proves the
+    /// text survived a round trip through memory, and <c>save</c> printed "kayıt yazıldı" over a
+    /// vault it had never opened. Here the block is appended to <c>daily\yyyy-MM-dd.md</c>, the
+    /// file is read back from disk, and the result claims a write only when the block is in it.
+    /// </summary>
+    public CheckpointResult WriteCheckpointToVault(string vault, string text, IReadOnlyList<string> requiredFields, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(vault);
+        return new Save(guards, flush, block => AppendToDaily(vault, block, now)).WriteCheckpoint(text, requiredFields);
+    }
+
+    /// <summary>Appends one block to the vault's daily file and verifies it by re-reading the file.</summary>
+    private bool AppendToDaily(string vault, string text, DateTimeOffset now)
+    {
+        try
+        {
+            var directory = Path.Combine(vault, "daily");
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, $"{now:yyyy-MM-dd}.md");
+            var block = FormatDailyBlock(text, now);
+            var existing = File.Exists(path) ? File.ReadAllText(path, Utf8) : string.Empty;
+            var separator = existing.Length == 0 || existing.EndsWith('\n') ? string.Empty : "\n";
+            File.AppendAllText(path, separator + block, Utf8);
+            return File.ReadAllText(path, Utf8).Contains(block.Trim(), StringComparison.Ordinal);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
     public string FormatDailyBlock(string text, DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);

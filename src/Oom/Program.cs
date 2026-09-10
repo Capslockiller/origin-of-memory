@@ -82,7 +82,7 @@ internal static class Program
                 return Health(args, vault, settings, now);
 
             case "save":
-                return RunSave(args);
+                return RunSave(args, vault);
 
             case "mcp":
             {
@@ -355,7 +355,7 @@ internal static class Program
         return 0;
     }
 
-    private static int RunSave(string[] args)
+    private static int RunSave(string[] args, string vault)
     {
         if (Value(args, "--session-json") is { } sessionJson)
         {
@@ -364,8 +364,8 @@ internal static class Program
             return 0;
         }
 
-        var text = args.Length > 1 && !args[1].StartsWith("--", StringComparison.Ordinal) ? args[1] : ReadStandardInput();
-        var written = new Save().WriteCheckpoint(text, ["karar", "düzeltme", "devir"]);
+        var text = Argument(args, 0) ?? ReadStandardInput();
+        var written = new Save().WriteCheckpointToVault(vault, text, ["karar", "düzeltme", "devir"], Clock.Now);
         Console.WriteLine(written.Written ? "kayıt yazıldı" : $"kayıt yazılmadı: {written.Error}");
         return written.Written ? 0 : 1;
     }
@@ -666,30 +666,13 @@ internal static class Program
 
     private static string Short(string value) => value.Length <= 14 ? value : value[..14];
 
-    /// <summary>The first argument that is not an option and not an option's value.</summary>
-    private static string Command(string[] args)
-    {
-        for (var index = 0; index < args.Length; index++)
-        {
-            if (args[index].StartsWith("--", StringComparison.Ordinal))
-            {
-                if (args[index] is "--vault" or "--session" or "--transcript" or "--reason" or "--query" or "--top" or "--batch" or "--max" or "--session-json"
-                    or "--backend" or "--transcripts" or "--dailies" or "--transcript-dir" or "--daily-dir" or "--out")
-                    index++;
-                continue;
-            }
+    /// <summary>The first argument that is not an option and not an option's value (spec 5).</summary>
+    private static string Command(string[] args) => CommandLine.Command(args);
 
-            return args[index].Trim().ToLowerInvariant();
-        }
+    /// <summary>The command's own positional arguments; <c>--vault &lt;path&gt;</c> is not one (Y-102).</summary>
+    private static string? Argument(string[] args, int index) => CommandLine.Argument(args, index);
 
-        return string.Empty;
-    }
-
-    private static string? Value(string[] args, string name)
-    {
-        var index = Array.FindIndex(args, x => x.Equals(name, StringComparison.OrdinalIgnoreCase));
-        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
-    }
+    private static string? Value(string[] args, string name) => CommandLine.Value(args, name);
 
     private static int? ReadInt(string[] args, string name) =>
         int.TryParse(Value(args, name), out var value) ? value : null;

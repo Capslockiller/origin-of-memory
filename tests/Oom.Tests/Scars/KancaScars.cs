@@ -79,4 +79,21 @@ public sealed class KancaScars
         var result = new Flush().FlushSession("duplicate", "duplicate.jsonl", FlushReason.SessionEnd);
         Assert.Equal(FlushOutcome.Locked, result.Outcome);
     }
+
+    [Fact(DisplayName = "K6 · Companion dosyası var ama başlığı yoksa context tek satır uyarır")]
+    public void ContextWarnsWhenCompanionFileCarriesNoMarker()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            var companion = Path.Combine(vault, new ContextOptions().CompanionDir);
+            Directory.CreateDirectory(companion);
+            File.WriteAllText(Path.Combine(companion, "Last-Session.md"), "başlıksız gövde\nikinci satır\n");
+            var warnings = new Context().CompanionWarnings(vault);
+            var warning = Assert.Single(warnings);
+            Assert.Contains("Son Oturum", warning);
+            Assert.Contains("## Session:", warning);
+        }
+        finally { ScarFixture.Remove(vault); }
+    }
 }

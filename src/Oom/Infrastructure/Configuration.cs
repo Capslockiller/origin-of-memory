@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace Oom.Contracts;
@@ -55,6 +56,12 @@ public sealed record OomSettings(
     /// </summary>
     public string? LoadError { get; init; }
 
+    /// <summary>
+    /// The sweep roots as they are written to disk: <c>%USERPROFILE%</c> is left unexpanded so the
+    /// file stays portable between machines, and <see cref="Expand"/> resolves it on load.
+    /// </summary>
+    public static readonly string[] DefaultRoots = [@"%USERPROFILE%\.claude\projects", @"%USERPROFILE%\.codex\sessions"];
+
     /// <summary>The spec 4.1 defaults, used verbatim when <c>oom.json</c> is absent or unreadable.</summary>
     public static OomSettings Defaults(string? vault = null) => new(
         new BackendSettings(
@@ -63,13 +70,57 @@ public sealed record OomSettings(
             new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5", Path.Combine(".oom", "claude-config")),
             new LocalSettings("http://localhost:11434/v1", "qwen3:8b", "qwen3:14b", "nomic-embed-text")),
         "bm25",
-        new SweepSettings(8, 8, 3, 20, [Expand(@"%USERPROFILE%\.claude\projects"), Expand(@"%USERPROFILE%\.codex\sessions")]),
+        new SweepSettings(8, 8, 3, 20, [.. DefaultRoots.Select(Expand)]),
         new CompileOptions(18, 20, 3),
         new ContextOptions(),
         new RetrieveOptions(VaultPath: vault),
         true,
         true,
         []);
+
+    /// <summary>
+    /// The defaults as <c>oom.json</c> text — the file a fresh install writes (Y-104). The
+    /// installer used to carry a second, hand-written copy of this document, and the two drifted:
+    /// its <c>sweep.roots</c> was <c>[]</c>, so a clean install swept nothing, and its
+    /// <c>retrieve.strictScore</c> 25,0 / <c>minOverlap</c> 2 were the pre-R2 values from lane D
+    /// (`9f1c36a`), overriding the tuned ones. There is one source of truth now, and it is here.
+    /// </summary>
+    public static string DefaultJson()
+    {
+        var defaults = Defaults();
+        return JsonSerializer.Serialize(new
+        {
+            backend = new
+            {
+                flush = defaults.Backend.Flush,
+                compile = defaults.Backend.Compile,
+                claude = new { fast = defaults.Backend.Claude.Fast, smart = defaults.Backend.Claude.Smart, configDir = defaults.Backend.Claude.ConfigDir },
+                local = new { url = defaults.Backend.Local.Url, fast = defaults.Backend.Local.Fast, smart = defaults.Backend.Local.Smart, embed = defaults.Backend.Local.Embed }
+            },
+            retrieveMode = defaults.RetrieveMode,
+            sweep = new
+            {
+                everyHours = defaults.Sweep.EveryHours,
+                sinceHours = defaults.Sweep.SinceHours,
+                minTurns = defaults.Sweep.MinTurns,
+                maxSessionsPerRun = defaults.Sweep.MaxSessionsPerRun,
+                roots = DefaultRoots
+            },
+            compile = new { eveningHour = defaults.Compile.EveningHour, minIntervalHours = defaults.Compile.MinIntervalHours, maxDailiesPerRun = defaults.Compile.MaxDailiesPerRun },
+            context = new { companionDir = defaults.Context.CompanionDir, capChars = defaults.Context.CapChars, statusLine = defaults.Context.StatusLine },
+            retrieve = new
+            {
+                top = defaults.Retrieve.Top,
+                perNoteChars = defaults.Retrieve.PerNoteChars,
+                totalChars = defaults.Retrieve.TotalChars,
+                minOverlap = defaults.Retrieve.MinOverlap,
+                strictScore = defaults.Retrieve.StrictScore
+            },
+            mcp = new { enabled = defaults.McpEnabled },
+            notify = new { toast = defaults.Toast },
+            extensions = Array.Empty<object>()
+        }, new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+    }
 
     /// <summary>Reads <c>&lt;vault&gt;\.oom\oom.json</c>; an unreadable file falls back to the defaults, never to a guess.</summary>
     public static OomSettings Load(string vault)

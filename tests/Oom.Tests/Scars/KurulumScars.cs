@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
@@ -132,5 +133,59 @@ public sealed class KurulumScars
         var result = new Runner().RunProcess(request, TimeSpan.FromMilliseconds(250));
         Assert.True(result.StandardInputClosed);
         Assert.True(result.TimedOut || result.ExitCode == 0);
+    }
+
+    [Fact(DisplayName = "Y-100 · Tek dosya yayınında yerel kütüphaneler exe'nin içine girer")]
+    public void Y100_SingleFilePublishEmbedsNativeLibraries()
+    {
+        var root = ScarFixture.RepositoryRoot();
+        var project = File.ReadAllText(Path.Combine(root, "src", "Oom", "Oom.csproj"));
+        Assert.Contains("<PublishSingleFile>true</PublishSingleFile>", project);
+        Assert.Contains("<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>", project);
+        // When a published tree is present its exe must stand alone: the installer copies the
+        // running file and nothing beside it, so a dll left here never reaches the vault.
+        var published = Path.Combine(root, "publish", "win-x64");
+        if (File.Exists(Path.Combine(published, "oom.exe")))
+            Assert.Empty(Directory.EnumerateFiles(published, "*.dll", SearchOption.TopDirectoryOnly));
+    }
+
+    [Fact(DisplayName = "Y-103 · claude çıplak adla değil PATH'ten çözümlenerek başlatılır")]
+    public void Y103_ClaudeRequestUsesResolvedExecutable()
+    {
+        var directory = ScarFixture.TempDirectory();
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "claude.cmd"), "@echo off\r\n");
+            var runner = new Runner();
+            var configuration = Path.Combine(directory, "claude-config");
+            var wrapper = runner.BuildClaudeRequest("istem", "claude-haiku-4-5-20251001", directory, configuration, directory);
+            Assert.EndsWith("claude.cmd", wrapper.FileName, StringComparison.OrdinalIgnoreCase);
+            File.WriteAllText(Path.Combine(directory, "claude.exe"), string.Empty);
+            var native = runner.BuildClaudeRequest("istem", "claude-haiku-4-5-20251001", directory, configuration, directory);
+            Assert.EndsWith("claude.exe", native.FileName, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { ScarFixture.Remove(directory); }
+    }
+
+    [Fact(DisplayName = "Y-104 · Kurulumun yazdığı oom.json kod varsayılanlarını taşır")]
+    public void Y104_InstallerConfigurationComesFromCodeDefaults()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(vault, ".oom"));
+            File.WriteAllText(Path.Combine(vault, ".oom", "oom.json"), Install.DefaultConfiguration, new UTF8Encoding(false));
+            var loaded = OomSettings.Load(vault);
+            var defaults = OomSettings.Defaults(vault);
+            Assert.Null(loaded.LoadError);
+            Assert.NotEmpty(loaded.Sweep.Roots);
+            Assert.Equal(defaults.Sweep.Roots, loaded.Sweep.Roots);
+            Assert.Equal(defaults.Retrieve.MinOverlap, loaded.Retrieve.MinOverlap);
+            Assert.Equal(defaults.Retrieve.StrictScore, loaded.Retrieve.StrictScore);
+            // The file stays machine-portable: the roots are written unexpanded and expanded on load.
+            Assert.Contains("%USERPROFILE%", Install.DefaultConfiguration);
+            Assert.DoesNotContain("%USERPROFILE%", loaded.Sweep.Roots[0]);
+        }
+        finally { ScarFixture.Remove(vault); }
     }
 }
