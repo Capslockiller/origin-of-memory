@@ -258,4 +258,13 @@ public sealed class KurulumScars
             ScarFixture.Remove(fakeProfile);
         }
     }
+
+    [Fact(DisplayName = "Y-108 · install --uninstall başarıyı ve hatayı kaldırma olarak bildirir")]
+    public void Y108_UninstallReportsUninstallOutcome()
+    {
+        var program = File.ReadAllText(Path.Combine(ScarFixture.RepositoryRoot(), "src", "Oom", "Program.cs"));
+        Assert.Contains("Console.WriteLine(result.Success ? \"kaldırma tamam\" : $\"kaldırma başarısız: {result.Error}\");", program, StringComparison.Ordinal);
+        Assert.Contains("Console.WriteLine($\"kaldırma tamam — çalışan exe elle silinir: {leftoverExe[\"exe-elle-sil:\".Length..]}\");", program, StringComparison.Ordinal);
+        Assert.Contains("Console.WriteLine(result.Success ? \"kurulum tamam\" : $\"kurulum başarısız: {result.Error}\");", program, StringComparison.Ordinal);
+    }
 }

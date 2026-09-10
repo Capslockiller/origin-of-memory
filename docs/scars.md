@@ -1,6 +1,6 @@
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test tests/Oom.Tests -c Release` — Toplam yara sayısı: 106, Geçti: 99, Başarısız: 7. Çözüm testleriyle birlikte toplam 123 test, 116 geçti. Tarih: 2026-09-10, şerit FIX, `4c18162` üstü.
+Ölçüm: `dotnet test tests/Oom.Tests -c Release` — Toplam yara sayısı: 109, Geçti: 102, Başarısız: 7. Kapı testleriyle birlikte toplam 126 test, 119 geçti. Tarih: 2026-09-10, şerit FIX, `4c18162` üstü.
 
 Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahibin (Master) kararıyla şimdilik kırmızıdır; şerit INT'in hükümleri `progress.md` içinde `## Lane INT` bölümünde kayıtlıdır: Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
 
@@ -112,19 +112,22 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | Y-104 | kurulum | Kurulumun yazdığı varsayılan `oom.json` kod varsayılanlarının elle yazılmış ikinci bir kopyasıydı: `sweep.roots: []` ile temiz kurulum hiçbir şey taramadı | KurulumScars.Y104_InstallerConfigurationComesFromCodeDefaults | yeşil |
 | Y-105 | kurulum | Kurulu kopyadan `--uninstall` kendi exe'sini silmeye çalışıp çöktü; kancalar yerinde kaldı | KurulumScars.Y105_UninstallFromInstalledCopySurvivesSelfDelete | yeşil |
 | Y-106 | yazma-yolu | `--vault X ingest codex` çağrısında kaynak `args[1]`'den okunduğu için kasa yolu kaynak sanıldı | YazmaYoluScars.Y106_IngestSourceIsTheFirstPositionalAfterTheCommand | yeşil |
+| Y-107 | yazma-yolu | `save --session-json` içindeki `turns[0].text` nesne olduğunda yakalanmayan `FormatException` ile süreç öldü (rc -532462766) | YazmaYoluScars.Y107_SaveSessionJsonRejectsMalformedInputWithoutEscapingProgram | yeşil |
+| Y-108 | kurulum | Başarılı `install --uninstall` kaldırma yerine `kurulum tamam`, başarısızlık da `kurulum başarısız` yazdı | KurulumScars.Y108_UninstallReportsUninstallOutcome | yeşil |
+| Y-109 | süreç-işletme | `Main`'in son çare istisnası yakalanmıyordu — yakalanmayan hata Windows Hata Bildirimi ("oom.exe - Uygulama Hatası") kutusunu açıyor, hook'u askıda bırakıyordu | SurecIsletmeScars.Y109_MainCatchesUnhandledExceptionAndDisablesWerDialog | yeşil |
 
 ## Sınıf başına durum
 
 | Sınıf | Yeşil | Kırmızı |
 |---|---|---|
-| yazma-yolu | 21 | 0 |
+| yazma-yolu | 22 | 0 |
 | özetleyici | 6 | 0 |
 | derleyici | 16 | 0 |
 | getirme | 7 | 3 |
 | kanca | 6 | 2 |
 | kota | 6 | 0 |
 | durum-deposu | 7 | 0 |
-| kurulum | 15 | 2 |
+| kurulum | 16 | 2 |
 | test-disiplini | 8 | 0 |
-| süreç-işletme | 7 | 0 |
-| **Toplam** | **99** | **7** |
+| süreç-işletme | 8 | 0 |
+| **Toplam** | **102** | **7** |

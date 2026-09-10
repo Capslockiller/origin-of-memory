@@ -1,10 +1,25 @@
 using System.Text;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Oom.Contracts;
 
 namespace Oom.Tests.Scars.Fixtures;
 
 internal static class ScarFixture
 {
+    private const uint SEM_NOGPFAULTERRORBOX = 0x0002;
+
+    // yazan: codex · gpt-5
+    [ModuleInitializer]
+    internal static void DisableWindowsErrorReportingDialogs()
+    {
+        if (OperatingSystem.IsWindows())
+            SetErrorMode(SEM_NOGPFAULTERRORBOX);
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+
     internal static readonly DateTimeOffset Now = new(2026, 9, 9, 12, 0, 0, TimeSpan.FromHours(3));
 
     internal static Session Session(string id, int turns, int charactersPerTurn = 12, DateTimeOffset? lastTurnAt = null, string source = "claude")

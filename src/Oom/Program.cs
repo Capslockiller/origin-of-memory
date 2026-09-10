@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Oom.Contracts;
@@ -23,7 +24,38 @@ internal static class Program
     /// <summary>Commands a hook may trigger; inside an oom-invoked process they are silent (scar 10.1 #19).</summary>
     private static readonly string[] GuardedCommands = ["context", "retrieve", "flush", "sweep", "compile"];
 
-    private static int Main(string[] args)
+    private const uint SEM_FAILCRITICALERRORS = 0x0001;
+    private const uint SEM_NOGPFAULTERRORBOX = 0x0002;
+
+    [DllImport("kernel32.dll")]
+    private static extern uint SetErrorMode(uint mode);
+
+    private static int Main(string[] args) => Main(args, Dispatch);
+
+    /// <summary>
+    /// Y-109: a crash that reaches here would otherwise pop the Windows Error Reporting box
+    /// ("oom.exe - Uygulama Hatası") in front of whoever is running the hook. The dialog is
+    /// disabled at process start and any exception the dispatcher does not handle itself is
+    /// turned into a one-line stderr message and rc 1 — never a WER prompt, never a stack dump.
+    /// The dispatcher is a parameter so the test can inject a broken one without crashing xunit.
+    /// </summary>
+    private static int Main(string[] args, Func<string[], int> dispatch)
+    {
+        if (OperatingSystem.IsWindows())
+            SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+
+        try
+        {
+            return dispatch(args);
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"hata: {error.GetType().Name}: {error.Message}");
+            return 1;
+        }
+    }
+
+    private static int Dispatch(string[] args)
     {
         Console.OutputEncoding = Utf8;
         TrySetInputEncoding();
@@ -111,6 +143,8 @@ internal static class Program
                 var leftoverExe = result.Registrations.FirstOrDefault(r => r.StartsWith("exe-elle-sil:", StringComparison.Ordinal));
                 if (uninstalling && result.Success && leftoverExe is not null)
                     Console.WriteLine($"kaldırma tamam — çalışan exe elle silinir: {leftoverExe["exe-elle-sil:".Length..]}");
+                else if (uninstalling)
+                    Console.WriteLine(result.Success ? "kaldırma tamam" : $"kaldırma başarısız: {result.Error}");
                 else
                     Console.WriteLine(result.Success ? "kurulum tamam" : $"kurulum başarısız: {result.Error}");
                 return result.Success ? 0 : 1;
@@ -366,9 +400,17 @@ internal static class Program
     {
         if (Value(args, "--session-json") is { } sessionJson)
         {
-            var imported = new Save().SaveSessionJson(File.ReadAllText(sessionJson, Utf8));
-            Console.WriteLine($"kayıt: {imported.Outcome}");
-            return 0;
+            try
+            {
+                var imported = new Save().SaveSessionJson(File.ReadAllText(sessionJson, Utf8));
+                Console.WriteLine($"kayıt: {imported.Outcome}");
+                return 0;
+            }
+            catch (Exception error) when (error is FormatException or ArgumentException)
+            {
+                Console.Error.WriteLine($"kayıt yazılmadı: {error.Message}");
+                return 1;
+            }
         }
 
         var text = Argument(args, 0) ?? ReadStandardInput();

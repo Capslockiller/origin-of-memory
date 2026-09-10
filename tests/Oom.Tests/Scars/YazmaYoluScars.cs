@@ -227,4 +227,35 @@ public sealed class YazmaYoluScars
         var program = File.ReadAllText(Path.Combine(ScarFixture.RepositoryRoot(), "src", "Oom", "Program.cs"));
         Assert.Contains("var source = Argument(args, 0) ?? \"claude\";", program, StringComparison.Ordinal);
     }
+
+    [Fact(DisplayName = "Y-107 · save --session-json bozuk dış sözleşmede çökmek yerine rc 1 döndürür")]
+    public void Y107_SaveSessionJsonRejectsMalformedInputWithoutEscapingProgram()
+    {
+        const string malformed = """
+            {"id":"x","source":"s","turns":[{"index":0,"role":"user","kind":"text","text":{"value":"a"}}]}
+            """;
+        Assert.Throws<FormatException>(() => new Save().SaveSessionJson(malformed));
+
+        var vault = ScarFixture.TempDirectory();
+        var sessionJson = Path.Combine(vault, "session.json");
+        var previousError = Console.Error;
+        using var error = new StringWriter();
+        try
+        {
+            File.WriteAllText(sessionJson, malformed, new System.Text.UTF8Encoding(false));
+            var program = typeof(Save).Assembly.GetType("Oom.Program", throwOnError: true)!;
+            var runSave = program.GetMethod("RunSave", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+            Console.SetError(error);
+
+            var returnCode = (int)runSave.Invoke(null, [new[] { "save", "--session-json", sessionJson }, vault])!;
+
+            Assert.Equal(1, returnCode);
+            Assert.Contains("kayıt yazılmadı: Dış oturum JSON sözleşmesine uymuyor.", error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+            ScarFixture.Remove(vault);
+        }
+    }
 }
