@@ -350,16 +350,16 @@ Ayrıca kanca tarafında ölçülen bulgu: `ShouldInject`, `hit.Score >= StrictS
 
 | id | sınıf | gold sırası | top1 puan | gold puan | gold slug |
 | --- | --- | ---: | ---: | ---: | --- |
-| q033 | tek-not | yok (0 puan) | 63,8 | — | n_gizli |
-| q051 | tek-not | yok (0 puan) | 73,3 | — | n_gizli |
-| q108 | tek-not | yok (0 puan) | 179,5 | — | n_gizli |
-| q119 | çok-not | yok (0 puan) | 91,8 | — | n_gizli |
-| q116 | tek-not | 157 | 169,4 | 1,8 | n_gizli |
-| q113 | çok-not | 121 | 178,3 | 18,7 | n_gizli |
-| q128 | tek-not | 112 | 91,5 | 3,9 | n_gizli |
-| q115 | tek-not | 77 | 82,7 | 1,0 | n_gizli |
-| q024 | çok-not | 59 | 96,0 | 26,6 | n_gizli |
-| q088 | tek-not | 58 | 89,1 | 9,7 | n_gizli |
+| q033 | tek-not | yok (0 puan) | 63,8 | — | n_cd0be10c |
+| q051 | tek-not | yok (0 puan) | 73,3 | — | n_f36c5a60 |
+| q108 | tek-not | yok (0 puan) | 179,5 | — | n_22ede3ec |
+| q119 | çok-not | yok (0 puan) | 91,8 | — | n_1d228291 |
+| q116 | tek-not | 157 | 169,4 | 1,8 | n_5563fcfa |
+| q113 | çok-not | 121 | 178,3 | 18,7 | n_06035c75 |
+| q128 | tek-not | 112 | 91,5 | 3,9 | n_24e69972 |
+| q115 | tek-not | 77 | 82,7 | 1,0 | n_5563fcfa |
+| q024 | çok-not | 59 | 96,0 | 26,6 | n_1e4d3a0f |
+| q088 | tek-not | 58 | 89,1 | 9,7 | n_03c5d5c7 |
 
 İlk dördü (1)–(3) ile açıklanamaz; sözcük örtüşmesi hiç yok, madde 7'ye giriyorlar. Kalan altısı ile 6–20 bandındaki 13 soru (1) ve (2)'nin doğrudan kurbanı: gold not bulunuyor, konusallık ölçülemediği için yukarı çıkamıyor.
 

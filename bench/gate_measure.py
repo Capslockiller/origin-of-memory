@@ -79,7 +79,7 @@ def main():
     for number, question, slug in re.findall(r'^(\d+)\. (.+?) → (\S+)',
                                              (SOURCE / 'OKU.md').read_text(encoding='utf-8'), re.M):
         slice_rows.append({'id': f'S{number}', 'soru': question, 'gold': [slug], 'sinif': 'slice'})
-    slice_rows.append({'id': 'S9', 'soru': 'Ay tutulmasi kac dakika surer?', 'gold': [], 'sinif': 'kanarya'})
+    slice_rows.append({'id': 'S9', 'soru': 'Ay tutulması kaç dakika sürer?', 'gold': [], 'sinif': 'kanarya'})
     assert len(slice_rows) == 9
     assert manifest(SOURCE) == manifest(SLICE)
     result = {'yazan': 'codex', 'model': 'gpt-6', 'phase': args.phase,

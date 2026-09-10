@@ -1,71 +1,71 @@
 {
-  "gate": 10,
-  "command": "oom bench",
   "backend": "local",
-  "measured": "2026-09-09",
+  "command": "oom bench",
+  "compile_conformance": {
+    "conformance": 0,
+    "n": 2,
+    "pass": false,
+    "records": [
+      {
+        "ms": 18214,
+        "ok": false,
+        "reason": "'=== DONE ===' yok",
+        "source": "n_940d8e30"
+      },
+      {
+        "ms": 10795,
+        "ok": false,
+        "reason": "n_d4c60f92",
+        "source": "n_939d1eba"
+      }
+    ],
+    "threshold": 0.95
+  },
+  "decision": {
+    "compile": "drop",
+    "flush": "undecided — leg (b) not run"
+  },
+  "flush_shape": {
+    "conformance": 1,
+    "n": 3,
+    "pass": true,
+    "records": [
+      {
+        "ms": 10638,
+        "ok": true,
+        "reason": "ok",
+        "source": "bench-p3-02.jsonl"
+      },
+      {
+        "ms": 7363,
+        "ok": true,
+        "reason": "ok",
+        "source": "bench-p3-00.jsonl"
+      },
+      {
+        "ms": 6681,
+        "ok": true,
+        "reason": "ok",
+        "source": "bench-p3-01.jsonl"
+      }
+    ],
+    "threshold": 0.95
+  },
+  "gate": 10,
+  "judge": {
+    "score": null,
+    "status": "not run",
+    "threshold": 3.5,
+    "why": "<soru>"
+  },
+  "measured": "n_6eb07c24",
   "model": {
     "name": "qwen3:8b / qwen3:8b",
     "url": "http://localhost:11434/v1"
   },
   "thresholds": {
+    "compile_conformance": 0.95,
     "flush_shape": 0.95,
-    "judge": 3.5,
-    "compile_conformance": 0.95
-  },
-  "flush_shape": {
-    "n": 3,
-    "conformance": 1,
-    "threshold": 0.95,
-    "pass": true,
-    "records": [
-      {
-        "source": "bench-p3-02.jsonl",
-        "ok": true,
-        "reason": "ok",
-        "ms": 10638
-      },
-      {
-        "source": "bench-p3-00.jsonl",
-        "ok": true,
-        "reason": "ok",
-        "ms": 7363
-      },
-      {
-        "source": "bench-p3-01.jsonl",
-        "ok": true,
-        "reason": "ok",
-        "ms": 6681
-      }
-    ]
-  },
-  "judge": {
-    "status": "not run",
-    "score": null,
-    "why": "--judge verilmedi: çift-kör yargı Claude kotası harcar (spec 6.12-b)",
-    "threshold": 3.5
-  },
-  "compile_conformance": {
-    "n": 2,
-    "conformance": 0,
-    "threshold": 0.95,
-    "pass": false,
-    "records": [
-      {
-        "source": "2027-03-03.md",
-        "ok": false,
-        "reason": "'=== DONE ===' yok",
-        "ms": 18214
-      },
-      {
-        "source": "2027-03-02.md",
-        "ok": false,
-        "reason": "Model çıktısındaki 'knowledge/concepts/hDMI-fiber-kablo.md' yolu izin verilen kavram deseniyle eşleşmiyor; bütün koşum reddedildi. (Parameter 'modelOutput')",
-        "ms": 10795
-      }
-    ]
-  },
-  "decision": {
-    "flush": "undecided — leg (b) not run",
-    "compile": "drop"
+    "judge": 3.5
   }
 }

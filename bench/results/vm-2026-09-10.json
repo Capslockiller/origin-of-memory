@@ -1,127 +1,127 @@
 {
-  "yazan": "claude",
-  "model": "opus-5",
-  "olculen": "2026-09-10",
-  "kapi": "Y-069 — temiz Windows makinede kurulum → tarama → bağlam → kanca getirmesi → gerçek claude oturumu",
-  "source_commit": "123bd45",
-  "publish_exe": {
-    "path": "publish/win-x64/Oom.exe",
-    "sha256": "0917c170bd3631ce8e2c274895db187b9f5b455c6275d73059def6afc1c1e945",
-    "bytes": 99062271,
-    "built": "2026-09-10T19:34+03:00"
-  },
-  "evidence_exe": {
-    "path": "C:\\oom-bin\\Oom.exe",
-    "bytes": 99045887,
-    "built": "2026-09-10T13:30+03:00",
-    "not": "Zincir kanıtı 13:30 yayınıyla koşuldu; publish_exe aynı kaynaktan 19:34'te yeniden yayınlandı, zincirden sonradır. Karıştırılmasın diye ikisi ayrı kayıtlı."
-  },
-  "ortamlar": {
-    "sandbox": "Windows Sandbox (<sandbox-account>), sıfırdan C:\\kiyas\\oom\\vault — kanıt kökü bench/vm/.out (izlenmiyor, .gitignore)",
-    "canli": "<vault-v2> — gerçek makinedeki kurulum, kanıt kökü <vault-v2>\\.oom-kurulum (salt okunur)"
-  },
   "adimlar": [
     {
-      "no": "1",
       "ad": "kurulum",
-      "ortam": "sandbox",
-      "komut": "Oom.exe --vault C:\\kiyas\\oom\\vault install",
       "durum": "ok",
       "kanit": "bench/vm/.out/kiyas/oom/T1-kurulum.log",
-      "tarih": "2026-09-10T13:59+03:00",
-      "sonuc": "rc=0 · .oom içinde oom.exe tek dosya (dll yok) · oom.json roots dolu, strictScore 1, minOverlap 3"
+      "komut": "Oom.exe --vault C:\\kiyas\\oom\\vault install",
+      "no": "1",
+      "ortam": "sandbox",
+      "sonuc": "rc=0 · .oom içinde oom.exe tek dosya (dll yok) · oom.json roots dolu, strictScore 1, minOverlap 3",
+      "tarih": "2026-09-10T13:59+03:00"
     },
     {
-      "no": "2",
       "ad": "yukleme",
-      "ortam": "sandbox",
-      "komut": "oom doctor (kurulu, dll'siz kopya)",
       "durum": "ok",
       "kanit": "bench/vm/.out/kiyas/oom/T2-yukleme.log",
-      "tarih": "2026-09-10T14:00+03:00",
-      "sonuc": "rc=0 · doctor tablosu bastı · kapsama %62 · ret %50 · bekleyen 0"
+      "komut": "oom doctor (kurulu, dll'siz kopya)",
+      "no": "2",
+      "ortam": "sandbox",
+      "sonuc": "rc=0 · doctor tablosu bastı · kapsama %62 · ret %50 · bekleyen 0",
+      "tarih": "2026-09-10T14:00+03:00"
     },
     {
-      "no": "3",
       "ad": "getirme",
-      "ortam": "sandbox",
-      "komut": "oom retrieve --hook (derlenmiş kavram korpusu)",
       "durum": "ok",
       "kanit": "bench/vm/.out/kiyas/oom/T3-getirme.log",
-      "tarih": "2026-09-10T14:01+03:00",
-      "sonuc": "rc=0 · [Hafıza — n not] bloğu üç kavram notuyla basıldı"
+      "komut": "oom retrieve --hook (derlenmiş kavram korpusu)",
+      "no": "3",
+      "ortam": "sandbox",
+      "sonuc": "rc=0 · [Hafıza — n not] bloğu üç kavram notuyla basıldı",
+      "tarih": "2026-09-10T14:01+03:00"
     },
     {
-      "no": "4",
       "ad": "yakalama",
-      "ortam": "sandbox",
-      "komut": "oom sweep · save · compile --dry-run",
       "durum": "ok",
       "kanit": "bench/vm/.out/kiyas/oom/T4-yakalama.log",
-      "tarih": "2026-09-10T14:02+03:00",
-      "sonuc": "rc=0 · red kayıtları yalnız local (11434) reddi · 'dosyayı bulamıyor' yok · derleme planı kuru koşumda çıktı"
+      "komut": "oom sweep · save · compile --dry-run",
+      "no": "4",
+      "ortam": "sandbox",
+      "sonuc": "rc=0 · red kayıtları yalnız local (11434) reddi · 'dosyayı bulamıyor' yok · derleme planı kuru koşumda çıktı",
+      "tarih": "2026-09-10T14:02+03:00"
     },
     {
-      "no": "5",
       "ad": "kaldirma",
-      "ortam": "sandbox",
-      "komut": "oom install --uninstall (kurulu kopyadan)",
       "durum": "ok",
       "kanit": "bench/vm/.out/kiyas/oom/T5-kaldirma.log",
-      "tarih": "2026-09-10T14:02+03:00",
-      "sonuc": "rc=0 · 'kaldırma tamam' · hooks {} · exe kendini .uninstalled- olarak yeniden adlandırdı (Y-105)"
+      "komut": "oom install --uninstall (kurulu kopyadan)",
+      "no": "5",
+      "ortam": "sandbox",
+      "sonuc": "rc=0 · 'kaldırma tamam' · hooks {} · exe kendini .uninstalled- olarak yeniden adlandırdı (Y-105)",
+      "tarih": "2026-09-10T14:02+03:00"
     },
     {
-      "no": "6",
       "ad": "canli-kurulum",
-      "ortam": "canli",
-      "komut": "Oom.exe --vault '<vault-v2>' install",
       "durum": "ok",
       "kanit": "<vault-v2>\\.oom-kurulum\\install.txt",
-      "tarih": "2026-09-10T19:58+03:00",
-      "sonuc": "kurulum tamam"
+      "komut": "Oom.exe --vault '<vault-v2>' install",
+      "no": "6",
+      "ortam": "canli",
+      "sonuc": "kurulum tamam",
+      "tarih": "2026-09-10T19:58+03:00"
     },
     {
-      "no": "7",
       "ad": "canli-tarama",
-      "ortam": "canli",
-      "komut": "oom sweep",
       "durum": "ok",
       "kanit": "<vault-v2>\\.oom-kurulum\\sweep-1.txt",
-      "tarih": "2026-09-10T20:02+03:00",
-      "sonuc": "2071 dosya, 20 oturum, 18/2019 kapsandı, ok=6 · dört daily yazıldı · indeks 144 ms"
+      "komut": "oom sweep",
+      "no": "7",
+      "ortam": "canli",
+      "sonuc": "2071 dosya, 20 oturum, 18/2019 kapsandı, ok=6 · dört daily yazıldı · indeks 144 ms",
+      "tarih": "2026-09-10T20:02+03:00"
     },
     {
-      "no": "8",
       "ad": "canli-baglam",
-      "ortam": "canli",
-      "komut": "oom context (SessionStart)",
       "durum": "ok",
       "kanit": "<vault-v2>\\.oom-kurulum\\context-1.txt",
-      "tarih": "2026-09-10T20:02+03:00",
-      "sonuc": "[Bildirim] + [Hafıza — Son Oturum] ve devamı bölümleri basıldı"
+      "komut": "oom context (SessionStart)",
+      "no": "8",
+      "ortam": "canli",
+      "sonuc": "[Bildirim] + [Hafıza — Son Oturum] ve devamı bölümleri basıldı",
+      "tarih": "2026-09-10T20:02+03:00"
     },
     {
-      "no": "9",
       "ad": "canli-kanca-getirme",
-      "ortam": "canli",
-      "komut": "oom retrieve --hook (UserPromptSubmit)",
       "durum": "ok",
       "kanit": "<vault-v2>\\.oom-kurulum\\retrieve-1.txt",
-      "tarih": "2026-09-10T20:02+03:00",
-      "sonuc": "hookSpecificOutput.additionalContext içinde [Hafıza — 1 not] · knowledge/concepts/... enjekte edildi"
+      "komut": "oom retrieve --hook (UserPromptSubmit)",
+      "no": "9",
+      "ortam": "canli",
+      "sonuc": "n_8b5451fe",
+      "tarih": "2026-09-10T20:02+03:00"
     },
     {
-      "no": "10",
       "ad": "canli-yeni-oturum",
-      "ortam": "canli",
-      "komut": "claude -p (gerçek oturum, hafıza enjekte edilmiş)",
       "durum": "ok",
       "kanit": "<vault-v2>\\.oom-kurulum\\oturum-1.txt",
-      "tarih": "2026-09-10T20:02+03:00",
-      "sonuc": "Model, enjekte edilen hafızadan 63. oturumu doğru özetledi — zincirin son halkası"
+      "komut": "claude -p (gerçek oturum, hafıza enjekte edilmiş)",
+      "no": "10",
+      "ortam": "canli",
+      "sonuc": "Model, enjekte edilen hafızadan 63. oturumu doğru özetledi — zincirin son halkası",
+      "tarih": "2026-09-10T20:02+03:00"
     }
   ],
+  "evidence_exe": {
+    "built": "2026-09-10T13:30+03:00",
+    "bytes": 99045887,
+    "not": "Zincir kanıtı 13:30 yayınıyla koşuldu; publish_exe aynı kaynaktan 19:34'te yeniden yayınlandı, zincirden sonradır. Karıştırılmasın diye ikisi ayrı kayıtlı.",
+    "path": "C:\\oom-bin\\Oom.exe"
+  },
   "hata": [],
-  "not": "Sandbox turu 2 (bench/vm/.out/tur2-ozet.md, 13:00) iki halkayı KALDI bırakmıştı: kurulu kopyadan uninstall (Y-105 ile düzeldi, adım 5) ve claude -p 'Not logged in' (Sandbox'ta login yasak; canlı makinede adım 10 ile kanıtlandı). Bu dosya zincirin tamamlandığı koşumları kaydeder."
+  "kapi": "Y-069 — temiz Windows makinede kurulum → tarama → bağlam → kanca getirmesi → gerçek claude oturumu",
+  "model": "opus-5",
+  "not": "Sandbox turu 2 (bench/vm/.out/tur2-ozet.md, 13:00) iki halkayı KALDI bırakmıştı: kurulu kopyadan uninstall (Y-105 ile düzeldi, adım 5) ve claude -p 'Not logged in' (Sandbox'ta login yasak; canlı makinede adım 10 ile kanıtlandı). Bu dosya zincirin tamamlandığı koşumları kaydeder.",
+  "olculen": "n_b1c79982",
+  "ortamlar": {
+    "canli": "<vault-v2> — gerçek makinedeki kurulum, kanıt kökü <vault-v2>\\.oom-kurulum (salt okunur)",
+    "sandbox": "Windows Sandbox (<sandbox-account>), sıfırdan C:\\kiyas\\oom\\vault — kanıt kökü bench/vm/.out (izlenmiyor, .gitignore)"
+  },
+  "publish_exe": {
+    "built": "2026-09-10T19:34+03:00",
+    "bytes": 99062271,
+    "path": "publish/win-x64/Oom.exe",
+    "sha256": "0917c170bd3631ce8e2c274895db187b9f5b455c6275d73059def6afc1c1e945"
+  },
+  "source_commit": "123bd45",
+  "yazan": "claude"
 }

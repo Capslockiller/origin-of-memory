@@ -32,7 +32,7 @@ public sealed class GetirmeScars
         var hooked = retrieve.Hook(prompt, session);
         Assert.NotEmpty(hooked.Hits);
         Assert.Equal(raw.Hits[0].Name, hooked.Hits[0].Name);
-        Assert.Empty(retrieve.Hook("Ay tutulmasi kac dakika surer?", session).Hits);
+        Assert.Empty(retrieve.Hook("Ay tutulması kaç dakika sürer?", session).Hits);
         // A common-topic hit made solely from floored IDF is still insufficient evidence.
         Assert.Empty(retrieve.Hook("Panel güvenlik ayrıntıları nelerdir?", session).Hits);
         Assert.Empty(retrieve.Hook(prompt, session).Hits); // served-note dedupe survives
