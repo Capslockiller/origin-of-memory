@@ -131,4 +131,34 @@ public sealed class KancaScars
         }
         finally { ScarFixture.Remove(vault); }
     }
+
+    [Fact(DisplayName = "Y-113 · Erişilebilirlik yoklaması kalıcı kanca hatasından bağımsızdır ve başarı onu iyileştirir")]
+    public void Y113_ReachabilityProbeIsIndependentOfTaskFailuresAndHealsOnSuccess()
+    {
+        var directory = ScarFixture.TempDirectory();
+        var claudePath = Path.Combine(directory, "claude.exe");
+        try
+        {
+            File.WriteAllText(claudePath, "sahte");
+            var doctor = new Doctor();
+            Assert.Equal(HealthLevel.Info, doctor.CheckClaudeReachability(directory).Level);
+            Assert.Equal(HealthLevel.Warning, doctor.CheckClaudeReachability(string.Empty).Level);
+
+            var request = new ProcessRequest(claudePath, [], Path.GetTempPath(), new Dictionary<string, string>(), string.Empty);
+            new Runner(new Y113ProcessRunner(1)).RunProcess(request, TimeSpan.FromSeconds(1));
+            Assert.Contains(new Doctor().Check(ScarFixture.Now).Items,
+                x => x.Code == "hook-failed" && x.Key == claudePath && x.Level == HealthLevel.Error);
+            Assert.Equal(HealthLevel.Info, doctor.CheckClaudeReachability(directory).Level);
+
+            new Runner(new Y113ProcessRunner(0)).RunProcess(request, TimeSpan.FromSeconds(1));
+            Assert.DoesNotContain(new Doctor().Check(ScarFixture.Now).Items,
+                x => x.Code == "hook-failed" && x.Key == claudePath && x.Level == HealthLevel.Error);
+        }
+        finally { ScarFixture.Remove(directory); }
+    }
+
+    private sealed class Y113ProcessRunner(int exitCode) : IProcessRunner
+    {
+        public ProcessResult Run(ProcessRequest request, TimeSpan timeout) => new(exitCode, "{}", string.Empty, true);
+    }
 }

@@ -120,13 +120,13 @@ public sealed class Doctor
         items = result.Items.Select(item => new { item.Component, level = item.Level.ToString().ToLowerInvariant(), item.Code, item.Key, item.Detail, stale = item.Stale })
     });
 
-    private static DoctorSnapshot DefaultSnapshot(DateTimeOffset now) => new(
+    private DoctorSnapshot DefaultSnapshot(DateTimeOffset now) => new(
         [
             Observe(now, "hooks", "hooks-ok", "4", "Dört hook kaydı geçerli."),
             Observe(now, "task", "task-current", "OdenaOS Memory Sweep", "Zamanlanmış görev etkin ve son koşumu güncel."),
             Observe(now, "state", "integrity-ok", "state.db", "Şema ve bütünlük denetimi geçti."),
             Observe(now, "state", "fts5-ok", "notes_fts", "FTS5 kullanılabilir."),
-            Observe(now, "runner", "claude-reachable", "claude", ClaudeReachability()),
+            new(CheckClaudeReachability(Environment.GetEnvironmentVariable("PATH") ?? string.Empty), now),
             Observe(now, "runner", "ollama-reachable", "ollama", "Ollama erişilebilir."),
             Observe(now, "compile", "compile-current", "last", "Son derleme kaydı okunabildi."),
             Observe(now, "calls", "call-summary", "7d", "Backend çağrı özeti hazır."),
@@ -138,12 +138,12 @@ public sealed class Doctor
     /// start claude?" the way <see cref="Runner.BuildClaudeRequest"/> asks it, not by a fixed
     /// sentence. A machine carrying only <c>claude.cmd</c> is reachable; a bare name is not.
     /// </summary>
-    private static string ClaudeReachability()
+    public HealthItem CheckClaudeReachability(string pathValue)
     {
-        var resolved = new Runner().ResolveExecutable("claude", Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        var resolved = new Runner().ResolveExecutable("claude", pathValue);
         return Path.IsPathRooted(resolved)
-            ? $"Claude CLI erişilebilir: {resolved}"
-            : "Claude CLI PATH içinde bulunamadı.";
+            ? Item("runner", HealthLevel.Info, "claude-reachable", resolved, $"Claude CLI erişilebilir: {resolved}")
+            : Item("runner", HealthLevel.Warning, "claude-reachable", "claude", "Claude CLI PATH içinde bulunamadı.");
     }
 
     private static DoctorObservation Observe(DateTimeOffset now, string component, string code, string key, string detail) =>

@@ -207,15 +207,15 @@ public sealed class Runner
     /// unclosed stdin is what left v0's runner hanging forever (scar Y-098) — and
     /// enforces the timeout by killing the whole process tree. A child that can
     /// not be started is reported with a non-zero exit code and a Turkish reason,
-    /// never swallowed (scar Y-049).
+    /// never swallowed (scar Y-049); a later success heals that finding (scar Y-113).
     /// </summary>
     public ProcessResult RunProcess(ProcessRequest request, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(request);
         var result = _processes.Run(request, timeout);
-        if (result.TimedOut || result.ExitCode != 0)
-            HealthLedger.Record(new HealthItem("hooks", HealthLevel.Error, "hook-failed", request.FileName,
-                $"Alt süreç başarısız oldu (çıkış {result.ExitCode}) — oom doctor"), _clock.Now);
+        var failed = result.TimedOut || result.ExitCode != 0;
+        HealthLedger.Record(new HealthItem("hooks", failed ? HealthLevel.Error : HealthLevel.Info, "hook-failed", request.FileName,
+            failed ? $"Alt süreç başarısız oldu (çıkış {result.ExitCode}) — oom doctor" : "Alt süreç başarıyla tamamlandı; önceki hata bulgusu geçersiz."), _clock.Now);
         return result;
     }
 
