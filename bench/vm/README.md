@@ -12,7 +12,7 @@ Bu klasördeki araçlar:
 
 | Dosya | Nerede koşar | Ne yapar |
 | --- | --- | --- |
-| `hazirla.cmd` | host | `.out\` açar, `host.txt`'e host adresini yazar, `.wsb`'yi çözülmüş yollarla üretir |
+| `hazirla.cmd` | host | `.out\` açar, `ayar.cmd` ile koşum ayarlarını taşır, gerekirse `host.txt`'i ve çözülmüş `.wsb`'yi üretir |
 | `oom-sandbox.wsb` | host | Sandbox yapılandırması (bağlanan klasörler, 8 GB, ağ, `LogonCommand`) |
 | `bootstrap.cmd` | Sandbox | boş vault, companion, `vault.json`/`oom.json`, Node LTS, `claude` CLI |
 | `zincir.cmd` | Sandbox | kapı 7 zincirinin yedi adımı, her adım `[ADIM n] ok\|hata` |
@@ -38,7 +38,7 @@ belgeye yazılmıştır; Windows özelliğini açmanın `.cmd` karşılığı `d
 /enable-feature /featurename:Containers-DisposableClientVM /all` satırıdır.)
 Gereksinim: Windows 11 Pro/Enterprise + BIOS'ta sanallaştırma açık.
 
-### 1.2 Ollama'yı Sandbox'a aç
+### 1.2 Ollama'yı Sandbox'a aç — yalnız `OOMVM_LOCAL=1` için
 
 Ollama varsayılan olarak yalnız `127.0.0.1`'i dinler; Sandbox ayrı bir ağ ucudur, oraya
 erişemez. Host'ta bir kez:
@@ -78,8 +78,14 @@ start "" bench\vm\.out\oom-sandbox.wsb
 
 `hazirla.cmd`:
 * `bench\vm\.out\` klasörünü açar (Sandbox'a `C:\oom-out` olarak **yaz-oku** bağlanır, `.gitignore`'dadır),
-* host'un LAN adresini bulup `bench\vm\host.txt`'e `<ip>:11434` olarak yazar (Sandbox oradan Ollama'ya bağlanır),
+* host ortamındaki `OOMVM_*` değişkenlerini `.out\ayar.cmd` içine `set "..."` satırlarıyla yazar,
+* `OOMVM_LOCAL=1` ise host'un LAN adresini bulup `bench\vm\host.txt`'e `<ip>:11434` olarak yazar
+  (Sandbox oradan Ollama'ya bağlanır); `OOMVM_LOCAL=0` ise `host.txt` yazmayı ve IP aramayı atlar,
 * `oom-sandbox.wsb` şablonundaki `%OOM_REPO%` yerine gerçek depo kökünü koyup `.out\oom-sandbox.wsb` üretir.
+
+Ortam değişkenleri Windows Sandbox'a doğrudan geçmez. `C:\oom-out` yaz-oku eşlemesi taşıma
+kanalıdır: `bootstrap.cmd` ve `zincir.cmd`, varsayılanları uygulamadan önce varsa buradaki
+`ayar.cmd` dosyasını çağırır.
 
 Depodaki `bench\vm\oom-sandbox.wsb` şablonu doğrudan da açılabilir; o zaman host'ta
 `OOM_REPO` ortam değişkeninin depo köküne ayarlı olması ve Sandbox sürümünüzün `.wsb`
@@ -92,6 +98,19 @@ Bağlanan klasörler:
 | `publish\win-x64` | `C:\oom-bin` | salt-okunur |
 | `bench\vm` | `C:\oom-vm` | salt-okunur |
 | `bench\vm\.out` | `C:\oom-out` | yaz-oku |
+
+### Ollama'sız koşum (`OOMVM_LOCAL=0`)
+
+Bu turda yerel model ayağını Master kararıyla atlamak için host'ta:
+
+```
+set OOMVM_LOCAL=0
+bench\vm\hazirla.cmd
+start "" bench\vm\.out\oom-sandbox.wsb
+```
+
+Bu kipte Ollama ayarı, güvenlik duvarı kuralı ve `host.txt` gerekmez. Açılıştan sonra aşağıdaki
+elle `/login` adımı ve `zincir.cmd` komutu değişmez; yalnız ADIM 7 atlanır.
 
 ### 2.2 Açılış (otomatik)
 
@@ -106,9 +125,10 @@ Sandbox açılınca `LogonCommand` `C:\oom-vm\bootstrap.cmd`'yi koşturur. Bu be
    dosyalarının içeriği bilerek ASCII'dir: `cmd` cp437 altında Türkçe harfleri bozar.
 2. `C:\oom-bin\oom.exe` (ve `e_sqlite3.dll`) dosyasını `C:\vault\.oom\`'a kopyalar.
 3. `vault.json` ve kapı koşumu ayarlarıyla `oom.json` yazar:
-   `sweep.roots = ["%USERPROFILE%\.claude\projects"]`,
-   `backend.local.url = http://<host>:11434/v1` (adres `C:\oom-vm\host.txt`'ten gelir),
-   `backend.flush = ["claude","local"]`. Temiz VM'deki tek notluk korpusta BM25 IDF tabana
+   `sweep.roots = ["%USERPROFILE%\.claude\projects"]`. `OOMVM_LOCAL=1` iken
+   `backend.local.url = http://<host>:11434/v1` (adres `C:\oom-vm\host.txt`'ten gelir) ve
+   `backend.flush = ["claude","local"]`; `OOMVM_LOCAL=0` iken `backend.flush = ["claude"]`
+   olur ve yerel blok zararsız `localhost` yer tutucusuyla kalır. Temiz VM'deki tek notluk korpusta BM25 IDF tabana
    düştüğü için kanca puan eşiği `strictScore = 0.0`'dır; konu kapısı gevşetilmez,
    `minOverlap = 3` ile slug/başlık/takma ad/etiket kimliğinde üç sözcük örtüşmesi aranır.
 4. Node LTS'i sessizce kurar: `curl.exe` ile `node-v24.21.0-x64.msi` indirilir,
@@ -144,7 +164,7 @@ Yedi adım, her biri `C:\oom-out\zincir.log`'a `[ADIM n] ok|hata` satırı yazar
 | 4 | `OOM_FAKE_NOW=<bugün>T19:00:00+03:00` + `oom compile`; model geçici olarak sözleşmesiz çıktı verirse kavram oluşana dek en çok 3 deneme | ≥ 1 `knowledge\concepts\*.md`, `index.md`, `index-full.md`, `log.md` |
 | 5 | İlk derlenen kavramın dosya slug'ından soru üret; ham `oom retrieve --query ... --json`, sonra `claude -p` ve `oom retrieve --hook` çalıştır | enjeksiyon bloğu derlenen kavramın dosya kökünü veya H1 başlığını anar; ham sırası ve olası kanca ret gerekçesi kanıtta kalır |
 | 6 | `oom doctor --json` | kapsama %100, ret %0 |
-| 7 | `backend.flush=["local"]` ile ikinci `oom.json` + ikinci sentetik transkript + `oom sweep` | yerel backend'in yazdığı ikinci blok |
+| 7 | `OOMVM_LOCAL=1` ise `backend.flush=["local"]` ile ikinci `oom.json` + ikinci sentetik transkript + `oom sweep`; `0` ise Master kararıyla atla | yerel backend'in yazdığı ikinci blok veya `[ADIM 7] atlandi ...` |
 
 Sonunda `C:\vault\daily`, `C:\vault\knowledge`, `state.db` ve
 `%USERPROFILE%\.claude\settings.json` `C:\oom-out\`'a kopyalanır — yani host'taki
@@ -169,6 +189,9 @@ satırı), `flush_log.backend`'den değil: `flush_log.backend` sütunu yazan **y
 
 Hüküm `gecti` ise kapı 7 kapanmıştır. `kuru-kosum` çıkarsa tablo yalnızca araçların
 çalıştığını gösterir, kapıyı kapatmaz.
+`OOMVM_LOCAL=0` Sandbox koşumunda adımlar 1–6 yeşilse hüküm
+`KAPI 7 GECTI (yerel model ayagi atlandi, Master karari)` olur; sonuç JSON'u
+`"adim7": "atlandi"` ve `"yerel_ayak": false` taşır.
 
 ---
 
@@ -190,16 +213,19 @@ kapı koşumu **değildir**; yalnız betiklerin sözdizimini ve akışını sın
 | `OOMVM_LOCAL_FAST` / `OOMVM_LOCAL_SMART` | `qwen3:8b` / `qwen3:14b` | yerel model adları |
 | `OOMVM_NODE` | `1` | `0` ise Node/claude kurulumu atlanır |
 | `OOMVM_DRY` | `0` | `1` ise kuru koşum |
+| `OOMVM_LOCAL` | `1` | `0` ise Ollama/host adresi ve ADIM 7 atlanır; flush yalnız `claude` olur |
 | `OOMVM_TZ` | `+03:00` | `OOM_FAKE_NOW` saat dilimi |
 
 `OOMVM_DRY=1` iken:
 
 * `oom install` **yalnız `--dry-run`** koşar — gerçek `%USERPROFILE%\.claude\settings.json`,
   `%APPDATA%\Claude`, Başlat menüsü ve Görev Zamanlayıcı'ya dokunulmaz;
+* `sweep.roots`, sentetik transkriptin bulunduğu sahte `OOMVM_HOME` altına somutlaştırılır;
 * adım 2 ve adım 5'in gerçek `claude -p` ayağı koşulmaz (adım 5'in `retrieve --hook` ayağı koşar);
 * adım 2'nin yerine, gerçek Claude Code JSONL biçiminde sentetik bir transkript bırakılır;
 * adım 5'in ham sıralaması `adim5-query.json`, kancanın stderr/ret gerekçesi
   `adim5-retrieve.err` dosyasında ayrıca saklanır;
+* `OOMVM_LOCAL=0` ise adım 7 Master kararıyla `atlandi` yazılır;
 * `settings.json` kanıt klasörüne kopyalanmaz.
 
 Sentetik transkriptlerde `timestamp` alanı bilerek yoktur: damgasız satıra flush kendi

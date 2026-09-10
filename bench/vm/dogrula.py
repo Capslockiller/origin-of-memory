@@ -204,12 +204,16 @@ def adim6(out: Path) -> tuple[bool | None, str]:
 
 
 def adim7(out: Path, gunluk: dict[int, tuple[str, str]]) -> tuple[bool | None, str]:
+    kayit_durumu, kayit_kaniti = gunluk.get(7, ("", ""))
+    if kayit_durumu == "atlandi":
+        return None, kayit_kaniti or "yerel model ayagi atlandi"
+
     db = out / "state.db"
     cagrilar = state_sorgu(db, "SELECT backend, component, COUNT(*) FROM calls GROUP BY backend, component")
     yerel = [satir for satir in cagrilar if str(satir[0]).lower() == "local"]
     akis = state_sorgu(db, "SELECT outcome, COUNT(*) FROM flush_log GROUP BY outcome")
     toplam = blok_sayisi(out)
-    kayitli = gunluk.get(7, ("", ""))[1]
+    kayitli = kayit_kaniti
     eslesme = re.search(r"blok sayisi (\d+)", kayitli)
     blok7 = int(eslesme.group(1)) if eslesme else toplam
     ozet = ", ".join(f"{b}/{c}={n}" for b, c, n in cagrilar) or "calls tablosu bos"
@@ -272,6 +276,7 @@ def main(argv: list[str]) -> int:
 
     hatalar = [a for a in adimlar if a["olcum_durumu"] == "hata"]
     atlanan = [a for a in adimlar if a["olcum_durumu"] == "atlandi"]
+    yerel_ayak = gunluk.get(7, ("", ""))[0] != "atlandi"
     if kuru:
         hukum = "kuru-kosum"
         cumle = ("HUKUM: kuru kosum — kapi 7 GECILMEDI sayilir. Bu tablo yalnizca zincir "
@@ -279,6 +284,9 @@ def main(argv: list[str]) -> int:
     elif hatalar:
         hukum = "hata"
         cumle = f"HUKUM: kapi 7 GECILMEDI — hatali adim: {', '.join(str(a['adim']) for a in hatalar)}"
+    elif not yerel_ayak and all(a["adim"] == 7 for a in atlanan):
+        hukum = "gecti"
+        cumle = "KAPI 7 GECTI (yerel model ayagi atlandi, Master karari)"
     elif atlanan:
         hukum = "eksik"
         cumle = f"HUKUM: kapi 7 EKSIK — atlanan adim: {', '.join(str(a['adim']) for a in atlanan)}"
@@ -294,6 +302,8 @@ def main(argv: list[str]) -> int:
         "tarih": secenek.tarih,
         "mod": "kuru-kosum" if kuru else "sandbox",
         "hukum": hukum,
+        "adim7": durum_metni(olculer[7][0]),
+        "yerel_ayak": yerel_ayak,
         "kanit_klasoru": str(out),
         "adimlar": adimlar,
     }

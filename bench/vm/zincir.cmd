@@ -8,11 +8,20 @@ rem atlanir, kurulum yalniz --dry-run kosar; gercek settings.json'a, APPDATA\Cla
 rem Baslat menusune ve Gorev Zamanlayici'ya dokunulmaz.
 rem Her adim %OOMVM_OUT%\zincir.log dosyasina  [ADIM n] ok^|hata  satiri yazar.
 
+rem Host ortam degiskenleri Sandbox'a gecmez. Yaz-oku bagli cikti klasorundeki
+rem ayar.cmd, hazirla.cmd anindaki OOMVM_* degerlerini Sandbox'a tasir.
+set "AYAR_OUT=%OOMVM_OUT%"
+if not defined AYAR_OUT set "AYAR_OUT=C:\oom-out"
+if exist "%AYAR_OUT%\ayar.cmd" call "%AYAR_OUT%\ayar.cmd"
+if defined OOMVM_LOCAL set "OOMVM_LOCAL=%OOMVM_LOCAL: =%"
+set "AYAR_OUT="
+
 if not defined OOMVM_VM    set "OOMVM_VM=C:\oom-vm"
 if not defined OOMVM_OUT   set "OOMVM_OUT=C:\oom-out"
 if not defined OOMVM_VAULT set "OOMVM_VAULT=C:\vault"
 if not defined OOMVM_HOME  set "OOMVM_HOME=%USERPROFILE%"
 if not defined OOMVM_DRY   set "OOMVM_DRY=0"
+if not defined OOMVM_LOCAL set "OOMVM_LOCAL=1"
 if not defined OOMVM_TZ    set "OOMVM_TZ=+03:00"
 if not defined OOMVM_TASK  set "OOMVM_TASK=OdenaOS Memory Sweep"
 rem state.db kokunu ariyoruz; host kuru kosumunda tek bir vault hash klasoruyle sinirlanir.
@@ -212,6 +221,10 @@ rem ==========================================================================
 rem ADIM 7 -- claude yokken yerel model tek basina flush
 rem ==========================================================================
 :adim7
+if "%OOMVM_LOCAL%"=="0" (
+  call :adim 7 atlandi "Master karari: yerel model ayagi bu turda yok (OOMVM_LOCAL=0)"
+  goto :topla
+)
 copy /y "%OOMVM_VAULT%\.oom\oom.json" "%OOMVM_VAULT%\.oom\oom.json.sandbox" >nul 2>&1
 call "%OOMVM_VM%\bootstrap.cmd" oomjson "%OOMVM_VAULT%\.oom\oom.json" local
 copy /y "%OOMVM_VAULT%\.oom\oom.json" "%OOMVM_OUT%\oom-local.json" >nul 2>&1
