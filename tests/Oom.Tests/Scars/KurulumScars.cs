@@ -267,4 +267,70 @@ public sealed class KurulumScars
         Assert.Contains("Console.WriteLine($\"kaldırma tamam — çalışan exe elle silinir: {leftoverExe[\"exe-elle-sil:\".Length..]}\");", program, StringComparison.Ordinal);
         Assert.Contains("Console.WriteLine(result.Success ? \"kurulum tamam\" : $\"kurulum başarısız: {result.Error}\");", program, StringComparison.Ordinal);
     }
+
+    // yazan: codex · gpt-5
+    [Fact(DisplayName = "Y-111 · v0 göçü yabancı araçları .claude/scripts içinde korur")]
+    public void Y111_FromV0MigrationMovesOnlyOwnedFilesAndKeepsForeignTools()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var stateRoot = ScarFixture.TempDirectory();
+        try
+        {
+            var scripts = Path.Combine(vault, ".claude", "scripts");
+            var hooks = Path.Combine(vault, ".claude", "hooks");
+            Directory.CreateDirectory(scripts);
+            Directory.CreateDirectory(hooks);
+            File.WriteAllText(Path.Combine(scripts, "flush.py"), "v0");
+            File.WriteAllText(Path.Combine(scripts, "retrieve.py"), "v0");
+            File.WriteAllText(Path.Combine(scripts, "kota.py"), "foreign");
+            File.WriteAllText(Path.Combine(hooks, "session-start.ps1"), "v0");
+            Directory.CreateDirectory(Path.Combine(scripts, ".state"));
+            Directory.CreateDirectory(Path.Combine(scripts, "__pycache__"));
+            File.WriteAllText(Path.Combine(scripts, ".state", "calls.jsonl"), "state");
+            File.WriteAllText(Path.Combine(scripts, "__pycache__", "flush.pyc"), "cache");
+
+            var migration = new Migration(new Y111Clock(), new Y111ProcessRunner(scripts));
+            var dryReport = migration.Run(vault, stateRoot, Path.Combine(vault, "settings.json"), dryRun: true);
+            Assert.True(File.Exists(Path.Combine(scripts, "flush.py")));
+            Assert.Contains("korunan (v0 dışı): kota.py", dryReport, StringComparison.Ordinal);
+
+            var report = migration.Run(
+                vault, stateRoot, Path.Combine(vault, "settings.json"), dryRun: false);
+            var backup = Path.Combine(stateRoot, "backup", "v0-20260910-120000");
+
+            Assert.True(File.Exists(Path.Combine(backup, "claude-scripts", "flush.py")));
+            Assert.True(File.Exists(Path.Combine(backup, "claude-scripts", "retrieve.py")));
+            Assert.True(File.Exists(Path.Combine(backup, "claude-hooks", "session-start.ps1")));
+            Assert.True(File.Exists(Path.Combine(backup, "claude-scripts", ".state", "calls.jsonl")));
+            Assert.True(File.Exists(Path.Combine(backup, "claude-scripts", "__pycache__", "flush.pyc")));
+            Assert.True(File.Exists(Path.Combine(scripts, "kota.py")));
+            Assert.False(File.Exists(Path.Combine(scripts, "flush.py")));
+            Assert.Contains("korunan (v0 dışı): kota.py", report, StringComparison.Ordinal);
+            Assert.Contains("OdenaOS-Codex-Sweep → ingest.py — dokunulmadı, elle karar", dryReport, StringComparison.Ordinal);
+            Assert.Contains("OdenaOS-Codex-Sweep → ingest.py — dokunulmadı, elle karar", report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+            ScarFixture.Remove(stateRoot);
+        }
+    }
+
+    private sealed class Y111Clock : IClock
+    {
+        public DateTimeOffset Now => new(2026, 9, 10, 12, 0, 0, TimeSpan.Zero);
+    }
+
+    private sealed class Y111ProcessRunner : IProcessRunner
+    {
+        private readonly string taskOutput;
+
+        public Y111ProcessRunner(string scripts)
+        {
+            taskOutput = $"\"\\OdenaOS-Flush\",\"Ready\",\"python {Path.Combine(scripts, "flush.py")}\"\n" +
+                $"\"\\OdenaOS-Codex-Sweep\",\"Ready\",\"python {Path.Combine(scripts, "ingest.py")}\"";
+        }
+
+        public ProcessResult Run(ProcessRequest request, TimeSpan timeout) => new(0, taskOutput, string.Empty, true);
+    }
 }

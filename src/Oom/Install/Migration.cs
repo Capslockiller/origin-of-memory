@@ -21,6 +21,132 @@ public sealed class Migration
     private static readonly UTF8Encoding Utf8 = new(false);
     private static readonly Regex RedFileName = new(@"\A(?<id>.+)-\d{8}T\d{6}(?:-\d+)?\z", RegexOptions.Compiled);
 
+    // yazan: codex · gpt-5
+    // v0 ownership source: origin-of-memory commit fa9e41f. install.ps1 Copy-Tree ships the
+    // tracked scripts/ and hooks/ files and separately writes hub-config.json. The owner's shared
+    // quota/status-line tools (kota.py, kota_hiz.py, statusline_kota.py) are deliberately excluded.
+    private static readonly HashSet<string> V0OwnedFiles = new(
+        """
+        hooks/README.md
+        hooks/flush-launch.ps1
+        hooks/memory-retrieve.ps1
+        hooks/pano-kopru.ps1
+        hooks/prompt-counter.ps1
+        hooks/session-end.ps1
+        hooks/session-start.ps1
+        hooks/zamanli-flush-kur.ps1
+        scripts/agy_runner.py
+        scripts/bakim.py
+        scripts/beyin_ortak.py
+        scripts/claude_runner.py
+        scripts/compile.py
+        scripts/compile_text.py
+        scripts/context_bridge.py
+        scripts/context_pack.py
+        scripts/donanim.py
+        scripts/durum.py
+        scripts/duzelt.py
+        scripts/flush.py
+        scripts/giris_kapisi.py
+        scripts/harcama_defteri.py
+        scripts/hub-config.json
+        scripts/ingest.py
+        scripts/ingest_claude.py
+        scripts/ingest_codex.py
+        scripts/ingest_common.py
+        scripts/ingest_gemini.py
+        scripts/ingest_web.py
+        scripts/kaydet.py
+        scripts/kule.py
+        scripts/kurulum_plani.py
+        scripts/mcp_server.py
+        scripts/model_oneri.py
+        scripts/nezaket.py
+        scripts/ollama_runner.py
+        scripts/openai_runner.py
+        scripts/pano_izleyici.py
+        scripts/pasaport_defteri.py
+        scripts/pasaport_kapi.py
+        scripts/pii_guard.py
+        scripts/retrieve.py
+        scripts/rootmap.py
+        scripts/secret_guard.py
+        scripts/sema.py
+        scripts/tests/_helpers.py
+        scripts/tests/conftest.py
+        scripts/tests/fixtures/retrieval_phase1/episodic_questions.json
+        scripts/tests/fixtures/retrieval_phase1/machine_prompts.json
+        scripts/tests/fixtures/retrieval_phase1/vault/demo-850-Companion/Journal.md
+        scripts/tests/fixtures/retrieval_phase1/vault/demo-850-Companion/Last-Session.md
+        scripts/tests/fixtures/retrieval_phase1/vault/demo-850-Companion/Threads.md
+        scripts/tests/fixtures/retrieval_phase1/vault/knowledge/concepts/speaking-plan.md
+        scripts/tests/test_agy_backend.py
+        scripts/tests/test_bakim.py
+        scripts/tests/test_call_ledger.py
+        scripts/tests/test_compile_hygiene.py
+        scripts/tests/test_compile_state.py
+        scripts/tests/test_compile_text.py
+        scripts/tests/test_compile_text_mode.py
+        scripts/tests/test_context_bridge.py
+        scripts/tests/test_context_pack.py
+        scripts/tests/test_donanim.py
+        scripts/tests/test_durum_mutabakat.py
+        scripts/tests/test_durum_warnings.py
+        scripts/tests/test_duzeltme.py
+        scripts/tests/test_flush_chunking.py
+        scripts/tests/test_flush_mutabakat.py
+        scripts/tests/test_flush_ozet_semasi.py
+        scripts/tests/test_flush_ranges.py
+        scripts/tests/test_flush_sessiz_atlama.py
+        scripts/tests/test_flush_suffix.py
+        scripts/tests/test_flush_tara.py
+        scripts/tests/test_flush_teslimat.py
+        scripts/tests/test_giris_kapisi.py
+        scripts/tests/test_gui_wizard.py
+        scripts/tests/test_harcama_defteri.py
+        scripts/tests/test_hardening.py
+        scripts/tests/test_hook_girdi.py
+        scripts/tests/test_ingest_claude.py
+        scripts/tests/test_ingest_codex.py
+        scripts/tests/test_ingest_common.py
+        scripts/tests/test_ingest_gemini.py
+        scripts/tests/test_ingest_web.py
+        scripts/tests/test_installer_script.py
+        scripts/tests/test_kaydet.py
+        scripts/tests/test_kota_bayat.py
+        scripts/tests/test_kota_codex.py
+        scripts/tests/test_kule.py
+        scripts/tests/test_mcp_hints.py
+        scripts/tests/test_mcp_server.py
+        scripts/tests/test_model_oneri.py
+        scripts/tests/test_nezaket.py
+        scripts/tests/test_ollama_backend.py
+        scripts/tests/test_openai_backend.py
+        scripts/tests/test_panel.py
+        scripts/tests/test_pano_izleyici.py
+        scripts/tests/test_pasaport_c1c4.py
+        scripts/tests/test_pasaport_kapi.py
+        scripts/tests/test_pii_guard.py
+        scripts/tests/test_registry_hubs.py
+        scripts/tests/test_retrieve.py
+        scripts/tests/test_retrieve_gate.py
+        scripts/tests/test_retrieve_hand_layer.py
+        scripts/tests/test_rootmap.py
+        scripts/tests/test_run_codex.py
+        scripts/tests/test_secret_guard.py
+        scripts/tests/test_sema_gate.py
+        scripts/tests/test_session_anchor.py
+        scripts/tests/test_session_start.py
+        scripts/tests/test_transaction.py
+        scripts/tests/test_unicode_guard.py
+        scripts/tests/test_uninstall.py
+        scripts/tests/test_watcher.py
+        scripts/tests/test_wizard.py
+        scripts/unicode_guard.py
+        scripts/watcher.py
+        """.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+        StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The six user-level hook commands v0's <c>install.ps1</c> wrote, matched exactly.</summary>
     private static readonly (string Event, string Script, string Arguments)[] V0Hooks =
     [
@@ -66,8 +192,11 @@ public sealed class Migration
         Step("red/ → retry_queue", ImportRetryQueue(v0State, database, dryRun));
         Step("mutabakat.json → kapsanmayan oturumlar", ImportCoverage(v0State, database, dryRun));
         Step("v0 hook satırları (6) kaldırıldı", RemoveV0Hooks(vault, userSettingsPath, dryRun));
+        ReportOtherScriptTasks(vault);
         Step($"v0 görevi {V0TaskName} kaldırıldı", RemoveTask(removeV0Task, dryRun));
-        Step(".claude/scripts + .claude/hooks → backup", MoveLegacyTrees(vault, backup, dryRun));
+        var legacy = MoveLegacyTrees(vault, backup, dryRun);
+        Step("v0 dosyaları + .state + __pycache__ → backup", legacy.Moved);
+        report.Add($"v0-göç: korunan (v0 dışı): {legacy.Kept}");
         Step("daily/, knowledge/, companion", "dokunulmadı");
         return string.Join(Environment.NewLine, report) + Environment.NewLine;
     }
@@ -85,12 +214,10 @@ public sealed class Migration
         var snapshot = TryGitSnapshot(vault, dryRun);
         if (dryRun) return snapshot ?? $"planlandı: {backup}";
         Directory.CreateDirectory(backup);
-        // v0's state directory lives inside `.claude/scripts`, so copying the two trees copies the
-        // state files with them. The copy lands on the very names MoveLegacyTrees later moves the
-        // originals onto, so a completed migration leaves one copy of each, not two.
+        // The recovery copy follows the same ownership boundary as the later move. Shared tools in
+        // these directories are neither moved nor copied into a misleading v0 archive.
         if (snapshot is null)
-            foreach (var name in new[] { "scripts", "hooks" })
-                CopyTree(Path.Combine(vault, ".claude", name), Path.Combine(backup, "claude-" + name));
+            CopyLegacyFiles(vault, backup);
         var marker = Path.Combine(backup, "RECOVERY.txt");
         File.WriteAllText(marker, $"Kaynak: {vault}\nZaman: {clock.Now:O}\nGit: {snapshot ?? "yok"}\n", Utf8);
         if (!File.Exists(marker)) throw new IOException("Yedek doğrulanamadı.");
@@ -288,24 +415,166 @@ public sealed class Migration
         return "kaldırıldı";
     }
 
-    private static string MoveLegacyTrees(string vault, string backup, bool dryRun)
+    private void ReportOtherScriptTasks(string vault)
     {
-        var moved = new List<string>();
-        foreach (var name in new[] { "scripts", "hooks" })
+        ProcessResult result;
+        try
         {
-            var source = Path.Combine(vault, ".claude", name);
-            if (!Directory.Exists(source)) continue;
-            moved.Add(name);
-            if (dryRun) continue;
-            var target = Path.Combine(backup, "claude-" + name);
-            if (Directory.Exists(target)) Directory.Delete(target, true);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            // The vault and %LOCALAPPDATA% are routinely on different drives (the vault is the
-            // synced one), and Directory.Move refuses to cross a volume: copy, verify, delete.
-            try { Directory.Move(source, target); }
-            catch (IOException) { CopyTree(source, target); Directory.Delete(source, true); }
+            result = runner.Run(new ProcessRequest("schtasks.exe", ["/Query", "/FO", "CSV", "/V", "/NH"],
+                Path.GetTempPath(), new Dictionary<string, string>(), string.Empty), TimeSpan.FromSeconds(30));
         }
-        return moved.Count == 0 ? "kaynak yok" : string.Join(", ", moved);
+        catch (Exception error) when (error is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return;
+        }
+        if (result.ExitCode != 0) return;
+
+        var scripts = Path.Combine(vault, ".claude", "scripts").Replace('/', '\\').TrimEnd('\\');
+        var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var fields = ParseCsv(line);
+            if (fields.Count == 0) continue;
+            var action = fields.FirstOrDefault(field => field.Replace('/', '\\').Contains(scripts, StringComparison.OrdinalIgnoreCase));
+            if (action is null) continue;
+            // Verbose CSV normally starts with HostName then TaskName; test seams and some
+            // Windows builds omit HostName. A scheduler task path is the first leading-\ field.
+            var task = (fields.FirstOrDefault(field => field.TrimStart().StartsWith('\\')) ?? fields[0])
+                .Trim().TrimStart('\\');
+            if (task.Equals(V0TaskName, StringComparison.OrdinalIgnoreCase) || !reported.Add(task)) continue;
+            var normalized = action.Replace('/', '\\');
+            var suffix = normalized[(normalized.IndexOf(scripts, StringComparison.OrdinalIgnoreCase) + scripts.Length)..]
+                .TrimStart('\\', '/', ' ', '"');
+            var script = suffix.Split(['"', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "scripts";
+            Step($"zamanlanmış görev {task} → {Path.GetFileName(script)}", "dokunulmadı, elle karar");
+        }
+    }
+
+    private static IReadOnlyList<string> ParseCsv(string line)
+    {
+        var fields = new List<string>();
+        var value = new StringBuilder();
+        var quoted = false;
+        for (var index = 0; index < line.Length; index++)
+        {
+            var character = line[index];
+            if (character == '"')
+            {
+                if (quoted && index + 1 < line.Length && line[index + 1] == '"') { value.Append('"'); index++; }
+                else quoted = !quoted;
+            }
+            else if (character == ',' && !quoted) { fields.Add(value.ToString()); value.Clear(); }
+            else value.Append(character);
+        }
+        fields.Add(value.ToString());
+        return fields;
+    }
+
+    private sealed record LegacyMove(string Moved, string Kept);
+
+    private static LegacyMove MoveLegacyTrees(string vault, string backup, bool dryRun)
+    {
+        var specialDirectories = SpecialDirectories(vault);
+        var kept = LegacyFiles(vault)
+            .Where(file => !IsOwned(vault, file) && !IsUnderSpecialDirectory(specialDirectories, file))
+            .Select(file => DisplayPath(vault, file))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var moved = 0;
+
+        foreach (var relative in V0OwnedFiles.Order(StringComparer.OrdinalIgnoreCase))
+        {
+            var source = Path.Combine(vault, ".claude", relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(source)) continue;
+            moved++;
+            if (!dryRun) MoveFile(source, BackupPath(backup, relative));
+        }
+
+        foreach (var source in specialDirectories)
+        {
+            moved++;
+            if (dryRun) continue;
+            var target = BackupPath(backup, Path.GetRelativePath(Path.Combine(vault, ".claude"), source).Replace('\\', '/'));
+            CopyTree(source, target);
+            Directory.Delete(source, true);
+        }
+
+        return new LegacyMove(moved == 0 ? "kaynak yok" : $"{moved} dosya/dizin", kept.Length == 0 ? "yok" : string.Join(", ", kept));
+    }
+
+    private static void CopyLegacyFiles(string vault, string backup)
+    {
+        foreach (var relative in V0OwnedFiles)
+        {
+            var source = Path.Combine(vault, ".claude", relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(source)) continue;
+            var target = BackupPath(backup, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(source, target, true);
+        }
+        foreach (var source in SpecialDirectories(vault))
+        {
+            var relative = Path.GetRelativePath(Path.Combine(vault, ".claude"), source).Replace('\\', '/');
+            CopyTree(source, BackupPath(backup, relative));
+        }
+    }
+
+    private static IEnumerable<string> LegacyFiles(string vault)
+    {
+        var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        foreach (var tree in new[] { "scripts", "hooks" })
+        {
+            var root = Path.Combine(vault, ".claude", tree);
+            if (Directory.Exists(root))
+                foreach (var file in Directory.EnumerateFiles(root, "*", options)) yield return file;
+        }
+    }
+
+    private static IReadOnlyList<string> SpecialDirectories(string vault)
+    {
+        var found = new List<string>();
+        var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        foreach (var tree in new[] { "scripts", "hooks" })
+        {
+            var root = Path.Combine(vault, ".claude", tree);
+            if (!Directory.Exists(root)) continue;
+            found.AddRange(Directory.EnumerateDirectories(root, "*", options)
+                .Where(path => Path.GetFileName(path) is ".state" or "__pycache__"));
+        }
+        return found.Where(path => !found.Any(parent => parent.Length < path.Length &&
+                Path.GetRelativePath(parent, path) is { } relative && relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool IsOwned(string vault, string file) =>
+        V0OwnedFiles.Contains(Path.GetRelativePath(Path.Combine(vault, ".claude"), file).Replace('\\', '/'));
+
+    private static bool IsUnderSpecialDirectory(IReadOnlyList<string> specialDirectories, string file) => specialDirectories.Any(directory =>
+    {
+        var relative = Path.GetRelativePath(directory, file);
+        return relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    });
+
+    private static string DisplayPath(string vault, string file)
+    {
+        var relative = Path.GetRelativePath(Path.Combine(vault, ".claude"), file).Replace('\\', '/');
+        var slash = relative.IndexOf('/');
+        return slash < 0 ? relative : relative[(slash + 1)..];
+    }
+
+    private static string BackupPath(string backup, string relative)
+    {
+        var slash = relative.IndexOf('/');
+        var tree = slash < 0 ? relative : relative[..slash];
+        var rest = slash < 0 ? string.Empty : relative[(slash + 1)..];
+        return Path.Combine(backup, "claude-" + tree, rest.Replace('/', Path.DirectorySeparatorChar));
+    }
+
+    private static void MoveFile(string source, string target)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        try { File.Move(source, target, true); }
+        catch (IOException) { File.Copy(source, target, true); File.Delete(source); }
     }
 
     /// <summary>

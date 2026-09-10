@@ -102,7 +102,7 @@ The archive path is returned in `Registrations` as `kanıt:<path>`. A move is us
 
 Order of the twelve steps, each of which reports `kaynak yok` when there is nothing to do:
 
-1. **Backup gate.** When the vault is a git work tree, `git stash create` makes a commit object without touching the working tree and `refs/oom/v0-<ts>` keeps it alive; otherwise `.claude\scripts\` and `.claude\hooks\` are copied into `backup\v0-<ts>\`. Either way a `RECOVERY.txt` marker is written and verified — nothing else runs until it exists. A vault path containing `backup-fails` returns before any write (`Y-074`).
+1. **Backup gate.** When the vault is a git work tree, `git stash create` makes a commit object without touching the working tree and `refs/oom/v0-<ts>` keeps it alive; otherwise only the v0-owned files plus `.state` and `__pycache__` directories are copied into `backup\v0-<ts>\`. Either way a `RECOVERY.txt` marker is written and verified — nothing else runs until it exists. A vault path containing `backup-fails` returns before any write (`Y-074`).
 2. `compile-state.json` → `daily_ingest` (`ingested`, `rejected`, `parked`, `quarantined` become the `status` column).
 3. `flush-<sha256>.json` state files → `sessions` (transcript paths come from `mutabakat.json`).
 4. `flush-tara.json` → `sweep_stamps` (epoch `mtime` becomes an ISO string; an incomplete stamp becomes `partial`).
@@ -111,8 +111,8 @@ Order of the twelve steps, each of which reports `kaynak yok` when there is noth
 7. `red\` rejected summaries → `retry_queue`, one row per session id parsed out of the file name.
 8. `mutabakat.json` → one `coverage` row whose `uncovered_json` lists the sessions v0 never summarised; spec 6.3 makes the next sweep prioritise exactly that list, so those sessions are queued for the first ingest rather than replayed here.
 9. The **six** v0 hook commands (`session-start`, `prompt-counter`, `memory-retrieve`, `flush-launch -Reason sessionend`, `session-end`, `flush-launch -Reason precompact`) are removed from the user `settings.json` **by exact string match** against v0's `powershell -NoProfile -ExecutionPolicy Bypass -File "<vault>\.claude\hooks\<script>"` form. Anything else in the file survives. The four 2.0 hooks are written by the normal install step.
-10. The v0 scheduled task `OdenaOS-Flush` is deleted; `OdenaOS Memory Sweep` is registered by the normal install step.
-11. `.claude\scripts\` and `.claude\hooks\` are **moved** into `backup\v0-<ts>\claude-scripts\` and `…\claude-hooks\` — the same names the backup copy used, so a finished migration leaves one copy of each, not two.
+10. The v0 scheduled task `OdenaOS-Flush` is deleted; `OdenaOS Memory Sweep` is registered by the normal install step. Any other scheduled task whose command points into `<vault>\.claude\scripts` is reported as `dokunulmadı, elle karar` and is not changed.
+11. Only the explicit v0 ownership manifest (sourced from predecessor commit `fa9e41f`) plus `.state` and `__pycache__` directories is moved into `backup\v0-<ts>\claude-scripts\` and `…\claude-hooks\`. Other files remain byte-for-byte at their original paths and are listed as `korunan (v0 dışı): …`; a tree that still contains such files remains in place (`Y-111`).
 12. `daily\`, `knowledge\` and the Companion directory are not touched.
 
 Re-running the migration is safe: the keyed tables use `INSERT OR REPLACE`, `calls` and `coverage` are guarded by the first timestamp they would insert, and every file-moving step reports `kaynak yok` once its source is already in the backup.
