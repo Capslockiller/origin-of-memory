@@ -61,6 +61,57 @@ internal static class ScarFixture
         return path;
     }
 
+    internal const string CompanionDir = "🔮 850-Companion";
+
+    /// <summary>
+    /// A retrieval fixture vault of this run's own: eight concept notes plus the hand layer's
+    /// <c>Duzeltmeler.md</c>. The scars over the index (Y-035, Y-039, Y-042) used to rank against
+    /// whatever vault the machine running them happened to carry — which is none on CI, so they
+    /// asserted over an empty corpus. Here the corpus is the fixture and the assertion is real.
+    /// </summary>
+    internal static string RetrievalVault()
+    {
+        var vault = TempDirectory();
+        var concepts = Path.Combine(vault, "knowledge", "concepts");
+        Directory.CreateDirectory(concepts);
+        foreach (var (name, title, body) in ConceptFixtures)
+            File.WriteAllText(Path.Combine(concepts, name),
+                $"---\nyazan: codex\nmodel: gpt-6\ntitle: {title}\naliases: []\ntags: []\nsources: [2026-09-08.md]\ncreated: 2026-09-01\nupdated: 2026-09-08\n---\n{body}",
+                new UTF8Encoding(false));
+
+        var companion = Path.Combine(vault, CompanionDir);
+        Directory.CreateDirectory(companion);
+        // `yerine:` names the concept this correction retires; the retired note leaves the ranking
+        // marked superseded and never reaches the injection (Y-035).
+        File.WriteAllText(Path.Combine(companion, "Duzeltmeler.md"),
+            "# Düzeltmeler\n\n## Speaking sınavı tarihi ve ücreti değişti\nyerine: speaking-sinavi-tarihi.md\nSpeaking sınavı tarihi 20 Eylül'e alındı, ücret 52 EUR oldu.\n",
+            new UTF8Encoding(false));
+
+        return vault;
+    }
+
+    private static readonly (string Name, string Title, string Body)[] ConceptFixtures =
+    [
+        ("turkce-tokenizasyon-karari.md", "Türkçe tokenizasyon kararı",
+            "Türkçe tokenizasyon kararı 8 Eylül'de alındı: beş harflik önek, stemmer yok."),
+        ("gold-set-olcum-kosumu.md", "Gold set ölçüm koşumu", "Gold set koşumu 125 soruyla ölçüldü."),
+        ("gold-set-kanarya-sorulari.md", "Gold set kanarya soruları", "Gold set kanarya soruları enjeksiyon üretmemeli."),
+        ("gold-set-sinif-dagilimi.md", "Gold set sınıf dağılımı", "Gold set sınıf dağılımı tek-not ve çok-not olarak ikiye ayrılır."),
+        ("gold-set-esik-degerleri.md", "Gold set eşik değerleri", "Gold set eşik değerleri recall@3 ve recall@5 için ayrı tutulur."),
+        ("gold-set-kapsama-raporu.md", "Gold set kapsama raporu", "Gold set kapsama raporu her koşumdan sonra yazılır."),
+        ("speaking-sinavi-tarihi.md", "Speaking sınavı tarihi ve ücreti", "Speaking sınavı tarihi 13 Eylül, ücret 48 EUR."),
+        ("panel-guvenlik-kapisi.md", "Panel güvenlik kapısı", "Panel güvenlik kapısı ayrı bir konudur.")
+    ];
+
+    /// <summary>A companion layer of this run's own, for the audit scar (Y-050).</summary>
+    internal static string CompanionVault(string body)
+    {
+        var vault = TempDirectory();
+        Directory.CreateDirectory(Path.Combine(vault, CompanionDir));
+        File.WriteAllText(Path.Combine(vault, CompanionDir, "Duzeltmeler.md"), body, new UTF8Encoding(false));
+        return vault;
+    }
+
     internal static void Remove(string path)
     {
         try { if (Directory.Exists(path)) Directory.Delete(path, true); }

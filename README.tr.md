@@ -17,13 +17,13 @@ Burada hafıza bir alışkanlık değil, mekanizmadır. Tasarımı üç karar be
 
 Yeniden kurulum sürüyor. `main`, 2.0 hattıdır. Önceki Python/PowerShell uygulaması [`v0`](https://github.com/Capslockiller/origin-of-memory/tree/v0) dalında okunabilir; son sürümü [`v0.7.0`](https://github.com/Capslockiller/origin-of-memory/releases/tag/v0.7.0)'dır. v0 yalnız referanstır, kodu 2.0'a kopyalanmaz.
 
-9 Eylül 2026 tarihli test ölçümü (şerit P3):
+10 Eylül 2026 tarihli test ölçümü (şerit CI):
 
 ```text
-Başarısız! - Başarısız:     7, Başarılı:    92, Atlanan:     0, Toplam:    99, Süre: 2 s - Oom.Tests.dll (net9.0)
+Başarılı!  - Başarısız:     0, Başarılı:   128, Atlanan:     0, Toplam:   128, Süre: 2 s - Oom.Tests.dll (net9.0)
 ```
 
-Bu sonuç bir sürüm iddiası değildir. Ölçüm şerit P3 tarafından `main` hattında (`fdff18a`, 9 Eylül 2026) `dotnet test Oom.sln -c Release` ile yapıldı. Kalan yedi kırmızı yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) fixture kurmadan davranış iddia ediyor; hükümleri `progress.md` içinde, sahibin kararıyla şimdilik kırmızı bırakıldı. Bilinen entegrasyon boşlukları [docs/architecture.md](docs/architecture.md) ve [docs/install.md](docs/install.md) içindedir; yara bazındaki tablo [docs/scars.md](docs/scars.md) içindedir.
+Bu sonuç bir sürüm iddiası değildir. Ölçüm şerit CI tarafından `main` hattında (10 Eylül 2026) `dotnet test Oom.sln -c Release` ile yapıldı. Fixture kurmadan davranış iddia ettiği için kırmızı bırakılan yedi yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) artık kapalı: eksik davranış yazıldı ve fixture'lar — testin kendi getirme kasası, kayıtlı gold set koşumu ve temiz makine zincirinin kaydı [`bench/results/vm-2026-09-10.json`](bench/results/vm-2026-09-10.json) — depoya girdi. Bilinen entegrasyon boşlukları [docs/architecture.md](docs/architecture.md) ve [docs/install.md](docs/install.md) içindedir; yara bazındaki tablo [docs/scars.md](docs/scars.md) içindedir.
 
 İki kabul kapısının kendi ölçülmüş sayıları vardır. Kapı 5 (recall paritesi) 125 soruluk gold set'te recall@3 0,832 ve recall@5 0,888 ile 0,80 ve 0,88 eşiklerini geçer; ham sonuç [`bench/results/recall-2026-09-09-r2.json`](bench/results/recall-2026-09-09-r2.json) içindedir. Kapı 9 (güvenlik mutantları) yeşildir: derleme yol izin listesi, guard reddi ve runner yalıtım ortamı için üretilen 6 mutantın 6'sı öldü, hiçbiri sağ kalmadı; ham sonuç [`bench/results/mutation-2026-09-09.json`](bench/results/mutation-2026-09-09.json) içindedir.
 

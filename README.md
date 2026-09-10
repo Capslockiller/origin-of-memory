@@ -14,13 +14,13 @@ Memory is a mechanism, not a habit. Three decisions define the design:
 
 The rebuild is in progress. `main` is the 2.0 line. The previous Python/PowerShell implementation remains readable on branch [`v0`](https://github.com/Capslockiller/origin-of-memory/tree/v0); its last release is [`v0.7.0`](https://github.com/Capslockiller/origin-of-memory/releases/tag/v0.7.0). It is reference material, not code for the rebuild.
 
-Test measurement on 2026-09-09 (lane P3):
+Test measurement on 2026-09-10 (lane CI):
 
 ```text
-Başarısız! - Başarısız:     7, Başarılı:    92, Atlanan:     0, Toplam:    99, Süre: 2 s - Oom.Tests.dll (net9.0)
+Başarılı!  - Başarısız:     0, Başarılı:   128, Atlanan:     0, Toplam:   128, Süre: 2 s - Oom.Tests.dll (net9.0)
 ```
 
-This is not a release claim. Measured by lane P3 on the `main` line (commit `fdff18a`, 2026-09-09) with `dotnet test Oom.sln -c Release`. The seven remaining red scars (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) assert behaviour without building their fixtures; their rulings are recorded in `progress.md` and the owner decided to leave them red for now. Known integration gaps are marked in [docs/architecture.md](docs/architecture.md) and [docs/install.md](docs/install.md); the per-scar table is in [docs/scars.md](docs/scars.md).
+This is not a release claim. Measured by lane CI on the `main` line (2026-09-10) with `dotnet test Oom.sln -c Release`. The seven scars that were left red because they asserted behaviour without building their fixtures (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) are now closed: the missing behaviour was implemented and the fixtures — a retrieval vault of the test's own, the recorded gold-set run and the recorded clean-machine chain in [`bench/results/vm-2026-09-10.json`](bench/results/vm-2026-09-10.json) — are committed. Known integration gaps are marked in [docs/architecture.md](docs/architecture.md) and [docs/install.md](docs/install.md); the per-scar table is in [docs/scars.md](docs/scars.md).
 
 Two acceptance gates have their own measured numbers. Gate 5 (recall parity) passes on the 125-question gold set with recall@3 0.832 and recall@5 0.888 against thresholds of 0.80 and 0.88, raw result in [`bench/results/recall-2026-09-09-r2.json`](bench/results/recall-2026-09-09-r2.json). Gate 9 (security mutants) is green: all 6 mutants of the compile path allowlist, the guard refusal and the runner isolation environment were killed, 0 survived, raw result in [`bench/results/mutation-2026-09-09.json`](bench/results/mutation-2026-09-09.json).
 

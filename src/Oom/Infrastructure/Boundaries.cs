@@ -157,9 +157,21 @@ public sealed class WindowsProcessRunner : IProcessRunner
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
 
-        process.StandardInput.Write(request.StandardInput);
-        process.StandardInput.Flush();
-        process.StandardInput.Close();
+        // stdin is closed on every path. A child that exited before the payload was written used
+        // to throw here and leave the pipe open, which is the shape of the hang scar Y-098 records
+        // for `agy`: the write failing is not a reason to leave the child waiting on EOF.
+        try
+        {
+            process.StandardInput.Write(request.StandardInput);
+            process.StandardInput.Flush();
+        }
+        catch (IOException)
+        {
+        }
+        finally
+        {
+            process.StandardInput.Close();
+        }
 
         if (!process.WaitForExit((int)Math.Min(timeout.TotalMilliseconds, int.MaxValue)))
         {

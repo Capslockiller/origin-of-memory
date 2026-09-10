@@ -14,7 +14,9 @@ public sealed record RetrieveOptions(
     int MinPromptChars = 12,
     int DedupeDays = 7,
     string? VaultPath = null,
-    string? IndexPath = null);
+    string? IndexPath = null,
+    string CompanionDir = "🔮 850-Companion",
+    double CorrectionBoost = 4.0);
 
 internal sealed record ServedKey(string Entry, string SessionId, string Signature, string Note);
 
@@ -41,6 +43,7 @@ public sealed class Retrieve
     private const double K1 = 1.2;
     private const double B = 0.75;
     private const double IdfFloor = 1e-6;
+    private const string CorrectionTag = "düzeltme";
 
     private static readonly string[] Stopwords =
     [
@@ -76,6 +79,7 @@ public sealed class Retrieve
     private IReadOnlyList<Note>? _corpus;
     private Dictionary<string, Dictionary<string, string[]>>? _fields;
     private Dictionary<string, HashSet<string>>? _surfaces;
+    private HashSet<string>? _retired;
 
     public Retrieve(RetrieveOptions? options = null, TurkishFold? fold = null, Notes? notes = null, IClock? clock = null)
     {
@@ -175,8 +179,12 @@ public sealed class Retrieve
             if (score <= 0)
                 continue;
 
+            // A hand-layer correction carries the boost and its own source label; a concept the
+            // hand layer has retired keeps its rank but is marked superseded (Y-035).
+            var correction = note.Tags.Contains(CorrectionTag, StringComparer.Ordinal);
             var text = Trim(Notes.IndexableBody(note), _options.PerNoteChars);
-            hits.Add(new SearchHit(note.Name, score, text, "concept", ToOffset(note.Updated)));
+            hits.Add(new SearchHit(note.Name, correction ? score * _options.CorrectionBoost : score, text,
+                correction ? "correction" : "concept", ToOffset(note.Updated), _retired?.Contains(note.Name) == true));
         }
 
         return hits.OrderByDescending(hit => hit.Score).ThenBy(hit => hit.Name, StringComparer.Ordinal).ToList();
@@ -273,6 +281,9 @@ public sealed class Retrieve
             Prune();
             foreach (var hit in hits)
             {
+                if (hit.Superseded)
+                    continue;
+
                 var key = new ServedKey(entry, sessionId, signature, hit.Name);
                 if (Served.ContainsKey(key))
                     continue;
@@ -340,7 +351,44 @@ public sealed class Retrieve
             }
         }
 
-        return _corpus = notes;
+        return _corpus = [.. notes, .. Corrections()];
+    }
+
+    /// <summary>
+    /// The hand layer is part of the index population. v0 indexed <c>knowledge/concepts</c> alone,
+    /// so a correction the owner had just written by hand never entered the ranking and the stale
+    /// concept it corrects kept answering (scar Y-035). Every <c>## </c> block of the companion
+    /// <c>Duzeltmeler.md</c> becomes one document, ranked with
+    /// <see cref="RetrieveOptions.CorrectionBoost"/>; a block whose <c>yerine:</c> line names a
+    /// concept retires that concept, which then leaves the ranking marked superseded.
+    /// </summary>
+    private IReadOnlyList<Note> Corrections()
+    {
+        var path = _options.VaultPath is null
+            ? null
+            : Path.Combine(_options.VaultPath, _options.CompanionDir, "Duzeltmeler.md");
+        if (path is null || !File.Exists(path))
+            return [];
+
+        var notes = new List<Note>();
+        var retired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var updated = DateOnly.FromDateTime(File.GetLastWriteTime(path));
+        foreach (var block in ("\n" + File.ReadAllText(path).Replace("\r\n", "\n")).Split("\n## ").Skip(1))
+        {
+            var lines = block.Split('\n');
+            var title = lines[0].Trim();
+            if (title.Length == 0)
+                continue;
+
+            foreach (var line in lines.Where(x => x.TrimStart().StartsWith("yerine:", StringComparison.OrdinalIgnoreCase)))
+                retired.Add(line.TrimStart()[7..].Trim());
+
+            notes.Add(new Note($"Duzeltmeler.md#{notes.Count + 1}", title, [], [CorrectionTag], ["Duzeltmeler.md"],
+                updated, updated, string.Join('\n', lines.Skip(1))));
+        }
+
+        _retired = retired;
+        return notes;
     }
 
     // Index-side tokens keep every occurrence: BM25 needs a term frequency, and over the

@@ -30,6 +30,7 @@ public sealed class Context
     ];
 
     private static readonly ConcurrentDictionary<string, string> ContentDigests = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, byte> Starts = new(StringComparer.Ordinal);
     private static readonly UTF8Encoding Utf8 = new(false);
 
     private readonly ContextOptions _options;
@@ -85,6 +86,27 @@ public sealed class Context
             _cache[key] = result;
 
         return result;
+    }
+
+    /// <summary>
+    /// One SessionStart per (session id, event, identity). Desktop fires a helper start inside the
+    /// same second as the main one — 16 of 87 injection records carried a duplicate <c>ts</c> — and
+    /// v0 keyed nothing, so the full block went out twice (scar Y-046). The first start of an
+    /// identity gets the full block; a repeat of that identity, and every start the hook itself
+    /// already marked a duplicate, gets the notification line alone.
+    /// </summary>
+    public ContextResult Start(HookStart start, string vaultPath, string @event = "SessionStart")
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var identity = $"{start.ProcessId}|{start.Timestamp:yyyy-MM-ddTHH:mm:ss}";
+        if (start.Duplicate || !Starts.TryAdd($"{start.SessionId}|{@event}|{identity}", 0))
+        {
+            var minimal = new StringBuilder();
+            Append(minimal, "[Bildirim]", _options.PendingNotification);
+            return new ContextResult(minimal.ToString(), ["Bildirim"], TimeSpan.Zero);
+        }
+
+        return Build(vaultPath, start.Timestamp);
     }
 
     /// <summary>

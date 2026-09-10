@@ -1,9 +1,9 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test tests/Oom.Tests -c Release` — Toplam yara sayısı: 111, Geçti: 104, Başarısız: 7. Kapı testleriyle birlikte toplam 128 test, 121 geçti. Tarih: 2026-09-10, şerit FIX, `b77b441` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 111, Geçti: 111, Başarısız: 0. Kapı testleriyle birlikte toplam 128 test, 128 geçti. Tarih: 2026-09-10, şerit CI, `b8b2103` üstü.
 
-Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahibin (Master) kararıyla şimdilik kırmızıdır; şerit INT'in hükümleri `progress.md` içinde `## Lane INT` bölümünde kayıtlıdır: Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098.
+Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
 | Y-# | Sınıf | Yara | Test | Durum |
 |---|---|---|---|---|
@@ -41,22 +41,22 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | Y-032 | derleyici | `index.md` 494 satır iken korpusta 496 kavram vardı — indekste olmayan iki kavram sessizce dışarıdaydı | DerleyiciScars.Y032_VerifyFailsForMissingOrExtraConcepts | yeşil |
 | Y-033 | derleyici | Çok makineli çift derleme mümkündü (çapraz makine kilidi kooperatif) | DerleyiciScars.Y033_CrossMachineCompileLockAllowsSinglePublisher | yeşil |
 | Y-034 | derleyici | `warn:registry-truncated` başarılı bir seçim telemetrisi olduğu hâlde uyarı sayılıyordu ve gerçek uyarıları gürültüde… | DerleyiciScars.Y034_TelemetryDoesNotHidePendingDailies | yeşil |
-| Y-035 | getirme | El katmanındaki güncel düzeltmeler indeks nüfusunun dışındaydı (`retrieve.py:612-614` yalnız `knowledge/concepts`)… | GetirmeScars.Y035_CorrectionLayerOutranksStaleConcept | kırmızı |
+| Y-035 | getirme | El katmanındaki güncel düzeltmeler indeks nüfusunun dışındaydı (`retrieve.py:612-614` yalnız `knowledge/concepts`)… | GetirmeScars.Y035_CorrectionLayerOutranksStaleConcept | yeşil |
 | Y-036 | getirme | İlgililik kapısı iki jeton örtüşmesiyle geçiyordu: genel kelimeler ve dosya-yolu parçaları semantik kanıt sayıldı… | GetirmeScars.Y036_JunkAndPathPromptsInjectNothing | yeşil |
 | Y-037 | getirme | Hafıza kancası iç `claude -p` çağrılarına kişisel not enjekte etti: `BEYIN_INVOKED_BY` özyineleme bekçisi yalnız emekli… | GetirmeScars.Y037_RecursiveInvocationIsSilent | yeşil |
 | Y-038 | getirme | Getirmenin **iki ayrı kapısı** vardı: emekli `memory-retrieve.ps1` kendi atlama mantığını ve ilgililik kapısı olmayan… | GetirmeScars.Y038_RetrieveEntryPointsAreIdentical | yeşil |
-| Y-039 | getirme | Oturum içi tekrar-engelleme notu **oturum boyu** gizliyordu: defter yalnız not adına anahtarlanmıştı, sonraki farklı… | GetirmeScars.Y039_DedupeIncludesQuerySignature | kırmızı |
+| Y-039 | getirme | Oturum içi tekrar-engelleme notu **oturum boyu** gizliyordu: defter yalnız not adına anahtarlanmıştı, sonraki farklı… | GetirmeScars.Y039_DedupeIncludesQuerySignature | yeşil |
 | Y-040 | getirme | BM25 alan ağırlıkları hiç uygulanmıyordu: `name UNINDEXED` sütunu ağırlıkların ilkini (8'i) yutuyordu, fiili ağırlıklar… | GetirmeScars.Y040_Bm25WeightsIncludeUnindexedLeadingZero | yeşil |
 | Y-041 | getirme | Tazelik çarpanı ölçek-körü biçimde füzyon skorunu domine ediyordu (%1,6'lık bant 4× ile çarpılıyordu) ve güçlü… | GetirmeScars.Y041_UnknownRetrievalModeFails | yeşil |
-| Y-042 | getirme | Faz 1 el katmanını indekse ekleyince **gold set geriledi**: recall@3 102→94, recall@5 110→103 (zemin 110); uzun el… | GetirmeScars.Y042_RetrievalChangeMustPassBothRecallAxes | kırmızı |
+| Y-042 | getirme | Faz 1 el katmanını indekse ekleyince **gold set geriledi**: recall@3 102→94, recall@5 110→103 (zemin 110); uzun el… | GetirmeScars.Y042_RetrievalChangeMustPassBothRecallAxes | yeşil |
 | Y-043 | getirme | Junk kapısı "dur bana soru sorma, hafıza kaybı yaşıyorsun" cümlesine 59. oturumun "HAFIZA KAYBI TEŞHİSİ" notunu bastı… | GetirmeScars.Y043_IntentGateOverridesTopicOverlap | yeşil |
 | Y-044 | getirme | Türkçe katlama `ToLowerInvariant` ile yanlış: `I→ı`, `İ→i` dönüşümü özel tablo ister; ham `unicode61` tokenizer'da İ/ı… | GetirmeScars.Y044_TurkishFoldHandlesDottedAndDotlessI | yeşil |
 | Y-045 | kanca | Açılış bağlamı çoğunlukla sabit ~4,2–4,8k jetonluk vergi: 87 başlangıcın ortalaması **15.134 karakter**, %70,66'sı… | KancaScars.Y045_ContextKeepsCurrentDataWithinCap | yeşil |
-| Y-046 | kanca | SessionStart kancası aynı saniyede iki kez ateşledi (87 enjeksiyon kaydının 16'sı çift `ts`): Desktop'ın açtığı… | KancaScars.Y046_HelpersAreDedupedBySessionAndEventIdentity | kırmızı |
+| Y-046 | kanca | SessionStart kancası aynı saniyede iki kez ateşledi (87 enjeksiyon kaydının 16'sı çift `ts`): Desktop'ın açtığı… | KancaScars.Y046_HelpersAreDedupedBySessionAndEventIdentity | yeşil |
 | Y-047 | kanca | Uzun Windows oturumlarında kancalar ~2,5 saniye sonra sessizce duruyor (üst-akım #16047); resmî doküman SessionEnd'i… | KancaScars.Y047_SystemWorksWhenAllHooksAreSilent | yeşil |
 | Y-048 | kanca | Kanca sayaçları oturumlar arasında paylaşımlıydı (`prompt_count` / `session_start_time` tek dosyada) | KancaScars.Y048_HookCountersArePerSession | yeşil |
 | Y-049 | kanca | Python yoksa kancalar sessizce "başarılı" oluyordu | KancaScars.Y049_HookFailureIsPersisted | yeşil |
-| Y-050 | kanca | El katmanının tek mekanik denetimi (`session-end.ps1` içindeki `needs_reflection`) SessionEnd'e bağlıydı — yani tam da… | KancaScars.Y050_CompanionAuditUsesContentNotMtime | kırmızı |
+| Y-050 | kanca | El katmanının tek mekanik denetimi (`session-end.ps1` içindeki `needs_reflection`) SessionEnd'e bağlıydı — yani tam da… | KancaScars.Y050_CompanionAuditUsesContentNotMtime | yeşil |
 | Y-051 | kanca | `CLAUDE.md`'nin enjeksiyon listesi bayattı (Kurallar ve Journal eksikti); Kurallar (2.866 B) ve Journal (406 B) her… | KancaScars.Y051_ContextSectionsMatchDocumentedList | yeşil |
 | Y-052 | kota | Kota okuyucu önbelleklenmiş/bayat yüzdeyi canlı gibi gösterdi: 22:19'daki tablo **Codex 5s %64** derken 22:46'daki… | KotaScars.Y052_LiveQuotaOverridesSilentEventLog | yeşil |
 | Y-053 | kota | Canlı okumadan önce zincir sırayla 6 saat toleranslı statusline önbelleğine ve 300 sn'lik OAuth önbelleğine bakıyordu… | KotaScars.Y053_FailedLiveReadPrintsNoPercentage | yeşil |
@@ -75,7 +75,7 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | Y-066 | kurulum | Dağıtım = script kopyasıydı: vault ile repo arasında 7 py + 2 kanca ayrışmıştı ve düzeltmeler karşılıklı eksik… | KurulumScars.Y066_InstalledBinaryDriftIsReported | yeşil |
 | Y-067 | kurulum | 58 adet `BEYIN_*` ortam değişkeni vardı, merkezi şema yoktu; `BEYIN_FAKE_*` üretimde açıktı; eski kullanıcı env… | KurulumScars.Y067_NoHardCodedUserPathsAndUnknownConfigurationFails | yeşil |
 | Y-068 | kurulum | Tanrı modüller: `compile` 1.771, `kule` 1.701, `retrieve` 1.283, `nezaket` 1.197 satır; ayrıca frontmatter… | KurulumScars.Y068_ModuleLineBudgetsAndSingleParserAreEnforced | yeşil |
-| Y-069 | kurulum | **"Derlendi ≠ çalışıyor":** Inno'da üç hata (`{userprofile}` sabiti yok · `dontcopy` DestDir'i yok sayıyor ·… | KurulumScars.Y069_WindowsVmEndToEndChainWorks | kırmızı |
+| Y-069 | kurulum | **"Derlendi ≠ çalışıyor":** Inno'da üç hata (`{userprofile}` sabiti yok · `dontcopy` DestDir'i yok sayıyor ·… | KurulumScars.Y069_WindowsVmEndToEndChainWorks | yeşil |
 | Y-070 | kurulum | `kur.ps1`, 504 karakterlik JSON donanım sondasını native argüman olarak geçiriyordu; Windows PowerShell JSON içindeki… | KurulumScars.Y070_StructuredDataCrossesProcessBoundaryViaStdinOrFile | yeşil |
 | Y-071 | kurulum | `setx` ile kalıcılaştırma değişkenleri kırpıyordu; Claude Desktop MCP kaydı MSIX-sanallaştırılmış yolu görmüyordu | KurulumScars.Y071_EnvironmentPersistenceAndMsixDiscoveryAreLossless | yeşil |
 | Y-072 | kurulum | İlk gerçek Windows koşumunda (Linux'ta yazılmış süit) üç Windows'a özgü kusur çıktı: `kule.py` cwd bekçisi… | KurulumScars.Y072_WindowsSpecificOutcomesAreInterpreted | yeşil |
@@ -104,7 +104,7 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | Y-095 | derleyici | Satır başı directive gate'i U+2028 / iç BOM ile atlatılır | DerleyiciScars.Y095_UnicodeNormalizationPrecedesDirectiveDetection | yeşil |
 | Y-096 | derleyici | `tags: [a, b` toleranslı parser'da boş liste sanıldı | DerleyiciScars.Y096_MalformedTagsAreRejected | yeşil |
 | Y-097 | kurulum | ctypes `HANDLE` 32-bit'e kırpıldı | KurulumScars.Y097_HandlePreservesSixtyFourBitValue | yeşil |
-| Y-098 | kurulum | `agy` stdin kapatılmayınca asılı kaldı | KurulumScars.Y098_RunnerClosesStdinAndHonorsTimeout | kırmızı |
+| Y-098 | kurulum | `agy` stdin kapatılmayınca asılı kaldı | KurulumScars.Y098_RunnerClosesStdinAndHonorsTimeout | yeşil |
 | Y-099 | süreç-işletme | `git add -A` `settings.local.json.yedek`'i ekledi | SurecIsletmeScars.Y099_BackupsStayUnderOomBackupAndAreIgnored | yeşil |
 | Y-100 | kurulum | Tek dosya yayını yerel kütüphaneyi dışarıda bıraktı; kurulan kopya `e_sqlite3.dll` olmadan `DllNotFoundException` ile öldü (rc -532462766) | KurulumScars.Y100_SingleFilePublishEmbedsNativeLibraries | yeşil |
 | Y-101 | yazma-yolu | `save "<metin>"` "kayıt yazıldı" deyip rc 0 döndü ama hiçbir şey yazmadı: doğrulayıcı baytları yalnız bellekte tur attırıyordu | YazmaYoluScars.Y101_CheckpointIsWrittenToDailyAndVerified | yeşil |
@@ -126,11 +126,11 @@ Kırmızı kalan 7 yara, fixture kurmadan davranış iddia ettikleri için sahib
 | yazma-yolu | 22 | 0 |
 | özetleyici | 6 | 0 |
 | derleyici | 16 | 0 |
-| getirme | 8 | 3 |
-| kanca | 6 | 2 |
+| getirme | 11 | 0 |
+| kanca | 8 | 0 |
 | kota | 6 | 0 |
 | durum-deposu | 7 | 0 |
-| kurulum | 17 | 2 |
+| kurulum | 19 | 0 |
 | test-disiplini | 8 | 0 |
 | süreç-işletme | 8 | 0 |
-| **Toplam** | **104** | **7** |
+| **Toplam** | **111** | **0** |
