@@ -118,12 +118,13 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-109 | süreç-işletme | `Main`'in son çare istisnası yakalanmıyordu — yakalanmayan hata Windows Hata Bildirimi ("oom.exe - Uygulama Hatası") kutusunu açıyor, hook'u askıda bırakıyordu | SurecIsletmeScars.Y109_MainCatchesUnhandledExceptionAndDisablesWerDialog | yeşil |
 | Y-110 | getirme | Küçük konu derleminde yaygın terimlerin IDF tabanı, doğru ilk notun ortalama skorunu sabit kapının altında bıraktı; 19 notta üç kısa soru boş döndü | GetirmeScars.Y110_SmallCorpusGateKeepsRelevantTopHitAndRejectsUnrelatedPrompt | yeşil |
 | Y-111 | kurulum | `install --from-v0`, `.claude/scripts` ve `.claude/hooks` ağaçlarını bütünüyle taşıyıp kota ve status-line gibi v0 dışı araçları sessizce kırıyordu | KurulumScars.Y111_FromV0MigrationMovesOnlyOwnedFilesAndKeepsForeignTools | yeşil |
+| Y-112 | yazma-yolu | `ingest`, `Program.cs`'te her zaman boş dosya listesiyle çağrılıyordu (`new Ingest().Run(source, [], ...)`); `sweep.roots` altında hiçbir dosya keşfi yoktu, her koşum "içe aktarım: 0 oturum" yazıyordu | YazmaYoluScars.Y112_IngestDiscoversTranscriptsUnderConfiguredRoots | yeşil |
 
 ## Sınıf başına durum
 
 | Sınıf | Yeşil | Kırmızı |
 |---|---|---|
-| yazma-yolu | 22 | 0 |
+| yazma-yolu | 23 | 0 |
 | özetleyici | 6 | 0 |
 | derleyici | 16 | 0 |
 | getirme | 11 | 0 |
@@ -133,4 +134,4 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | kurulum | 19 | 0 |
 | test-disiplini | 8 | 0 |
 | süreç-işletme | 8 | 0 |
-| **Toplam** | **111** | **0** |
+| **Toplam** | **112** | **0** |

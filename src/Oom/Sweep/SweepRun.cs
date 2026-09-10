@@ -295,8 +295,7 @@ public sealed class SweepRun
         return project.StartsWith(_temporaryProjectPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string SourceOf(string root) =>
-        root.Contains("codex", StringComparison.OrdinalIgnoreCase) ? "codex" : "claude";
+    private static string SourceOf(string root) => SourceClassifier.FromPath(root);
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
 

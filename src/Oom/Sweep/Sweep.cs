@@ -167,8 +167,7 @@ public sealed class Sweep
 
     private static string TranscriptPathOf(Session session) => $"{session.Id}.jsonl";
 
-    private static string SourceOf(string path) =>
-        path.Contains("codex", StringComparison.OrdinalIgnoreCase) ? "codex" : "claude";
+    private static string SourceOf(string path) => SourceClassifier.FromPath(path);
 
     private static string Escape(string value) =>
         value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");

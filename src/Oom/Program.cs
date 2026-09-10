@@ -104,9 +104,13 @@ internal static class Program
 
             case "ingest":
             {
-                var source = Argument(args, 0) ?? "claude";
-                var sessions = new Ingest().Run(source, [], ReadInt(args, "--max"));
-                Console.WriteLine($"içe aktarım: {sessions.Count} oturum");
+                var source = Argument(args, 0) ?? "claude"; // Y-112: was always handed an empty file list; --root overrides sweep's roots.
+                var max = ReadInt(args, "--max");
+                var ingest = new Ingest();
+                IReadOnlyList<string> roots = Value(args, "--root") is { Length: > 0 } r ? [r] : settings.Sweep.Roots;
+                var files = ingest.Discover(source, roots, max);
+                var outcome = ingest.RunWithOutcome(source, files, max);
+                Console.WriteLine($"içe aktarım: {outcome.Sessions.Count} oturum (bulunan dosya {files.Count}, atlanan {outcome.Skipped})");
                 return 0;
             }
 

@@ -11,6 +11,8 @@ public interface IIngestStateStore
     void Complete(string source, string digest);
 }
 
+public sealed record IngestOutcome(IReadOnlyList<Session> Sessions, int Skipped); // Y-112: imported + digest-dedupe skips.
+
 public sealed class Ingest
 {
     private static readonly IIngestStateStore SharedState = new MemoryIngestStateStore();
@@ -31,8 +33,9 @@ public sealed class Ingest
 
     public IReadOnlyList<Session> Run(string source, IReadOnlyList<string> files, int? max = null) =>
         Run(source, files, max, TimeSpan.Zero, CancellationToken.None);
-
-    public IReadOnlyList<Session> Run(string source, IReadOnlyList<string> files, int? max, TimeSpan sleepBetween, CancellationToken cancellationToken)
+    public IReadOnlyList<Session> Run(string source, IReadOnlyList<string> files, int? max, TimeSpan sleepBetween, CancellationToken cancellationToken) =>
+        RunWithOutcome(source, files, max, sleepBetween, cancellationToken).Sessions;
+    public IngestOutcome RunWithOutcome(string source, IReadOnlyList<string> files, int? max = null, TimeSpan sleepBetween = default, CancellationToken cancellationToken = default) // Y-112: Run's walk, also reports skips.
     {
         ArgumentNullException.ThrowIfNull(files);
         if (!source.Equals("claude", StringComparison.OrdinalIgnoreCase) && !source.Equals("codex", StringComparison.OrdinalIgnoreCase))
@@ -41,6 +44,7 @@ public sealed class Ingest
         if (sleepBetween < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(sleepBetween));
 
         var sessions = new List<Session>();
+        var skipped = 0;
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -49,8 +53,7 @@ public sealed class Ingest
                 ? File.ReadAllText(file, new UTF8Encoding(false, true))
                 : file;
             var digest = Convert.ToHexString(SHA256.HashData(new UTF8Encoding(false).GetBytes(text)));
-            if (state.Contains(source, digest)) continue;
-
+            if (state.Contains(source, digest)) { skipped++; continue; }
             var session = source.Equals("claude", StringComparison.OrdinalIgnoreCase) ? ParseClaude(text) : ParseCodex(text);
             sessions.Add(session);
             var transcriptPath = File.Exists(file) ? Path.GetFullPath(file) : WriteTemporaryTranscript(session);
@@ -66,8 +69,26 @@ public sealed class Ingest
             }
             if (sleepBetween > TimeSpan.Zero && (!max.HasValue || sessions.Count < max.Value)) sleep(sleepBetween);
         }
-        return sessions;
+        return new IngestOutcome(sessions, skipped);
     }
+
+    /// <summary>Y-112: walks sweep's own roots filtered to <paramref name="source"/>, oldest <c>*.jsonl</c> first (archive backfill); a missing root is skipped silently.</summary>
+    public IReadOnlyList<string> Discover(string source, IReadOnlyList<string> roots, int? max = null)
+    {
+        ArgumentNullException.ThrowIfNull(roots);
+        if (max is < 0) throw new ArgumentOutOfRangeException(nameof(max), "Azami dosya sayısı negatif olamaz.");
+        var files = roots.Where(root => !string.IsNullOrWhiteSpace(root) && Directory.Exists(root) && SourceClassifier.FromPath(root).Equals(source, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(EnumerateJsonl).Where(path => !IsSubagentTranscript(path)).OrderBy(File.GetLastWriteTimeUtc);
+        return (max.HasValue ? files.Take(max.Value) : files).ToArray();
+    }
+
+    private static IEnumerable<string> EnumerateJsonl(string root)
+    {
+        try { return Directory.EnumerateFiles(root, "*.jsonl", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, MaxRecursionDepth = 6 }); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; }
+    }
+    // A "subagents" sidecar is all isSidechain lines; ClaudeParser rejects the resulting turn-less session.
+    private static bool IsSubagentTranscript(string path) => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(s => s.Equals("subagents", StringComparison.OrdinalIgnoreCase));
 
     public IReadOnlyList<string> ValidateSourceInventory(IReadOnlyList<string> runners, IReadOnlyList<string> exclusions)
     {
