@@ -79,6 +79,14 @@ def kavramlar(out: Path) -> list[Path]:
     return sorted((out / "knowledge" / "concepts").glob("*.md"))
 
 
+def h1_basligi(path: Path) -> str:
+    for satir in oku(path).splitlines():
+        eslesme = re.match(r"^#(?!#)\s+(.+?)\s*$", satir)
+        if eslesme:
+            return eslesme.group(1)
+    return ""
+
+
 def state_sorgu(db: Path, sql: str) -> list[tuple]:
     if not db.exists():
         return []
@@ -99,10 +107,10 @@ def adim1(out: Path, kuru: bool) -> tuple[bool | None, str]:
     doctor = json_oku(out / "doctor-1.json")
     ayar = json_oku(out / "settings.json")
     state = out / "state.db"
-    if doctor is None:
+    if not isinstance(doctor, dict):
         return False, "doctor-1.json okunamadi"
     if kuru:
-        return None, (
+        return True, (
             "kuru kosum: install --dry-run; doctor-1.json semasi gecerli "
             f"(kapsama={doctor.get('coverage')}), hook/gorev/state.db denetimi Sandbox'a birakildi"
         )
@@ -151,18 +159,39 @@ def adim5(out: Path, kuru: bool) -> tuple[bool | None, str]:
     blok = ""
     if isinstance(veri, dict):
         blok = str((veri.get("hookSpecificOutput") or {}).get("additionalContext", ""))
-    adlar = [p.stem for p in kavramlar(out)]
-    anilan = [ad for ad in adlar if ad.lower() in blok.lower()]
-    if not anilan and blok:
-        # Dosya adi degil, baslik gecmis olabilir: kavram basliklarini da dene.
-        for p in kavramlar(out):
-            ilk = oku(p).splitlines()[:1]
-            baslik = ilk[0].lstrip("# ").strip() if ilk else ""
-            if baslik and baslik.lower() in blok.lower():
-                anilan.append(p.stem)
+    katli_blok = blok.casefold()
+    kimlikler = [(p.stem, h1_basligi(p)) for p in kavramlar(out)]
+    anilan = [
+        kok
+        for kok, baslik in kimlikler
+        if kok.casefold() in katli_blok or (baslik and baslik.casefold() in katli_blok)
+    ]
+
+    ham = json_oku(out / "adim5-query.json")
+    hitler = ham.get("hits") if isinstance(ham, dict) else None
+    if not isinstance(hitler, list):
+        hitler = []
+    sira = None
+    anilan_kokler = {ad.casefold() for ad in anilan}
+    for no, hit in enumerate(hitler, start=1):
+        if not isinstance(hit, dict):
+            continue
+        hit_adi = str(hit.get("name", "")).replace("\\", "/").rsplit("/", 1)[-1]
+        hit_koku = Path(hit_adi).stem.casefold()
+        if hit_koku in anilan_kokler:
+            sira = no
+            break
+
     tamam = bool(blok) and bool(anilan)
+    ham_sira = f"{sira}/{len(hitler)}" if sira is not None else (f"yok/{len(hitler)}" if hitler else "yok")
     ek = " · gercek claude -p atlandi (kuru kosum)" if kuru else ""
-    return tamam, f"enjeksiyon blogu={len(blok)} karakter · anilan kavram={','.join(anilan) or 'yok'}{ek}"
+    if not tamam:
+        hata_satiri = next((s.strip() for s in oku(out / "adim5-retrieve.err").splitlines() if s.strip()), "yok")
+        ek += f" · kanca gerekcesi={hata_satiri}"
+    return tamam, (
+        f"enjeksiyon blogu={len(blok)} karakter · anilan kavram={','.join(anilan) or 'yok'} · "
+        f"ham sira={ham_sira}{ek}"
+    )
 
 
 def adim6(out: Path) -> tuple[bool | None, str]:

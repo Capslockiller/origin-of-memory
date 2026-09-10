@@ -105,10 +105,12 @@ Sandbox açılınca `LogonCommand` `C:\oom-vm\bootstrap.cmd`'yi koşturur. Bu be
    `context.companionDir` alanından gelir ve Sandbox'ta `Companion` olur. Companion
    dosyalarının içeriği bilerek ASCII'dir: `cmd` cp437 altında Türkçe harfleri bozar.
 2. `C:\oom-bin\oom.exe` (ve `e_sqlite3.dll`) dosyasını `C:\vault\.oom\`'a kopyalar.
-3. `vault.json` ve Spec 4.1 varsayılanlarıyla `oom.json` yazar:
+3. `vault.json` ve kapı koşumu ayarlarıyla `oom.json` yazar:
    `sweep.roots = ["%USERPROFILE%\.claude\projects"]`,
    `backend.local.url = http://<host>:11434/v1` (adres `C:\oom-vm\host.txt`'ten gelir),
-   `backend.flush = ["claude","local"]`.
+   `backend.flush = ["claude","local"]`. Temiz VM'deki tek notluk korpusta BM25 IDF tabana
+   düştüğü için kanca puan eşiği `strictScore = 0.0`'dır; konu kapısı gevşetilmez,
+   `minOverlap = 3` ile slug/başlık/takma ad/etiket kimliğinde üç sözcük örtüşmesi aranır.
 4. Node LTS'i sessizce kurar: `curl.exe` ile `node-v24.21.0-x64.msi` indirilir,
    sha256'sı **kurulumdan önce** betikte sabitli
    `bb0eaee134f9357f22aea915ee793343e627aefc1e66488164bac6915bce2cac` değeriyle
@@ -139,8 +141,8 @@ Yedi adım, her biri `C:\oom-out\zincir.log`'a `[ADIM n] ok|hata` satırı yazar
 | 1 | `oom install --vault C:\vault` + `oom doctor --json` | `settings.json`'da dört hook, zamanlanmış görev, `state.db` |
 | 2 | `claude -p "..." --max-turns 1` | gerçek oturum; SessionStart/UserPromptSubmit/SessionEnd hook'ları kurulumdan tetiklenir (`OOM_INVOKED_BY` **kurulmaz**) |
 | 3 | hemen `oom sweep` | `daily\<bugün>.md` içinde **tam bir** `### Oturum` bloğu; hook zaten yazdıysa `no-new-turns` doğru sonuçtur, ölçü "tek blok, kopya yok" |
-| 4 | `OOM_FAKE_NOW=<bugün>T19:00:00+03:00` + `oom compile` | ≥ 1 `knowledge\concepts\*.md`, `index.md`, `index-full.md`, `log.md` |
-| 5 | `claude -p "<derlenen kavramın cevabını taşıyan soru>"` ve `echo {"prompt":"..."} \| oom retrieve --hook` | o kavramı anan enjeksiyon bloğu |
+| 4 | `OOM_FAKE_NOW=<bugün>T19:00:00+03:00` + `oom compile`; model geçici olarak sözleşmesiz çıktı verirse kavram oluşana dek en çok 3 deneme | ≥ 1 `knowledge\concepts\*.md`, `index.md`, `index-full.md`, `log.md` |
+| 5 | İlk derlenen kavramın dosya slug'ından soru üret; ham `oom retrieve --query ... --json`, sonra `claude -p` ve `oom retrieve --hook` çalıştır | enjeksiyon bloğu derlenen kavramın dosya kökünü veya H1 başlığını anar; ham sırası ve olası kanca ret gerekçesi kanıtta kalır |
 | 6 | `oom doctor --json` | kapsama %100, ret %0 |
 | 7 | `backend.flush=["local"]` ile ikinci `oom.json` + ikinci sentetik transkript + `oom sweep` | yerel backend'in yazdığı ikinci blok |
 
@@ -196,6 +198,8 @@ kapı koşumu **değildir**; yalnız betiklerin sözdizimini ve akışını sın
   `%APPDATA%\Claude`, Başlat menüsü ve Görev Zamanlayıcı'ya dokunulmaz;
 * adım 2 ve adım 5'in gerçek `claude -p` ayağı koşulmaz (adım 5'in `retrieve --hook` ayağı koşar);
 * adım 2'nin yerine, gerçek Claude Code JSONL biçiminde sentetik bir transkript bırakılır;
+* adım 5'in ham sıralaması `adim5-query.json`, kancanın stderr/ret gerekçesi
+  `adim5-retrieve.err` dosyasında ayrıca saklanır;
 * `settings.json` kanıt klasörüne kopyalanmaz.
 
 Sentetik transkriptlerde `timestamp` alanı bilerek yoktur: damgasız satıra flush kendi
@@ -206,10 +210,9 @@ biçimine bağımlı olmaz.
 
 ## 4. Bilinen sınırlar
 
-* Companion klasörü Sandbox'ta `🔮 850-Companion` değil `Companion`'dır (batch + emoji).
-  Ad `oom.json`'dan geldiği için ürün tarafında bir sapma yoktur.
-* `/login` elle yapılır; Sandbox her kapanışta bunu da siler, yani her koşumda tekrarlanır.
-* `oom sweep` gerekliyse derlemeyi ayrık bir süreçte başlatır; adım 4 kendi `compile`'ını
-  koştuktan sonra kavram dosyası görünene kadar en fazla 5 dakika bekler.
-* Betikler `find.exe` kullanmaz: PATH'inde Git Bash olan bir makinede `find /c /v ""`
-  GNU `find`'a düşer ve `C:\` kökünü taramaya başlar. Sayımlar `findstr` + `set /a` iledir.
+* `bootstrap.cmd` içindeki sabit Node MSI sürümü ve SHA değeri, nodejs.org o sürümü
+  yayından kaldırdığında bayatlar.
+* Sandbox imajında `curl.exe` ve `certutil` bulunduğu varsayılır; gerçek Sandbox koşumuna
+  kadar doğrulanmış değildir.
+* `hazirla.cmd` ilk loopback olmayan `ipconfig` eşleşmesini IPv4 adresi seçer; çok adaptörlü
+  veya VPN'li hostlarda yanlış olabilir, `host.txt` elle kontrol edilmelidir.

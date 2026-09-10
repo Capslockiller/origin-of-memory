@@ -113,12 +113,25 @@ if defined DAILY for %%f in ("%DAILY%") do set "GUN=%%~nf"
 if not defined GUN goto :adim4_hata
 set "OOM_FAKE_NOW=%GUN%T19:00:00%OOMVM_TZ%"
 call :say "[zincir] OOM_FAKE_NOW=%OOM_FAKE_NOW%"
-"%OOM%" compile --vault "%OOMVM_VAULT%" >"%OOMVM_OUT%\adim4-compile.txt" 2>&1
+set /a DERLEME_DENEME=0
+>"%OOMVM_OUT%\adim4-compile.txt" type nul
+:adim4_derle
+set /a DERLEME_DENEME+=1
+>>"%OOMVM_OUT%\adim4-compile.txt" echo [deneme !DERLEME_DENEME!]
+"%OOM%" compile --vault "%OOMVM_VAULT%" >>"%OOMVM_OUT%\adim4-compile.txt" 2>&1
 set "RC=%ERRORLEVEL%"
+set "KAVRAM=0"
+for /f "delims=" %%c in ('dir /b "%OOMVM_VAULT%\knowledge\concepts\*.md" 2^>nul') do set /a KAVRAM+=1
+if not "!KAVRAM!"=="0" goto :adim4_derleme_bitti
+if !DERLEME_DENEME! LSS 3 (
+  call :say "[zincir] adim4 deneme !DERLEME_DENEME! kavram uretmedi; yeniden deneniyor"
+  goto :adim4_derle
+)
+:adim4_derleme_bitti
 set "OOM_FAKE_NOW="
 type "%OOMVM_OUT%\adim4-compile.txt" >>"%LOG%"
 rem sweep kendi derlemesini ayrik surecte baslatabilir; ikisinden hangisi yazarsa
-rem yazsin, kavram dosyasi gorunene kadar en fazla 5 dakika beklenir.
+rem yazsin, uc denemeden sonra da kavram yoksa en fazla 5 dakika beklenir.
 set /a BEKLE=0
 :adim4_bekle
 set "KAVRAM=0"
@@ -139,23 +152,34 @@ if "%KAVRAM%"=="0" goto :adim4_hata
 if "%IDX%"=="yok" goto :adim4_hata
 if "%IDXFULL%"=="yok" goto :adim4_hata
 if "%KLOG%"=="yok" goto :adim4_hata
-call :adim 4 ok "kavram=%KAVRAM% index.md=%IDX% index-full.md=%IDXFULL% log.md=%KLOG% rc=%RC%"
+call :adim 4 ok "kavram=%KAVRAM% index.md=%IDX% index-full.md=%IDXFULL% log.md=%KLOG% rc=%RC% deneme=%DERLEME_DENEME%"
 goto :adim5
 :adim4_hata
-call :adim 4 hata "kavram=%KAVRAM% index.md=%IDX% index-full.md=%IDXFULL% log.md=%KLOG% rc=%RC%"
+call :adim 4 hata "kavram=%KAVRAM% index.md=%IDX% index-full.md=%IDXFULL% log.md=%KLOG% rc=%RC% deneme=%DERLEME_DENEME%"
 
 rem ==========================================================================
 rem ADIM 5 -- yeni oturumda enjeksiyon
 rem ==========================================================================
 :adim5
+rem Soru derlenen kavramin kendisinden turetilir: dosya adi kavramin ASCII slug'idir
+rem ve spec 6.4 kapisi diyakritiksiz istemi tam olarak o forma bakarak esler.
+set "SLUG="
+for /f "delims=" %%f in ('dir /b "%OOMVM_VAULT%\knowledge\concepts\*.md" 2^>nul') do if not defined SLUG set "SLUG=%%~nf"
+if defined SLUG set "SORU=!SLUG:-= ! icin ne karar verildi?"
+call :say "[zincir] adim5 soru: %SORU%"
 if "%OOMVM_DRY%"=="1" goto :adim5_hook
 claude -p "%SORU%" --max-turns 1 --output-format json >"%OOMVM_OUT%\adim5-claude.json" 2>>"%LOG%"
 call :say "[zincir] adim5 claude -p rc=%ERRORLEVEL%"
 :adim5_hook
-echo {"prompt": "%SORU%"}| "%OOM%" retrieve --hook --vault "%OOMVM_VAULT%" >"%OOMVM_OUT%\adim5-retrieve.json" 2>>"%LOG%"
+rem Ham siralama da kanit olarak saklanir: kanca sussa bile skorun ne oldugu gorulsun.
+"%OOM%" retrieve --vault "%OOMVM_VAULT%" --query "%SORU%" --json >"%OOMVM_OUT%\adim5-query.json" 2>>"%LOG%"
+echo {"prompt": "%SORU%"}| "%OOM%" retrieve --hook --vault "%OOMVM_VAULT%" >"%OOMVM_OUT%\adim5-retrieve.json" 2>"%OOMVM_OUT%\adim5-retrieve.err"
+type "%OOMVM_OUT%\adim5-retrieve.err" >>"%LOG%"
 set "ENJ=yok"
 findstr /c:"additionalContext" "%OOMVM_OUT%\adim5-retrieve.json" >nul 2>&1
 if not errorlevel 1 set "ENJ=var"
+set "NEDEN="
+for /f "delims=" %%r in ('type "%OOMVM_OUT%\adim5-retrieve.err" 2^>nul') do if not defined NEDEN set "NEDEN=%%r"
 if "%ENJ%"=="yok" goto :adim5_hata
 if "%OOMVM_DRY%"=="1" goto :adim5_kuru
 call :adim 5 ok "retrieve --hook enjeksiyon blogu=%ENJ%; claude -p json ciktisi adim5-claude.json"
@@ -164,7 +188,7 @@ goto :adim6
 call :adim 5 ok "kuru kosum: yalniz retrieve --hook kosuldu, enjeksiyon blogu=%ENJ%; gercek claude -p atlandi"
 goto :adim6
 :adim5_hata
-call :adim 5 hata "retrieve --hook enjeksiyon blogu=%ENJ%"
+call :adim 5 hata "retrieve --hook enjeksiyon blogu yok; kanca gerekcesi: %NEDEN% (ham siralama adim5-query.json)"
 
 rem ==========================================================================
 rem ADIM 6 -- doctor: kapsama 100, ret 0

@@ -163,7 +163,7 @@ goto :oomjson_ortak
 >>"%OJ%" echo   "sweep": { "everyHours": 8, "sinceHours": 8, "minTurns": 3, "maxSessionsPerRun": 20, "roots": ["%%USERPROFILE%%\\.claude\\projects"] },
 >>"%OJ%" echo   "compile": { "eveningHour": 18, "minIntervalHours": 20, "maxDailiesPerRun": 3 },
 >>"%OJ%" echo   "context": { "companionDir": "%OOMVM_COMPANION%", "capChars": 16000, "statusLine": true },
->>"%OJ%" echo   "retrieve": { "top": 3, "perNoteChars": 1500, "totalChars": 4500, "minOverlap": 2, "strictScore": 25.0 },
+>>"%OJ%" echo   "retrieve": { "top": 3, "perNoteChars": 1500, "totalChars": 4500, "minOverlap": 3, "strictScore": 0.0 },
 >>"%OJ%" echo   "mcp": { "enabled": true },
 >>"%OJ%" echo   "notify": { "toast": true },
 >>"%OJ%" echo   "extensions": []

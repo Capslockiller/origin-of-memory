@@ -686,3 +686,12 @@ Satır bütçesi (D13): `src/Oom` yazılmış C# 8 438 / 9 000; `Mcp` 136 / 300;
 Ruling: Kapı 11 ve kapı 12 artık ölçülüyor ve ikisi de yeşil; dördü de gerçek boşluktu — codex yarım satırı, `save --session-json` kaynak etiketi, beş `state.db` görünümü ve `extensions.contextLine`'ın hiç çalıştırılmaması. Ürün yalnız bir test boşluğu gösterdiği yerde değişti.
 Ruling: `state.db` şema sürümü 2'ye çıktı; görünümler `CREATE VIEW IF NOT EXISTS` olduğu için mevcut bir veritabanı ilk açılışta kendiliğinden kazanıyor, tablolara dokunulmadı.
 Blocked-by: yok.
+
+<!-- yazan: codex · gpt-5 -->
+## Lane VM
+
+### 2026-09-10 — VM-2
+
+Gerçek: ADIM 5 sorusu derlenen ilk concept dosyasının ASCII slug'ından üretiliyor; ham sıralama `adim5-query.json`'da, hook stderr/ret gerekçesi `adim5-retrieve.err`'de tutuluyor. `dogrula.py`, hook `additionalContext` alanında derlenen dosya kökünü veya gerçek H1 başlığını arıyor; YAML frontmatter sonrasındaki H1'i okuyabiliyor, ham sıralamadaki yerini `ham sira=1/1` olarak raporluyor ve eski/eksik kanıt klasörlerinde çökmüyor. Tek notluk temiz-VM korpusunda normalize BM25 puanı IDF tabanına düştüğünden VM konfigürasyonu `minOverlap=3`, `strictScore=0.0`; ilgi kapısı concept kimlik alanlarındaki üç sözcük örtüşmesiyle açık kalıyor. Geçici sözleşmesiz yerel model çıktısı için ADIM 4, kavram yoksa en çok üç compile denemesi yapıyor.
+
+Gerçek: Taze host kuru koşumu sonucu `[ADIM 1] ok · [ADIM 2] atlandi · [ADIM 3] ok · [ADIM 4] ok (1 kavram, ilk deneme) · [ADIM 5] ok (enjeksiyon var, ham sıra 1/1) · [ADIM 6] ok · [ADIM 7] ok`; `dogrula.py` tablosunda yedi satırın tamamında `gunluk=olcum`. Kanıtlar: `bench/vm/.out/zincir.log`, `bench/vm/.out/adim5-query.json`, `bench/vm/.out/adim5-retrieve.json`, `bench/vm/.out/adim5-retrieve.err`, `bench/vm/.out/knowledge/concepts/turkce-tokenizasyon-olcusi.md`, `bench/vm/.out/doctor-1.json`, `bench/vm/.out/doctor-6.json`, `bench/vm/.out/state.db`; sonuç `bench/results/vm-2026-09-10.json`. Gerçek `%USERPROFILE%\.claude\settings.json` SHA-256 önce/sonra aynıdır: `167f818ad90e98efc23164c8eb0d0b090f63377f24f9169f736ad9b3887a8581`; host'ta gerçek `claude -p` çalıştırılmadı ve install yalnız `--dry-run` koştu.
