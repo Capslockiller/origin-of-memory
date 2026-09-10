@@ -10,8 +10,8 @@ public sealed record SweepSettings(int EveryHours, int SinceHours, int MinTurns,
 /// <summary>The <c>backend.claude</c> block: full model ids and the isolated config directory (spec 6.6).</summary>
 public sealed record ClaudeSettings(string Fast, string Smart, string ConfigDir);
 
-/// <summary>The <c>backend.local</c> block: one OpenAI compatible endpoint and its three models.</summary>
-public sealed record LocalSettings(string Url, string Fast, string Smart, string Embed);
+/// <summary>The <c>backend.local</c> block: one endpoint, its three models and the context window (tokens, Y-115).</summary>
+public sealed record LocalSettings(string Url, string Fast, string Smart, string Embed, int NumCtx = 8192);
 
 /// <summary>The <c>backend</c> block: two ordered component chains plus both endpoints (spec 6.6).</summary>
 public sealed record BackendSettings(IReadOnlyList<string> Flush, IReadOnlyList<string> Compile, ClaudeSettings Claude, LocalSettings Local);
@@ -95,7 +95,7 @@ public sealed record OomSettings(
                 flush = defaults.Backend.Flush,
                 compile = defaults.Backend.Compile,
                 claude = new { fast = defaults.Backend.Claude.Fast, smart = defaults.Backend.Claude.Smart, configDir = defaults.Backend.Claude.ConfigDir },
-                local = new { url = defaults.Backend.Local.Url, fast = defaults.Backend.Local.Fast, smart = defaults.Backend.Local.Smart, embed = defaults.Backend.Local.Embed }
+                local = new { url = defaults.Backend.Local.Url, fast = defaults.Backend.Local.Fast, smart = defaults.Backend.Local.Smart, embed = defaults.Backend.Local.Embed, numCtx = defaults.Backend.Local.NumCtx }
             },
             retrieveMode = defaults.RetrieveMode,
             sweep = new
@@ -181,7 +181,7 @@ public sealed record OomSettings(
         Text(element, "url", fallback.Url),
         Text(element, "fast", fallback.Fast),
         Text(element, "smart", fallback.Smart),
-        Text(element, "embed", fallback.Embed));
+        Text(element, "embed", fallback.Embed), Number(element, "numCtx", fallback.NumCtx));
 
     private static SweepSettings ReadSweep(JsonElement element, SweepSettings fallback) => new(
         Number(element, "everyHours", fallback.EveryHours),

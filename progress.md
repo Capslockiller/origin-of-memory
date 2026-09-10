@@ -829,3 +829,12 @@ Kasaya hiçbir şey yazılmadı — ölçüldü, iddia edilmedi: `.brief/gate10-
 Ölçüm: `dotnet test Oom.sln -c Release` → Başarısız 0, Başarılı 129, Toplam 129 — gerileme yok.
 
 Ölçülemeyen / kapsam dışı: `bench/yerel_olcum.py` bu gerçek girdilerle yeniden koşulmadı (yalnız kendi sentetik dumanı `bench/results/yerel-2026-09-09.json` duruyor). `--backend claude` tanı koşumunun tam ayrıştırılmış sonucu (13 transkriptten kaçının, hangi hata ile referans özeti üretemediği) rapor yazılırken tamamlanmamış olabilir — tamamlandıysa `bench/results/gate10-2026-09-10-claude-backend.json` içinde durur, tamamlanmadıysa bu şerit onu ölçmedi.
+
+<!-- yazan: claude · opus-5 -->
+## Lane BENCHFIX
+
+Gerçek (Y-115): `Runner.CallLocal` yerel uca bağlam penceresi göndermiyordu; compile ayağının beş isteğinin dördü HTTP 400 bağlam aşımıyla, biri Ollama'yı çökerterek HTTP 500 ile düştü. Çağrı artık `oom.json`'daki `backend.local` ayarından gelen açık bir pencere taşıyor, varsayılanı belgelendi.
+
+Gerçek (Y-116): `Bench`, keşfettiği 30 dosyanın 17'sini (alt-ajan izi) ve 1'ini (tur yok) modele hiç göndermeden başarısız sayıyordu; ölçüm artık `Ingest`'in Y-112'de öğrendiği süzgeci yeniden kullanıyor ve dışlananları sonuç JSON'unda sayıyla bildiriyor.
+
+Gerçek (kapı 10, yeniden ölçüm): aynı komut, aynı makine, aynı modeller (`qwen3:8b` / `qwen3:30b-a3b-instruct-2507-q4_K_M`; canlı kasa düzenlenmedi, kopyası kullanıldı) → ayak (a) 12 gerçek transkriptte **1.000/0.95 geçti** (öncesi 0.400), ayak (b) 12 çiftte 1.50/3.50 kaldı, ayak (c) 0.600/0.95 (öncesi 0.000) — kalan iki ıska modelin çıktısı: biri ASCII olmayan kavram yolu, biri eksik `=== DONE ===`. Karar değişmedi: `backend.flush = drop`, `backend.compile = drop`; kapı bir hüküm olarak kapandı, ürün kusuru olarak değil. Ham: `bench/results/gate10-2026-09-11.json`.

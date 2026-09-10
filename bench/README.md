@@ -230,17 +230,33 @@ oom --vault <vault-copy> bench --backend local --transcripts 30 --dailies 5 \
 | (b) double-blind judge | 2 | 2.00 | 3.50 | no |
 | (c) text-mode compile conformance | 5 | 0.000 | 0.95 | no |
 
-Raw result: `bench/results/gate10-2026-09-10.json` (full run, all three legs). A flush-and-compile-only sanity pass taken minutes earlier without `--judge` is kept at `bench/results/gate10-2026-09-10-akis-derleme-yalniz.json` for comparison; a standalone `--backend claude` diagnostic pass over the same inputs is at `bench/results/gate10-2026-09-10-claude-backend.json`.
+Raw result: `bench/results/gate10-2026-09-10.json`. That run exposed two defects in the product rather than in the model, both closed as scars Y-115 and Y-116, after which the gate was measured again.
 
-**Leg (a)'s denominator is mostly not the model's fault.** Of the 30 newest files under `%USERPROFILE%\.claude\projects`, 14 were subagent traces (`agent-*.jsonl`, zero summarizable turns by spec 6.3-1's own contract — Bench does not apply Y-112's subagent filter, unlike `ingest`) and 3 more had no new turns to flush; neither class ever reaches the model. Of the 13 transcripts that were actually sent to `qwen3:8b`, 12 produced a conformant five-section summary and 1 failed shape validation — **12/13 = 0.923**, still under the 0.95 threshold but a materially different number from the raw 0.400. The raw 0.400 is what spec 6.12 counts, honestly, but it overstates the model's failure rate roughly three-to-one by counting inputs the model never saw.
+### Re-measured after Y-115 and Y-116
 
-**Leg (b) ran on n=2, not 30.** `--judge` paired the local backend's 13 callable flushes against a fresh `claude`-backend reference flush of the same 13 transcripts and asked the Claude `smart` judge to score both blind. Only 2 of the 13 pairs had a non-empty answer on *both* sides — most of the 13 `claude`-side reference flushes did not come back with usable text (a standalone `--backend claude` diagnostic pass was run separately over the same input to see why; see `progress.md` under `## Lane GATE10` for what it found). `RunJudge` silently skips any pair where either side's answer is empty and reports only the pairs it could score (`Table()`'s printed `n` column mirrors `flushCount`, 30, not the actual scored-pair count — a cosmetic mismatch between the console table and the `"why"` field of the JSON, which correctly says `"2 çift"`). The score itself, 2.00/5.00 against a 3.50 threshold, is a genuine double-blind result but on a sample too thin to generalize from.
+`Runner.CallLocal` now sends an explicit context window on local calls (Y-115) and the bench input selection reuses the transcript filter the ingest path already owned, reporting its exclusions instead of scoring them as failures (Y-116). Same command, same machine, same models (`qwen3:8b` fast, `qwen3:30b-a3b-instruct-2507-q4_K_M` smart, since `local.smart` names an uninstalled `qwen3:14b`; a copy of the vault config was used and the live vault was never edited).
 
-**Leg (c) failed 5/5, and none of the five was a contract failure this time.** Four dailies were rejected by the local endpoint with HTTP 400 "request exceeds context length" (11 534–21 151 tokens reported by the server) and the fifth — the largest daily — crashed the Ollama `llama-server` child process outright (HTTP 500, `exit status 0xc0000409`) on the first pass and returned the same context-length 400 on the retry. `qwen3:30b-a3b-instruct-2507-q4_K_M`'s own context window is 262 144 tokens (`ollama show`); the failure is not the model's limit but `Runner.CallLocal` (`src/Oom/Runner/Runner.cs`), which sends no `options.num_ctx` in the `/chat/completions` body, so the Ollama server keeps whatever (much smaller) context the instance loaded with. The compile prompt for a real daily plus the real `<vault>` root map and up to 400 registry names routinely runs past that. This is a real, reportable limitation of the local backend's request shape, not a flaw in leg (c)'s grading and not something this measurement lane changed — spec 6.12 measures the shipped path as shipped.
+```bash
+oom --vault <vault-copy> bench --backend local --transcripts 30 --dailies 5     --transcript-dir "%USERPROFILE%\.claude\projects" --daily-dir "<vault>\daily" --judge     --out bench/results/gate10-2026-09-11.json
+```
 
-**Decision (spec 6.12): `backend.flush = drop`, `backend.compile = drop`.** Neither axis clears its threshold on the real run. Gate 10 does not pass for `qwen3:8b` (flush) / `qwen3:30b-a3b-instruct-2507-q4_K_M` (compile) on this machine, on this vault, today.
+| leg | n | excluded | result | threshold | pass |
+| --- | ---: | ---: | ---: | ---: | --- |
+| (a) five-section flush shape | 12 | 17 subagent, 1 no-turn | 1.000 | 0.95 | **yes** |
+| (b) double-blind judge | 12 | — | 1.50 | 3.50 | no |
+| (c) text-mode compile conformance | 5 | — | 0.600 | 0.95 | no |
 
-The Python equivalent (`bench/yerel_olcum.py`) was not re-run against the same real inputs in this pass; its own synthetic smoke is `bench/results/yerel-2026-09-09.json` as before.
+Raw result: `bench/results/gate10-2026-09-11.json`.
+
+**Leg (a) passes now that the denominator is honest.** Every one of the twelve real transcripts produced a conforming five-section summary; the eighteen files that never belonged in the measurement are reported as exclusions instead of being scored as failures.
+
+**Leg (b) is a verdict about the model, not a defect.** With all twelve pairs judged blind against the `claude`-backend reference, the local summaries score 1.50 against a 3.50 threshold.
+
+**Leg (c) improved from 0.000 to 0.600 and the two remaining misses are the model's output, not transport errors.** One answer named a concept path with a non-ASCII slug that the compile path guard rejects (the guard is correct; the whole run is refused by design, spec 6.5-4), the other omitted the closing `=== DONE ===` marker.
+
+**Decision (spec 6.12) stands: `backend.flush = drop`, `backend.compile = drop`.** The gate has now been measured on real inputs with the product defects removed: the local model can hold the flush shape but is not good enough to be trusted with judgement or compile conformance on this machine, so the shipped configuration keeps `claude` first. The gate is closed as a decision, not as a pass.
+
+The Python equivalent (`bench/yerel_olcum.py`) was not re-run against the same real inputs in this pass; its own synthetic smoke is `bench/results/yerel-2026-09-09.json`.
 
 ## Mutation check (gate 9)
 

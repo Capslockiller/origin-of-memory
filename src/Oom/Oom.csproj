@@ -20,4 +20,9 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Y-116: lets the scar suite call Bench's internal exclusion counters directly, no copy of the rule. -->
+    <InternalsVisibleTo Include="Oom.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -70,4 +70,29 @@ public sealed class OzetleyiciScars
         Assert.Equal("unknown", unknown.Temperature);
         Assert.Null(unknown.LoadMs);
     }
+
+    [Fact(DisplayName = "Y-115 · Yerel çağrı bağlam penceresini native /api/chat'e taşır; ayar varsayılanı geçersiz kılar")]
+    public void Y115_LocalCallCarriesContextWindowAndSettingWinsOverDefault()
+    {
+        var chain = new Dictionary<ComponentKind, IReadOnlyList<string>> { [ComponentKind.Flush] = ["local"] };
+        var defaultHttp = new RecordingHttp("{\"message\":{\"content\":\"ok\"}}");
+        new Runner(null, defaultHttp, null, null, "http://localhost:11434/v1", true, chain).Run("özetle", ModelTier.Fast, ComponentKind.Flush, "summary");
+        Assert.Equal("http://localhost:11434/api/chat", defaultHttp.Url);
+        Assert.Contains("\"num_ctx\":8192", defaultHttp.Body);
+
+        var configuredHttp = new RecordingHttp("{\"message\":{\"content\":\"ok\"}}");
+        var profile = new RunnerProfile("vault", "vault/claude-config",
+            new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-config"),
+            new LocalSettings("http://localhost:11434/v1", "qwen3:8b", "qwen3:14b", "nomic-embed-text", 24_576), chain);
+        var result = new Runner(profile, http: configuredHttp).Run("özetle", ModelTier.Fast, ComponentKind.Flush, "summary");
+        Assert.Null(result.Error);
+        Assert.Contains("\"num_ctx\":24576", configuredHttp.Body);
+    }
+
+    private sealed class RecordingHttp(string response) : IHttp
+    {
+        public string? Url;
+        public string? Body;
+        public string Send(string method, string url, string body) { Url = url; Body = body; return response; }
+    }
 }

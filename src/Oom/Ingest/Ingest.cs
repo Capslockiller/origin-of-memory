@@ -87,8 +87,8 @@ public sealed class Ingest
         try { return Directory.EnumerateFiles(root, "*.jsonl", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true, MaxRecursionDepth = 6 }); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; }
     }
-    // A "subagents" sidecar is all isSidechain lines; ClaudeParser rejects the resulting turn-less session.
-    private static bool IsSubagentTranscript(string path) => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(s => s.Equals("subagents", StringComparison.OrdinalIgnoreCase));
+    // A "subagents" sidecar is all isSidechain lines; ClaudeParser rejects the resulting turn-less session. Bench reuses this rule too (Y-116).
+    internal static bool IsSubagentTranscript(string path) => path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(s => s.Equals("subagents", StringComparison.OrdinalIgnoreCase));
 
     public IReadOnlyList<string> ValidateSourceInventory(IReadOnlyList<string> runners, IReadOnlyList<string> exclusions)
     {

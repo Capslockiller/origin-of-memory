@@ -81,4 +81,28 @@ public sealed class TestDisipliniScars
         Assert.Contains("concept_recall_at5", measured.Output);
         Assert.DoesNotContain("gate:green", measured.Output.Contains("concept_recall_at5=0.87", StringComparison.Ordinal) ? "gate:green" : "gate:red");
     }
+
+    [Fact(DisplayName = "Y-116 · Bench alt-ajan izini ve turu olmayan dosyayı dışlar, gerçek transkripti sayar")]
+    public void Y116_BenchExcludesSubagentAndNoTurnFilesButKeepsRealTranscript()
+    {
+        var root = ScarFixture.TempDirectory();
+        var real = Path.Combine(root, "real.jsonl");
+        File.WriteAllText(real, ScarFixture.TranscriptJsonl(ScarFixture.Session("real-1", 4)));
+        var subagentDir = Path.Combine(root, "subagents");
+        Directory.CreateDirectory(subagentDir);
+        var subagent = Path.Combine(subagentDir, "agent-a1.jsonl");
+        File.WriteAllText(subagent, "bu satır JSON bile değil");
+        var noTurns = Path.Combine(root, "sidechain-only.jsonl");
+        File.WriteAllText(noTurns, "{\"sessionId\":\"empty-1\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"iç konuşma\"}}");
+
+        var chain = new Dictionary<ComponentKind, IReadOnlyList<string>> { [ComponentKind.Flush] = ["local"] };
+        var runner = new Runner(null, null, null, null, "http://localhost:11434/v1", false, chain);
+        var (records, excludedSubagent, excludedNoTurns) = Bench.MeasureFlush([real, subagent, noTurns], runner);
+
+        Assert.Equal(1, excludedSubagent);
+        Assert.Equal(1, excludedNoTurns);
+        Assert.Single(records);
+        Assert.Equal("real.jsonl", records[0].Source);
+        ScarFixture.Remove(root);
+    }
 }

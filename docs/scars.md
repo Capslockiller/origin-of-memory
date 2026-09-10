@@ -121,19 +121,21 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-112 | yazma-yolu | `ingest`, `Program.cs`'te her zaman boş dosya listesiyle çağrılıyordu (`new Ingest().Run(source, [], ...)`); `sweep.roots` altında hiçbir dosya keşfi yoktu, her koşum "içe aktarım: 0 oturum" yazıyordu | YazmaYoluScars.Y112_IngestDiscoversTranscriptsUnderConfiguredRoots | yeşil |
 | Y-113 | kanca | `Runner.RunProcess`, tek bir `claude -p` görev denemesinin (ör. `--max-turns 1` aşımı) çıkış 1'ini, gerçek erişilebilirlikle karışan kalıcı `hooks/hook-failed` doctor hatasına dönüştürüyordu; sonraki başarılar bunu hiç iyileştirmiyordu | KancaScars.Y113_ReachabilityProbeIsIndependentOfTaskFailuresAndHealsOnSuccess | yeşil |
 | Y-114 | durum-deposu | `Ingest`'in digest-dedupe durumu (`MemoryIngestStateStore`) süreç ömürlüydü: her yeni `oom ingest` çalıştırılışı aynı en eski dosyaları yeniden "içe aktarım" sayıyor, arşiv hiç ilerlemiyordu — canlı makinede dört ardışık `ingest claude --max 25` hep "atlanan 0" verdi | DurumDeposuScars.Y114_IngestCompletionPersistsAcrossStateReopen | yeşil |
+| Y-115 | özetleyici | `Runner.CallLocal` bağlam penceresi göndermiyordu; `/chat/completions` gerçek Ollama'da `options.num_ctx`'i sessizce yok sayıyor — canlı kapı 10 koşumunda 5 daily'nin 4'ü HTTP 400 "context length", biri `llama-server`'ı çökertti (HTTP 500) | OzetleyiciScars.Y115_LocalCallCarriesContextWindowAndSettingWinsOverDefault | yeşil |
+| Y-116 | test-disiplini | `Bench` 30 keşfedilen `.jsonl`'in 17'sini (alt-ajan izi + tur yok) modele hiç göndermeden ölçüme "başarısız" yazıyordu: ham 0,400/0,95 iken gerçek 13 transkript 0,923 ölçüyordu, n dürüst değildi | TestDisipliniScars.Y116_BenchExcludesSubagentAndNoTurnFilesButKeepsRealTranscript | yeşil |
 
 ## Sınıf başına durum
 
 | Sınıf | Yeşil | Kırmızı |
 |---|---|---|
 | yazma-yolu | 23 | 0 |
-| özetleyici | 6 | 0 |
+| özetleyici | 7 | 0 |
 | derleyici | 16 | 0 |
 | getirme | 11 | 0 |
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
 | durum-deposu | 8 | 0 |
 | kurulum | 19 | 0 |
-| test-disiplini | 8 | 0 |
+| test-disiplini | 9 | 0 |
 | süreç-işletme | 8 | 0 |
-| **Toplam** | **114** | **0** |
+| **Toplam** | **116** | **0** |

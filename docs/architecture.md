@@ -77,7 +77,7 @@ The intended flow is transcript archive → scheduled `Sweep` → shared `Flush`
 
 ### `Runner`
 
-`Runner` owns Claude CLI and OpenAI-compatible local HTTP calls. It pins full model IDs, isolates Claude configuration and cwd, sends prompts through stdin with no tools, uses per-component backend chains, disables local thinking, caps tokens, records call metadata when a `State` is injected, and exposes Windows executable/handle/wait helpers. Configuration is currently compiled as constants rather than loaded from `oom.json`, and background courtesy scheduling is planned.
+`Runner` owns Claude CLI and local Ollama HTTP calls (native `/api/chat`, not `/v1/chat/completions` — Y-115: the OpenAI compat route drops the context-window option silently). It pins full model IDs, isolates Claude configuration and cwd, sends prompts through stdin with no tools, uses per-component backend chains, disables local thinking, caps tokens, records call metadata when a `State` is injected, and exposes Windows executable/handle/wait helpers. Configuration is currently compiled as constants rather than loaded from `oom.json`, and background courtesy scheduling is planned.
 
 ### `Save`
 

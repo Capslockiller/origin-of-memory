@@ -32,6 +32,7 @@ public sealed class Runner
     private const string LocalBackend = "local";
     private const string RecursionGuard = "OOM_INVOKED_BY";
     private const int LocalMaxTokens = 2_048;
+    private const int LocalDefaultNumCtx = 8_192;
 
     private static readonly TimeSpan FastTimeout = TimeSpan.FromSeconds(240);
     private static readonly TimeSpan SmartTimeout = TimeSpan.FromSeconds(900);
@@ -353,43 +354,37 @@ public sealed class Runner
         }
     }
 
+    // Y-115: /v1/chat/completions drops num_ctx silently (verified live, Ollama 0.33.3); only the
+    // native /api/chat route honours it, so local calls go there, capped to that same window.
     private RunResult CallLocal(string prompt, ModelTier tier, string model)
     {
-        var request = BuildLocalRequest(prompt, model, LocalMaxTokens);
+        var numCtx = _profile?.Local.NumCtx ?? LocalDefaultNumCtx;
+        var capped = prompt.Length > numCtx * 3 ? prompt[..(numCtx * 3)] : prompt;
+        var request = BuildLocalRequest(capped, model, LocalMaxTokens);
         var body = JsonSerializer.Serialize(new
         {
             model = request.Model,
             stream = request.Stream,
-            temperature = request.Temperature,
-            max_tokens = request.MaxTokens,
             think = request.Think,
-            messages = new[] { new { role = "user", content = request.Prompt } }
+            messages = new[] { new { role = "user", content = request.Prompt } },
+            options = new { temperature = request.Temperature, num_predict = request.MaxTokens, num_ctx = numCtx }
         });
 
         _ = tier;
-        var response = _http.Send("POST", $"{_localUrl}/chat/completions", body);
+        var response = _http.Send("POST", $"{LocalRoot(_localUrl)}/api/chat", body);
         try
         {
             using var document = JsonDocument.Parse(response);
-            var content = document.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString();
-
+            var content = document.RootElement.GetProperty("message").GetProperty("content").GetString();
             return string.IsNullOrWhiteSpace(content)
                 ? new RunResult(string.Empty, "local: boş yanıt", LocalBackend, model)
                 : new RunResult(content, null, LocalBackend, model);
         }
-        catch (JsonException)
-        {
-            return new RunResult(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model);
-        }
-        catch (KeyNotFoundException)
-        {
-            return new RunResult(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model);
-        }
+        catch (JsonException) { return new RunResult(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model); }
+        catch (KeyNotFoundException) { return new RunResult(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model); }
     }
+
+    private static string LocalRoot(string url) => url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? url[..^3] : url;
 
     /// <summary>
     /// What the last Claude call actually spent. <c>Input</c> is the <em>whole</em> prompt the

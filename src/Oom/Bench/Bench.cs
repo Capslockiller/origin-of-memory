@@ -71,7 +71,7 @@ public sealed class Bench
             return 1;
         }
 
-        var flush = MeasureFlush(transcripts, MakeRunner(options.Backend, vault, settings));
+        var (flush, excludedSubagent, excludedNoTurns) = MeasureFlush(transcripts, MakeRunner(options.Backend, vault, settings));
         var compile = MeasureCompile(dailies, vault, MakeRunner(options.Backend, vault, settings));
         double shape = Rate(flush), conformance = Rate(compile);
         var judge = options.Judge
@@ -83,38 +83,37 @@ public sealed class Bench
         var flushDecision = judge.Score is not { } score ? "undecided — leg (b) not run"
             : shape >= ShapeThreshold && score >= JudgeThreshold ? "keep" : "drop";
         var compileDecision = conformance >= CompileThreshold ? "keep" : "drop";
-        Write(results, options, model, settings, flush, compile, shape, conformance, judge, flushDecision, compileDecision);
+        Write(results, options, model, settings, flush, compile, shape, conformance, judge, flushDecision, compileDecision, excludedSubagent, excludedNoTurns);
         Table(output, model, shape, judge.Score, conformance, flush.Count, compile.Count, dry: false);
-        output.WriteLine($"\nkarar: backend.flush = {flushDecision} · backend.compile = {compileDecision}");
+        output.WriteLine($"\nkarar: backend.flush = {flushDecision} · backend.compile = {compileDecision} · dışlanan: {excludedSubagent} subagent, {excludedNoTurns} turnsuz");
         foreach (var record in flush.Concat(compile).Where(record => !record.Ok))
             output.WriteLine($"  ıska {record.Source}: {record.Reason}");
         output.WriteLine($"sonuç dosyası: {results}");
         return 0;
     }
-    /// <summary>Leg (a): the shipped write function grades the model. With no vault path, no state
-    /// and no rejection directory the summary meets exactly the production validator and nothing
-    /// reaches disk; <c>Empty</c> is a correct <c>FLUSH_BOS</c>, so it counts as shape.</summary>
-    private static List<BenchRecord> MeasureFlush(IReadOnlyList<string> transcripts, Runner runner)
+    /// <summary>Leg (a): the shipped write function grades the model; <c>Empty</c> is a correct
+    /// <c>FLUSH_BOS</c>, so it counts as shape. Y-116: a sub-agent trace (<see cref="Ingest.IsSubagentTranscript"/>,
+    /// reused from Y-112) or a file with no turns never reaches the model, so it is excluded, not scored a failure.</summary>
+    internal static (List<BenchRecord> Records, int Subagent, int NoTurns) MeasureFlush(IReadOnlyList<string> transcripts, Runner runner)
     {
         var flush = new Flush(new FlushOptions(MinTurns: 1), null, runner);
         List<BenchRecord> records = [];
+        int subagent = 0, noTurns = 0;
         foreach (var path in transcripts)
         {
+            if (Ingest.IsSubagentTranscript(path)) { subagent++; continue; }
             var name = Path.GetFileName(path);
             var started = Stopwatch.StartNew();
             var session = flush.ReadSessionFile(Path.GetFileNameWithoutExtension(path), path, "claude");
-            if (session is null)
-            {
-                records.Add(new BenchRecord(name, false, "özetlenecek tur yok", started.ElapsedMilliseconds, null));
-                continue;
-            }
+            if (session is null) { noTurns++; continue; }
 
             var result = flush.FlushSession(session, path, FlushReason.Sweep);
+            if (result.Outcome is FlushOutcome.NoNewTurns) { noTurns++; continue; }
             var ok = result.Outcome is FlushOutcome.Ok or FlushOutcome.Empty;
             records.Add(new BenchRecord(name, ok, ok ? "ok" : result.Error ?? result.Outcome.ToString(),
                 started.ElapsedMilliseconds, result.Summary));
         }
-        return records;
+        return (records, subagent, noTurns);
     }
 
     /// <summary>Leg (c): the shipped compile prompt in, the shipped path allowlist plus
@@ -155,7 +154,7 @@ public sealed class Bench
     private static JudgeReport RunJudge(BenchOptions options, IReadOnlyList<string> transcripts, List<BenchRecord> measured, string vault, OomSettings settings)
     {
         var reference = options.Backend == "claude" ? "local" : "claude";
-        var referenceRecords = MeasureFlush(transcripts, MakeRunner(reference, vault, settings));
+        var (referenceRecords, _, _) = MeasureFlush(transcripts, MakeRunner(reference, vault, settings));
         var judge = MakeRunner("claude", vault, settings);
         List<double> scores = [];
         for (var index = 0; index < Math.Min(measured.Count, referenceRecords.Count); index++)
@@ -207,7 +206,8 @@ public sealed class Bench
     /// duration: <c>Answer</c> holds the model's own text and stays in memory for leg (b), because a
     /// measurement artefact must never become a second copy of the material it measured.</summary>
     private void Write(string path, BenchOptions options, string model, OomSettings settings, List<BenchRecord> flush,
-        List<BenchRecord> compile, double shape, double conformance, JudgeReport judge, string flushDecision, string compileDecision)
+        List<BenchRecord> compile, double shape, double conformance, JudgeReport judge, string flushDecision, string compileDecision,
+        int excludedSubagent, int excludedNoTurns)
     {
         object[] Public(List<BenchRecord> records) => records
             .Select(object (x) => new { source = x.Source, ok = x.Ok, reason = x.Reason, ms = x.Ms }).ToArray();
@@ -217,7 +217,7 @@ public sealed class Bench
             measured = Today(),
             model = new { name = model, url = settings.Backend.Local.Url },
             thresholds = new { flush_shape = ShapeThreshold, judge = JudgeThreshold, compile_conformance = CompileThreshold },
-            flush_shape = new { n = flush.Count, conformance = shape, threshold = ShapeThreshold, pass = shape >= ShapeThreshold, records = Public(flush) },
+            flush_shape = new { n = flush.Count, excluded_subagent = excludedSubagent, excluded_noturns = excludedNoTurns, conformance = shape, threshold = ShapeThreshold, pass = shape >= ShapeThreshold, records = Public(flush) },
             judge = new { status = judge.Status, score = judge.Score, why = judge.Why, threshold = JudgeThreshold },
             compile_conformance = new { n = compile.Count, conformance, threshold = CompileThreshold, pass = conformance >= CompileThreshold, records = Public(compile) },
             decision = new { flush = flushDecision, compile = compileDecision }

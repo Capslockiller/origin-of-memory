@@ -63,6 +63,10 @@ The flush commands still carry no `--session <id>`, which spec 5 asks for. The t
 
 The companion directory itself is `context.companionDir` in `oom.json` (default `🔮 850-Companion`). When a file is present but its marker is not, `context` now writes one line to stderr per section — `context: '<bölüm>' boş — dosyada '<marker>' başlığı yok` — and the block is built exactly as before. `Context.CompanionWarnings` returns the same lines for `doctor` and for tests.
 
+## Local backend context window
+
+`backend.local.numCtx` in `oom.json` (default `8192`) is the token context window `Runner.CallLocal` asks Ollama's native `/api/chat` route for — the one route that actually honours it (`/v1/chat/completions` drops the option silently, `Y-115`). Raise it when a daily or a transcript regularly runs into an HTTP 400 "context length" rejection; the prompt itself is also capped to roughly three characters per token of this same window before it is sent, so one oversized daily cannot exceed it. There is no separate `backend.local.fast`/`smart` context split — one window serves both tiers.
+
 ## Scheduled task
 
 Install and `Sweep` now share a single XML builder, `Sweep.BuildScheduledTaskXml` (D4: an XML file passed to `schtasks /Create /XML`; no Task Scheduler COM interop). The XML has an eight-hour repetition with **no** `Duration` element (`Y-009`), `StartWhenAvailable` for a missed run, an `InteractiveToken` logon type so the task only runs while the user is signed in, a 30-minute `ExecutionTimeLimit`, and no battery restriction. The second, thinner XML that used to live inside `Install` (and carried `WakeToRun`) is gone.
