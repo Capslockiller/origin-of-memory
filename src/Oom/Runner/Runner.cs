@@ -109,7 +109,6 @@ public sealed class Runner
                 return attempt;
             }
 
-
             error = attempt.Error;
         }
 

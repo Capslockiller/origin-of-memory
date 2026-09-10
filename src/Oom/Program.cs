@@ -104,9 +104,9 @@ internal static class Program
 
             case "ingest":
             {
-                var source = Argument(args, 0) ?? "claude"; // Y-112: was always handed an empty file list; --root overrides sweep's roots.
-                var max = ReadInt(args, "--max");
-                var ingest = new Ingest();
+                var source = Argument(args, 0) ?? "claude"; var max = ReadInt(args, "--max"); // Y-112: was always handed an empty file list; --root overrides sweep's roots.
+                using var ingestState = OpenState(); // Y-114: state.db-backed dedupe so a rerun advances instead of reimporting the same oldest files forever.
+                var ingest = new Ingest(state: ingestState);
                 IReadOnlyList<string> roots = Value(args, "--root") is { Length: > 0 } r ? [r] : settings.Sweep.Roots;
                 var files = ingest.Discover(source, roots, max);
                 var outcome = ingest.RunWithOutcome(source, files, max);

@@ -13,10 +13,10 @@ namespace Oom.Contracts;
 /// <c>knowledge/</c> and the transcript archive, which is what lets
 /// <c>doctor --fix</c> rebuild the file after a failed integrity check.
 /// </summary>
-public sealed partial class State : IDisposable
+public sealed partial class State : IDisposable, IIngestStateStore
 {
-    // 2: the five read-only views of spec 2.2-2 (gate 12-2); tables themselves unchanged.
-    private const int SchemaVersion = 2;
+    // 3: adds ingest_done (Y-114); older tables unchanged.
+    private const int SchemaVersion = 3;
     private const int ReplaceAttempts = 5;
     private const int ReplaceBackoffMs = 200;
     private const int StaleWarningHours = 24;
@@ -323,8 +323,8 @@ public sealed partial class State : IDisposable
     public void WriteStamp(string path, string mtime, long size, string outcome) =>
         Write("INSERT INTO sweep_stamps(path, mtime, size, outcome) VALUES ($p, $m, $s, $o) ON CONFLICT(path) DO UPDATE SET mtime = $m, size = $s, outcome = $o",
             ("$p", path), ("$m", mtime), ("$s", size), ("$o", outcome));
-
-
+    public bool Contains(string source, string digest) => Text("SELECT 1 FROM ingest_done WHERE source = $s AND digest = $d", ("$s", source), ("$d", digest)) is not null; // Y-114: IIngestStateStore.
+    public void Complete(string source, string digest) => Write("INSERT INTO ingest_done(source, digest, ts) VALUES ($s, $d, $t) ON CONFLICT(source, digest) DO NOTHING", ("$s", source), ("$d", digest), ("$t", Stamp(_clock.Now)));
     public void Dispose() => _connection.Dispose();
 
     private QuotaWindow ReadLiveWindow(string source, string response, DateTimeOffset now, List<HealthItem> warnings)
@@ -488,6 +488,7 @@ public sealed partial class State : IDisposable
             "CREATE TABLE IF NOT EXISTS flush_log(ts TEXT, session_id TEXT, reason TEXT, outcome TEXT, turns INTEGER, chars INTEGER, backend TEXT);" +
             "CREATE TABLE IF NOT EXISTS retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);" +
             "CREATE TABLE IF NOT EXISTS sweep_stamps(path TEXT PRIMARY KEY, mtime TEXT, size INTEGER, outcome TEXT);" +
+            "CREATE TABLE IF NOT EXISTS ingest_done(source TEXT, digest TEXT, ts TEXT, PRIMARY KEY(source, digest));" +
             "CREATE TABLE IF NOT EXISTS coverage(ts TEXT, total INTEGER, covered INTEGER, uncovered_json TEXT);" +
             "CREATE TABLE IF NOT EXISTS daily_ingest(name TEXT PRIMARY KEY, digest TEXT, status TEXT, attempts INTEGER, reasons TEXT, ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS compile_runs(ts TEXT, daily TEXT, status TEXT, created INTEGER, updated INTEGER, ms INTEGER);" +

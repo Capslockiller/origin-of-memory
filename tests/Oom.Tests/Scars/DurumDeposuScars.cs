@@ -1,3 +1,5 @@
+using System.Text;
+using Microsoft.Data.Sqlite;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
 
@@ -71,5 +73,43 @@ public sealed class DurumDeposuScars
         var final = new State().AtomicWrite("state.json", "{\"version\":8}", writers: 8);
         Assert.Equal("{\"version\":8}", final);
         Assert.DoesNotContain(".tmp", final, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact(DisplayName = "Y-114 · İçe aktarım tamamlanmaları state.db'de kalıcı; durum kapanıp yeniden açılsa da ikinci koşum aynı dosyayı atlar")]
+    public void Y114_IngestCompletionPersistsAcrossStateReopen()
+    {
+        // Program.cs'teki eski `new Ingest()` durumu süreç ömürlü bellekte tutuyordu: her yeni
+        // `oom ingest` çalıştırılışı aynı en eski dosyaları yeniden "içe aktarım" sayıyor, arşiv
+        // hiç ilerlemiyordu. Burada iki AYRI `State`/`Ingest` çifti aynı state.db dosyasını paylaşır.
+        var root = ScarFixture.TempDirectory();
+        try
+        {
+            var database = Path.Combine(root, "state.db");
+            var transcript = Path.Combine(root, "y114.jsonl");
+            File.WriteAllText(transcript,
+                "{\"sessionId\":\"y114\",\"type\":\"user\",\"timestamp\":\"2026-09-09T08:00:00+03:00\",\"message\":{\"content\":\"merhaba\"}}\n" +
+                "{\"sessionId\":\"y114\",\"type\":\"assistant\",\"timestamp\":\"2026-09-09T08:00:01+03:00\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"merhaba Master Mind\"}]}}",
+                new UTF8Encoding(false));
+
+            IngestOutcome RunOnce()
+            {
+                using var state = new State(null, null, database);
+                var ingest = new Ingest(state: state, flushSession: (session, path) => new FlushResult(FlushOutcome.Ok, 0, null, null));
+                return ingest.RunWithOutcome("claude", [transcript]);
+            }
+
+            var first = RunOnce();
+            var second = RunOnce();
+
+            Assert.Single(first.Sessions);
+            Assert.Equal(0, first.Skipped);
+            Assert.Empty(second.Sessions);
+            Assert.Equal(1, second.Skipped);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
     }
 }
