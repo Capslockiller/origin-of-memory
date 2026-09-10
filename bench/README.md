@@ -212,19 +212,35 @@ python bench/yerel_olcum.py --transcripts 3 --dailies 2    # offline cross-check
 
 `--transcripts` defaults to 30 and `--dailies` to 5; without `--transcript-dir` the first `sweep.roots` entry is used and without `--daily-dir` the vault's own `daily\`. `--out` moves the results file, `--judge` runs leg (b), `--dry-run` lists the inputs and calls nothing.
 
-Synthetic run of `oom bench`, `qwen3:8b` via Ollama at `http://localhost:11434/v1`, 3 synthetic Claude Code transcripts and 2 synthetic dailies (invented text, no vault or transcript material). Raw result: `bench/results/oom-bench-sentetik-2026-09-09.json`. The Python harness's own smoke on comparable input is `bench/results/yerel-2026-09-09.json`.
+Synthetic run of `oom bench`, `qwen3:8b` via Ollama at `http://localhost:11434/v1`, 3 synthetic Claude Code transcripts and 2 synthetic dailies (invented text, no vault or transcript material). Raw result: `bench/results/oom-bench-sentetik-2026-09-09.json`. The Python harness's own smoke on comparable input is `bench/results/yerel-2026-09-09.json`. **A synthetic run decided nothing** — see the real run below.
+
+### Real run — 2026-09-10, `<vault>`, real transcripts and real dailies
+
+`local.smart` in `<vault>\.oom\oom.json` names `qwen3:14b`, which was not installed on the measuring machine at run time (`qwen3:8b`, `qwen3:30b-a3b-instruct-2507-q4_K_M` and `odena-8b:latest` were). The live vault's `oom.json` was never edited — read-only, as spec 4 requires. The measurement ran against a copy of the vault (config, the isolated `claude-config` credential directory, and a read-only junction onto `knowledge\`) with only `backend.local.smart` changed to `qwen3:30b-a3b-instruct-2507-q4_K_M`, an installed model, so the mismatch is resolved honestly instead of silently: the model actually asked is the model actually reported, and every byte anyone reads back out of `<vault>` (daily files, `.oom\oom.json`, the state DB) is unchanged (`.brief/gate10-vault-once.txt` / `-sonra.txt` are byte-identical apart from unrelated background sweep/ingest activity already running on the machine).
+
+```bash
+oom --vault <vault-copy> bench --backend local --transcripts 30 --dailies 5 \
+    --transcript-dir "%USERPROFILE%\.claude\projects" --daily-dir "<vault>\daily" --judge \
+    --out bench/results/gate10-2026-09-10.json
+```
 
 | leg | n | result | threshold | pass |
 | --- | ---: | ---: | ---: | --- |
-| (a) five-section flush shape | 3 | 1.000 | 0.95 | yes |
-| (b) double-blind judge | 0 | **not run** | 3.50 | — |
-| (c) text-mode compile conformance | 2 | 0.000 | 0.95 | no |
+| (a) five-section flush shape | 30 | 0.400 | 0.95 | no |
+| (b) double-blind judge | 2 | 2.00 | 3.50 | no |
+| (c) text-mode compile conformance | 5 | 0.000 | 0.95 | no |
 
-Leg (b) is implemented in both (`Bench.RunJudge` pairs the two backends blind and asks the Claude `smart` judge for `A=<n> B=<n>`; `judge_pairs` does the pairing in Python) and is invoked only with `--judge`, because each pair spends Claude quota twice. Without it the results JSON says `"judge": "not run"` and the `backend.flush` decision of spec 6.12 is **undecided**, not passed. `backend.compile` reads `drop` on this run.
+Raw result: `bench/results/gate10-2026-09-10.json` (full run, all three legs). A flush-and-compile-only sanity pass taken minutes earlier without `--judge` is kept at `bench/results/gate10-2026-09-10-akis-derleme-yalniz.json` for comparison; a standalone `--backend claude` diagnostic pass over the same inputs is at `bench/results/gate10-2026-09-10-claude-backend.json`.
 
-**A synthetic run decides nothing.** n=3 and n=2 are far below the 30 and 5 the spec requires, and the inputs are invented. The substantive observation is that both compile failures were contract failures, not truncations: on one daily `qwen3:8b` never emitted `=== DONE ===`, and on the other it produced the slug `hDMI-fiber-kablo`, which the shipped `^knowledge/concepts/[a-z0-9-]+\.md$` allowlist rejects — the same class of failure the Python harness saw.
+**Leg (a)'s denominator is mostly not the model's fault.** Of the 30 newest files under `%USERPROFILE%\.claude\projects`, 14 were subagent traces (`agent-*.jsonl`, zero summarizable turns by spec 6.3-1's own contract — Bench does not apply Y-112's subagent filter, unlike `ingest`) and 3 more had no new turns to flush; neither class ever reaches the model. Of the 13 transcripts that were actually sent to `qwen3:8b`, 12 produced a conformant five-section summary and 1 failed shape validation — **12/13 = 0.923**, still under the 0.95 threshold but a materially different number from the raw 0.400. The raw 0.400 is what spec 6.12 counts, honestly, but it overstates the model's failure rate roughly three-to-one by counting inputs the model never saw.
 
-The full run of spec 6.12 is the owner's decision — it reads real transcripts and real dailies and sends them to the local model. The `oom bench` form is above; the Python equivalent is in `progress.md` under `## Lane BENCH`.
+**Leg (b) ran on n=2, not 30.** `--judge` paired the local backend's 13 callable flushes against a fresh `claude`-backend reference flush of the same 13 transcripts and asked the Claude `smart` judge to score both blind. Only 2 of the 13 pairs had a non-empty answer on *both* sides — most of the 13 `claude`-side reference flushes did not come back with usable text (a standalone `--backend claude` diagnostic pass was run separately over the same input to see why; see `progress.md` under `## Lane GATE10` for what it found). `RunJudge` silently skips any pair where either side's answer is empty and reports only the pairs it could score (`Table()`'s printed `n` column mirrors `flushCount`, 30, not the actual scored-pair count — a cosmetic mismatch between the console table and the `"why"` field of the JSON, which correctly says `"2 çift"`). The score itself, 2.00/5.00 against a 3.50 threshold, is a genuine double-blind result but on a sample too thin to generalize from.
+
+**Leg (c) failed 5/5, and none of the five was a contract failure this time.** Four dailies were rejected by the local endpoint with HTTP 400 "request exceeds context length" (11 534–21 151 tokens reported by the server) and the fifth — the largest daily — crashed the Ollama `llama-server` child process outright (HTTP 500, `exit status 0xc0000409`) on the first pass and returned the same context-length 400 on the retry. `qwen3:30b-a3b-instruct-2507-q4_K_M`'s own context window is 262 144 tokens (`ollama show`); the failure is not the model's limit but `Runner.CallLocal` (`src/Oom/Runner/Runner.cs`), which sends no `options.num_ctx` in the `/chat/completions` body, so the Ollama server keeps whatever (much smaller) context the instance loaded with. The compile prompt for a real daily plus the real `<vault>` root map and up to 400 registry names routinely runs past that. This is a real, reportable limitation of the local backend's request shape, not a flaw in leg (c)'s grading and not something this measurement lane changed — spec 6.12 measures the shipped path as shipped.
+
+**Decision (spec 6.12): `backend.flush = drop`, `backend.compile = drop`.** Neither axis clears its threshold on the real run. Gate 10 does not pass for `qwen3:8b` (flush) / `qwen3:30b-a3b-instruct-2507-q4_K_M` (compile) on this machine, on this vault, today.
+
+The Python equivalent (`bench/yerel_olcum.py`) was not re-run against the same real inputs in this pass; its own synthetic smoke is `bench/results/yerel-2026-09-09.json` as before.
 
 ## Mutation check (gate 9)
 

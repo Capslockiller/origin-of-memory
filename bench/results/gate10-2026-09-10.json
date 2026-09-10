@@ -1,0 +1,256 @@
+{
+  "gate": 10,
+  "command": "oom bench",
+  "backend": "local",
+  "measured": "2026-09-10",
+  "model": {
+    "name": "qwen3:8b / qwen3:30b-a3b-instruct-2507-q4_K_M",
+    "url": "http://localhost:11434/v1"
+  },
+  "machine": {
+    "os": "Windows 11 Pro",
+    "vault": "<vault>",
+    "note": "config.local.smart in <vault>\\.oom\\oom.json names qwen3:14b (not installed); measured against a copy of the vault config with only local.smart changed to an installed model. Live vault untouched."
+  },
+  "thresholds": {
+    "flush_shape": 0.95,
+    "judge": 3.5,
+    "compile_conformance": 0.95
+  },
+  "flush_shape": {
+    "n": 30,
+    "conformance": 0.4,
+    "threshold": 0.95,
+    "pass": false,
+    "records": [
+      {
+        "source": "e0b98b9d-7757-41f2-8d33-8b57aee4f8fc.jsonl",
+        "ok": false,
+        "reason": "sekil dogrulamasi",
+        "ms": 18081
+      },
+      {
+        "source": "agent-ae121d5056208ca24.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 6
+      },
+      {
+        "source": "agent-a221ad55726a4d7ea.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 5
+      },
+      {
+        "source": "94ca817c-72f5-4f2c-9ef3-8b98dd37da43.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 8757
+      },
+      {
+        "source": "agent-a70b25e145b1d0ab9.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 11
+      },
+      {
+        "source": "agent-a9594c3e99aec0a82.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 2
+      },
+      {
+        "source": "agent-a4eaac3ca0a82fed5.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 4
+      },
+      {
+        "source": "agent-a35f0b0f9337e7cff.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 1
+      },
+      {
+        "source": "agent-a011acb896238dbe6.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 1
+      },
+      {
+        "source": "dbb06877-fc22-4f2f-be88-6331062ef7fb.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 11704
+      },
+      {
+        "source": "agent-aa160ba404a52a304.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 1
+      },
+      {
+        "source": "agent-a9ec3e29510a1deee.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 4
+      },
+      {
+        "source": "agent-aa8703049c671a23e.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 3
+      },
+      {
+        "source": "32f9863b-6d4b-4327-b2a7-d5c2232a77da.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 9280
+      },
+      {
+        "source": "94663cc6-bb0d-4bea-9210-7dbc1bb172ca.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 8842
+      },
+      {
+        "source": "d1a4e6d1-1fe1-4f50-840d-fc174bb3527e.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 11731
+      },
+      {
+        "source": "feada520-d883-4c15-9f4e-5028fffa1eef.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 6892
+      },
+      {
+        "source": "agent-aa69b07cb0be57719.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 1
+      },
+      {
+        "source": "3339b0ee-8fa3-4aae-b8ef-920ff25a209c.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 5453
+      },
+      {
+        "source": "agent-a3088ac32e14bbd60.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 1
+      },
+      {
+        "source": "agent-a1943627e01ab1721.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 2
+      },
+      {
+        "source": "d4f7c218-00c7-4216-aa6c-cd59068ed0fe.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 9174
+      },
+      {
+        "source": "188bee8f-d08a-4789-9038-87e9736ebd78.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 4020
+      },
+      {
+        "source": "9c41526b-56ff-47cc-818b-63e1d5d7c461.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 3928
+      },
+      {
+        "source": "agent-a821397b747a41d87.jsonl",
+        "ok": false,
+        "reason": "özetlenecek tur yok",
+        "ms": 2
+      },
+      {
+        "source": "328bf25a-a4d1-44c8-a886-101f72f57793.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 3957
+      },
+      {
+        "source": "bdace50f-fd2f-437f-a673-60653036c7ec.jsonl",
+        "ok": false,
+        "reason": "NoNewTurns",
+        "ms": 2
+      },
+      {
+        "source": "f26aa4cf-d776-4e80-8174-577199aee20f.jsonl",
+        "ok": false,
+        "reason": "NoNewTurns",
+        "ms": 2
+      },
+      {
+        "source": "ef4dd313-e64f-4057-9232-6a2b8a6ad224.jsonl",
+        "ok": false,
+        "reason": "NoNewTurns",
+        "ms": 2
+      },
+      {
+        "source": "70d58b7a-2dfc-4aa4-aac7-a3601fe7651c.jsonl",
+        "ok": true,
+        "reason": "ok",
+        "ms": 3897
+      }
+    ]
+  },
+  "judge": {
+    "status": "run",
+    "score": 2,
+    "why": "2 çift, claude referansına karşı çift-kör",
+    "threshold": 3.5
+  },
+  "compile_conformance": {
+    "n": 5,
+    "conformance": 0,
+    "threshold": 0.95,
+    "pass": false,
+    "records": [
+      {
+        "source": "2026-09-10.md",
+        "ok": false,
+        "reason": "local: HTTP 400 {\"error\":{\"message\":\"{\\\"error\\\":{\\\"code\\\":400,\\\"message\\\":\\\"request (21151 token",
+        "ms": 15870
+      },
+      {
+        "source": "2026-09-09.md",
+        "ok": false,
+        "reason": "local: HTTP 400 {\"error\":{\"message\":\"{\\\"error\\\":{\\\"code\\\":400,\\\"message\\\":\\\"request (18302 token",
+        "ms": 25
+      },
+      {
+        "source": "2026-09-08.md",
+        "ok": false,
+        "reason": "local: HTTP 400 {\"error\":{\"message\":\"{\\\"error\\\":{\\\"code\\\":400,\\\"message\\\":\\\"request (20031 token",
+        "ms": 26
+      },
+      {
+        "source": "2026-09-07.md",
+        "ok": false,
+        "reason": "local: HTTP 400 {\"error\":{\"message\":\"{\\\"error\\\":{\\\"code\\\":400,\\\"message\\\":\\\"request (14849 token",
+        "ms": 21
+      },
+      {
+        "source": "2026-09-06.md",
+        "ok": false,
+        "reason": "local: HTTP 400 {\"error\":{\"message\":\"{\\\"error\\\":{\\\"code\\\":400,\\\"message\\\":\\\"request (11534 token",
+        "ms": 17
+      }
+    ]
+  },
+  "decision": {
+    "flush": "drop",
+    "compile": "drop"
+  }
+}
