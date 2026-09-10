@@ -198,7 +198,13 @@ public sealed class Retrieve
         // `strictScore` is a per-term mean, not the raw sum. The sum grows with the length of the
         // prompt, so one constant over it binds on short prompts and never on long ones; at 25.0
         // against sums that ran 60-300 it never bound at all and every candidate was injected.
-        if (hit.Score / terms.Length < _options.StrictScore)
+        // yazan: codex · gpt-6
+        // Y-110: calibrate the gate at the 542-document gate-5 reference corpus. In a small
+        // topic slice, common query terms reach floor IDF and depress the mean even when
+        // the first hit identifies the answer. Scale only the gate, capped at the configured
+        // threshold; ranking, identity overlap and the caller's strictness remain intact.
+        var corpusScale = Math.Min(1.0, Math.Max(1, LoadCorpus().Count) / 542.0);
+        if (hit.Score / terms.Length < _options.StrictScore * corpusScale)
             return false;
 
         var surface = GateSurface(hit.Name);

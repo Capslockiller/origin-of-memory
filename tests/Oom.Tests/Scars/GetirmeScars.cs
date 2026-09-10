@@ -5,6 +5,40 @@ namespace Oom.Tests.Scars;
 
 public sealed class GetirmeScars
 {
+    // yazan: codex · gpt-6
+    [Fact(DisplayName = "Y-110 · Küçük konu derleminde doğru ilk not kapıdan geçer, ilgisiz soru boş kalır")]
+    public void Y110_SmallCorpusGateKeepsRelevantTopHitAndRejectsUnrelatedPrompt()
+    {
+        // Common topic terms have floor IDF; the rarer identity term carries the evidence.
+        var vault = ScarFixture.TempDirectory();
+        var concepts = Path.Combine(vault, "knowledge", "concepts");
+        Directory.CreateDirectory(concepts);
+        for (var i = 0; i < 19; i++)
+        {
+            var title = i == 0 ? "Panel güvenlik kapısı" : $"Kavram {i}";
+            var body = "Panel güvenlik " + (i < 8 ? "kapısı" : "bilgisi");
+            var name = i == 0 ? "panel-guvenlik-kapisi.md" : $"kavram-{i}.md";
+            File.WriteAllText(Path.Combine(concepts, name),
+                $"---\nyazan: codex\nmodel: gpt-6\ntitle: {title}\naliases: []\ntags: []\nsources: [2026-09-10.md]\ncreated: 2026-09-10\nupdated: 2026-09-10\n---\n{body}");
+        }
+
+        const string prompt = "Panel güvenlik kapısı nasıl çalışıyor?";
+        var retrieve = new Retrieve(new RetrieveOptions(VaultPath: vault));
+        var session = Guid.NewGuid().ToString();
+        var raw = retrieve.Query(prompt, session);
+        Assert.Equal("panel-guvenlik-kapisi.md", raw.Hits[0].Name);
+        Assert.InRange(raw.Hits[0].Score, 0.1, 2.0); // seven ranked terms: mean below 1.0
+        var hooked = retrieve.Hook(prompt, session);
+        Assert.NotEmpty(hooked.Hits);
+        Assert.Equal(raw.Hits[0].Name, hooked.Hits[0].Name);
+        Assert.Empty(retrieve.Hook("Ay tutulmasi kac dakika surer?", session).Hits);
+        // A common-topic hit made solely from floored IDF is still insufficient evidence.
+        Assert.Empty(retrieve.Hook("Panel güvenlik ayrıntıları nelerdir?", session).Hits);
+        Assert.Empty(retrieve.Hook(prompt, session).Hits); // served-note dedupe survives
+        Assert.Empty(new Retrieve(new RetrieveOptions(VaultPath: vault, StrictScore: 100))
+            .Hook(prompt, Guid.NewGuid().ToString()).Hits);
+    }
+
     [Fact(DisplayName = "Y-035 · Güncel düzeltme aranır ve eski kavram top üçe giremez")]
     public void Y035_CorrectionLayerOutranksStaleConcept()
     {

@@ -150,6 +150,53 @@ Baseline for the same instrument: 5/5 canaries and 20/20 gold questions injected
 
 `strictScore` is now the note's score divided by the number of ranked query terms — the mean per-term contribution — because the raw sum grows with the length of the prompt, so one constant over it binds on short prompts and never on long ones. Raw result: `bench/results/recall-2026-09-09-r2-gate.json`.
 
+<!-- yazan: codex · gpt-6 -->
+## Retrieval gate — re-measured 2026-09-10 after lane GATE (Y-110)
+
+**Fact:** the requested 542-note reference is now a **550-note** live corpus at `E:\OdenaOS`. The historical 542-note snapshot was unavailable; no arbitrary eight notes were removed to manufacture that count. Both fresh baseline (`fdf4b1f`) and final runs used the same 550 concept files, the existing `.brief/gold-sorular.jsonl` (125 scored questions + five canaries), and a byte-identical copy of the 19-note TRIBUN slice under `.brief/hafiza-obegi`. Its eight positives and one negative come from `bench/vm/.out/hafiza-obegi/OKU.md` in the read-only evidence checkout. Raw result: `bench/results/recall-2026-09-10-gate.json` (both phases, executable/gold hashes, machine, per-file corpus hashes, query terms, document frequencies, scores, overlaps and per-query decisions).
+
+**Fact — metric contract:** gate 5 is the existing `kos20.py` **gateless Query** recall measurement, not hook recall. Every candidate changes only the gate; the same measured rankings feed all candidate decisions. Do not interpret the gate-5 column below as post-gate recall. The actual hook metric is included separately so filtering losses remain visible. Recall follows the existing harness: a question succeeds when at least one gold slug occurs in the first k candidates; rejected candidates are not replaced from lower ranks.
+
+| candidate rule | gate 5 @3 / @5 (550) | hook @3 / @5 (550) | slice hook @3, /8 | negative injections, /6 |
+| --- | ---: | ---: | ---: | ---: |
+| baseline: mean ≥ 1, overlap ≥ 3 | 0.832 / 0.888 | 0.432 / 0.440 | 5 | 0 |
+| score ≥ top score × 0.50 | 0.832 / 0.888 | 0.488 / 0.496 | 8 | 2 |
+| score ≥ top score × 0.25 | 0.832 / 0.888 | 0.488 / 0.496 | 8 | 2 |
+| **mean ≥ strictScore × min(1, N/542)** | **0.832 / 0.888** | **0.432 / 0.440** | **8** | **0** |
+| mean ≥ strictScore × min(1, ln(1+N)/ln(543)) | 0.832 / 0.888 | 0.432 / 0.440 | 7 | 0 |
+| identity overlap / content terms ≥ 0.50, mean ≥ 1 | 0.832 / 0.888 | 0.048 / 0.048 | 5 | 0 |
+| fixed mean ≥ 0.50 | 0.832 / 0.888 | 0.488 / 0.496 | 7 | 2 |
+| fixed mean ≥ 0.25 | 0.832 / 0.888 | 0.488 / 0.496 | 7 | 2 |
+| fixed mean ≥ 0.10 | 0.832 / 0.888 | 0.488 / 0.496 | 8 | 2 |
+| fixed mean ≥ 0 | 0.832 / 0.888 | 0.488 / 0.496 | 8 | 2 |
+
+Unless the row explicitly replaces overlap, identity overlap remains ≥ 3. `mean` is `hit.Score / QueryTerms(prompt).Length`, including distinct folded prefix terms; identity overlap counts distinct content terms of length ≥ 4 on slug/title/aliases/tags, never the body. The negative failures of the permissive rules are q089 and q129; the slice negative stays empty throughout. Gate 5 thresholds ≥ 0.80 / 0.88 pass on the current live corpus. Baseline → final slice hook recall is 5/8 → 8/8 at both @3 and @5, and all eight gold notes remain rank 1. The live corpus hook remains 54/125 at @3 and 55/125 at @5, with 0/5 canaries injected. **A requirement for post-gate 0.80 / 0.88 would not be met by this change or by the measured baseline.**
+
+**Diagnosis:** BM25F IDF is `ln((N-df+0.5)/(df+0.5))`, floored at `1e-6` when nonpositive. Common topic words in a small topic slice therefore contribute almost nothing. S2/S3/S4 have mean scores 0.652047 / 0.896436 / 0.246233 despite correct rank-1 answers and identity overlaps 3 / 5 / 9. The old score threshold rejects them before overlap is checked. This reproduces the 5/8 hook result in the read-only `bench/vm/.out/kiyas/oom/T3-getirme.log` evidence.
+
+**Decision / inference:** linear scaling is the only measured candidate meeting all three observed criteria. It changes the score gate to `strictScore × min(1, max(1,N)/542)`; at N=19 its default is 0.035055. The 542 reference is a calibration constant tied to the historical gate-5 instrument, not a new ranking parameter. For N≥542 the old threshold applies exactly. Installer defaults remain strictScore=1.0 / minOverlap=3. The six negatives constrain this decision; they do not establish general false-positive safety on other small corpora.
+
+**Execution and limits:** `bench/gate/Gate.csproj` references the shipped C# project and invokes its `Rank`, `Query`, `ShouldInject` and `Hook` methods; reflection exposes the tokenizer, identity surface and intent reason for candidate analysis, without reimplementing BM25F. Python applies the candidate predicates to those measured scores. The final run asserts that the selected predicate matches every actual `Hook` result and that pre/post Query names **and scores** are identical on both corpora. Manifest checks confirm concept files were unchanged during and between runs. The published CLI batch also measured the live vault; its slice launch is blocked by `UnauthorizedAccessException` creating the Windows profile state directory, so that slice uses the actual C# `Query`/`Hook` entry points with no state path. End-to-end CLI hook execution in this sandbox and an exact historical 542-note rerun remain unmeasured.
+
+Reproduce from the worktree (offline packages already populated by the previous run):
+
+```powershell
+$env:DOTNET_CLI_HOME = "$PWD/.brief/local"
+$env:NUGET_PACKAGES = "$PWD/.nuget/packages"
+$env:TEMP = "$PWD/.brief/tmp"
+$env:TMP = $env:TEMP
+$env:DOTNET_BUNDLE_EXTRACT_BASE_DIR = "$PWD/.brief/gate/bundle"
+dotnet restore bench/gate/Gate.csproj --source .nuget/packages --packages .nuget/packages -p:NuGetAudit=false
+dotnet build bench/gate/Gate.csproj -c Release --no-restore
+dotnet publish src/Oom/Oom.csproj -c Release --no-restore -o publish/win-x64
+python bench/gate_measure.py --phase baseline # before the gate edit, retain this snapshot
+# Apply Y-110, then repeat build/publish.
+python bench/gate_measure.py --phase final
+dotnet test tests/Oom.Tests/Oom.Tests.csproj -c Release --no-restore
+```
+
+**Tests:** reference baseline supplied by the owner: 123 total / 116 passed / 7 known reds. This sandbox reproduced 123 / 111 / 12 before the change (`.brief/baseline-isolated-tests.txt`) and 124 / 112 / 12 after (`.brief/gate/final-tests.trx`). Seven scar reds remain Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098. Five pre-existing sandbox failures are `Gate12RetrieveJsonCarriesItsSchema`, `Gate12ContextJsonCarriesItsSchema`, `Gate12DoctorJsonCarriesItsSchema`, `Gate12ExtensionContextLineIsExecuted`, `Gate12FailingExtensionAddsNothing` (CLI exit -532462766). This continuation's baseline TRX additionally contains the deliberate `IntentionalRed` seed because an explicit filter overrode the default exclusion; exclude that seed for the comparable 123/111/12 totals. Y-110 fails with an empty hook before the edit (`.brief/gate/red-y110.trx`) and passes after (`.brief/gate/green-y110.trx`); it also checks unrelated and floor-IDF-only rejection, dedupe and explicit strictScore. Release build/publish passed. No new failure entered the comparable set.
+
 ## Local model measurement (gate 10)
 
 **`oom bench` is authoritative.** Spec 6.12 names the measurement `oom bench --backend claude|local`, and since lane P3 that command exists in the product (`src/Oom/Bench/Bench.cs`). It is the measurement of record: it grades the model through the shipped path — `Flush` produces the summary and validates its five-section shape, `CompilePrompt` builds the compile prompt and `Compile.ValidateOutputPaths` judges the answer — so the grader cannot drift from the code it grades. `yerel_olcum.py` stays as the offline cross-check: a second, independent implementation in Python that can be run without a build, and whose `--check-drift` guard re-reads the C# files and refuses to measure when the strings it copied no longer appear verbatim. If the two disagree, `oom bench` is right and the Python copy is stale.
