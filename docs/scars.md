@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 143, Geçti: 143, Başarısız: 0. Kapı testleriyle birlikte toplam 184 test, 184 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 150, Geçti: 150, Başarısız: 0. Kapı testleriyle birlikte toplam 191 test, 191 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -150,6 +150,13 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-181 | kurulum | `SetHook` kendi girdisini eklemeden önce `oom.exe` adı geçen **her** girdiyi siliyordu: ikinci bir kasa kurmak **birinci kasanın dört kancasını siliyor**, görevi, kısayolu ve MCP girdisini ikinciye çeviriyordu. İki kasa artık yan yana duruyor — kurulu exe ile kanıtlandı, ortak dosyaların sha256'sı iki kurulumdan sonra değişmedi | AyrismaTests.Y181_* | yeşil |
 | Y-182 | kurulum | Makine geneli kayıt artık en az dirençli yol değil: yalnız `--user-scope` bayrağı seçiyor, kısa biçimi ve ortam değişkeni yok, `install` her koşumda kapsamını basıyor. Bayrağın dispatcher'a gerçekten ulaştığı ayrıca doğrulanıyor | AyrismaTests.Y182_* | yeşil |
 | Y-183 | kurulum | Kaldırma iki kapsamı da geri alıyor ve yalnız kendi girdilerini söküyor: aynı proje dosyasındaki yabancı bir kanca yerinde kalıyor, komşu kasa bayt bayt aynı kalıyor, ve bizim hiçbir şeyimiz bulunmayan ortak dosya artık yeniden yazılmıyor | AyrismaTests.Y183_* | yeşil |
+| Y-170 | durum-deposu | Üçüncü DDL yeri: `Retrieve.Build()` kendi bağlantısını açıp `oom_index_meta`, `notes` ve `notes_fts`'i aynı `state.db` içinde yaratıyordu — şemanın tek sahibi olmasına rağmen. İndeks şeması artık `StateStore`'un merdiveninde; `Build()` sıfır DDL koşuyor | IndeksScars.Y170_* | yeşil |
+| Y-171 | durum-deposu | `Retrieve.Build()` kendi `Directory.CreateDirectory` çağrısını yapıyordu: test paketi her koşumda bir durum kökü sızdırıyordu (ölçüldü, sızan kökte yalnız indeks tabloları ve `user_version=0` vardı). Artık var olan dizin yazmanın koşulu; sızıntı bitti | IndeksScars.Y171_* | yeşil |
+| Y-172 | durum-deposu | Yeniden kurulum `DROP TABLE notes` ile şema sahibinin altından tabloyu alıyordu. Yerine aynı işlem içinde `DELETE` geldi: indeks indeks olarak yenileniyor, `ix_notes_updated` ve `user_version=4` yerinde kalıyor | IndeksScars.Y172_* | yeşil |
+| Y-173 | getirme | `retrieve_served` tablosu şemada vardı ve **hiçbir kod ona yazmıyordu**; dedupe süreçle ölen bir sözlükteydi, yani üretimde hiç çalışmıyordu. Onaylanmış teslimat artık ikinci bir açılışta susturuyor | GetirmeScars.Y173_* | yeşil |
+| Y-174 | getirme | Teslim edildiği doğrulanmamış bir blok teslim sayılıyordu. `prepared` yazan süreç ölürse satır bir sonraki açılışta `uncertain`e düşüyor ve **hiçbir şeyi susturmuyor** — hafıza tekrar eder, sessizce esirgenmez | GetirmeScars.Y174_* | yeşil |
+| Y-175 | getirme | Yedi günlük sessizlik bütün oturumlara yayılabilirdi: kapsam anahtarına `session_id` ve `query_sig` girdi. Yeni bir oturum kasanın tamamıyla başlıyor, aynı oturumda farklı bir soru aynı notu yeniden görebiliyor (Y-039) | GetirmeScars.Y175_* | yeşil |
+| Y-176 | durum-deposu | `Retrieve.Build()` işini denetlemeden başarı bildiriyordu — özellikle yeniden kurmayı atladığı yolda. `IndexVerifier` eksik/fazla/içerik kayması/digest uyuşmazlığı arıyor ve başarısızlıkta çıkış 1 veriyor; `Doctor` ikinci bir görüş üretmiyor, aynı doğrulayıcıya soruyor | IndeksScars.Y176_* | yeşil |
 
 ## Sınıf başına durum
 
@@ -158,11 +165,11 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | yazma-yolu | 24 | 0 |
 | özetleyici | 7 | 0 |
 | derleyici | 18 | 0 |
-| getirme | 13 | 0 |
+| getirme | 16 | 0 |
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
-| durum-deposu | 20 | 0 |
+| durum-deposu | 24 | 0 |
 | kurulum | 26 | 0 |
 | test-disiplini | 11 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **143** | **0** |
+| **Toplam** | **150** | **0** |
