@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 136, Geçti: 136, Başarısız: 0. Kapı testleriyle birlikte toplam 177 test, 177 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 139, Geçti: 139, Başarısız: 0. Kapı testleriyle birlikte toplam 180 test, 180 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -143,6 +143,9 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-140 | getirme | `notes_fts` ham not metninden kuruluyordu (FTS5 `unicode61` okur) ama sorgular `TurkishFold`'dan geliyordu: fikstürde altı Türkçe probun **üçü** sıralayıcıda doğru notu bulurken FTS'ten **boş** dönüyordu (`kapısı`, `çalışıyor`, `güvenlikten`). Ölü kodu olduğu gibi bağlamak o notları sessizce düşürürdü. İndeks artık fold edilmiş jetonlardan kuruluyor ve manifest digest'i indeks **biçimini** de kapsıyor | IndeksScars.Y140_* | yeşil |
 | Y-141 | getirme | `Retrieve.Candidates` FTS sorgusunu ve bm25 ağırlıklarını taşıyordu ama **hiçbir yerden çağrılmıyordu** — testteki aynı adlı yardımcı kendi ham SQL'ini koşuyordu, yani kapsama gibi görünen şey paralel bir kopyayı sınıyordu. `Query` ve `Hook` artık tek `Search()` üzerinden indekse gidiyor; `CandidateSource` (`fts` / `corpus-scan:no-index` / `corpus-scan:stale-index`) sayesinde bir koşum tarama yaparken "bağlandı" diyemiyor | GetirmeScars.Y141_* | yeşil |
 | Y-160 | kurulum | Uzantının `contextLine` değeri bir komuttur ve **çıktısı** SessionStart bloğuna, kapanış cümlesinin hemen önüne — blogun talimat ağırlığı en yüksek yerine — aynen basılıyordu. Sahibi hangi komutun koşacağını yapılandırır, ne basacağını yapılandırmaz. Fikstür kasada koşturularak kanıtlandı: hem talimat şeklinde bir satır hem bir API anahtarı bloğa sağlam ulaştı. Satır artık `Direction.Egress` kapısından geçiyor; talimat bulunursa uzantı bütünüyle düşürülüyor ve düşürüldüğü bloğun kendisinde yazıyor | GonderimSiniriScars.Y160_ExtensionOutputCrossesTheEgressGateBeforeEnteringTheSessionBlock | yeşil |
+| Y-161 | durum-deposu | Salt-okunur komutlar durum kökü yaratıyordu: `VaultPaths.StateDatabase()` sadece yolu sorana bile `Directory.CreateDirectory` çağırıyor, `OpenState()` ise koşulsuz yazma modunda açıyordu — her `--vault <geçici>` koşumu bir kök bırakıyordu. Kurulu exe ile kanıtlandı: `context`/`retrieve`/`mcp`/`doctor` artık kök yaratmıyor, `compile --dry-run` yaratıyor | DurumDeposuScars.Y161_* | yeşil |
+| Y-162 | durum-deposu | Başıboş kök taraması yazılmış ama `oom doctor`'ın bastığı tabloya hiç bağlanmamıştı; üretim `Program.Snapshot` kullanıyor, `Doctor.DefaultSnapshot` değil. Bağlandı — ve tarama `Doctor`'ın kendi varsayılanında kapalı kaldığı için test paketi sahibin gerçek veritabanlarını açmıyor | DurumDeposuScars.Y162_* | yeşil |
+| Y-163 | durum-deposu | Tarama `%LOCALAPPDATA%\oom` altındaki her dizini durum kökü sayıyordu; `backup`, `claude-config` ve `workspace` de başıboş kök diye listelenirdi. Yalnız kök biçimli adlar taranıyor | DurumDeposuScars.Y163_* | yeşil |
 
 ## Sınıf başına durum
 
@@ -154,8 +157,8 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | getirme | 13 | 0 |
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
-| durum-deposu | 17 | 0 |
+| durum-deposu | 20 | 0 |
 | kurulum | 22 | 0 |
 | test-disiplini | 11 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **136** | **0** |
+| **Toplam** | **139** | **0** |
