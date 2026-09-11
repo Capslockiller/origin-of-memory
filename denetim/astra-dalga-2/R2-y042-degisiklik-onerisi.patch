@@ -1,0 +1,246 @@
+Revised Y-042 change proposal — apex wave 2, lane R2
+=====================================================
+
+Status: PROPOSAL. Not applied. `tests/Oom.Tests/Scars/GetirmeScars.cs` is outside
+this lane's OWNS list, and — more importantly — this patch must not land before
+INT-3 produces the two evidence files it reads. Applying it today turns Y-042 red
+on a missing file, which is an honest red but not a useful one.
+
+Why this is not wave 1's patch
+------------------------------
+Wave 1 proposed pointing Y-042 at `bench/results/astra-dalga-1/recall-final.json`
+and reading its thresholds. The apex review found three holes in that, and this
+lane found the same three in the runner that would have produced the file:
+
+1. It asserted `identity.executable.verified` — a boolean the runner writes about
+   itself — and `binary_sha256` against `^[0-9a-f]{64}$`, which checks that a hash
+   is hexadecimal. Neither compares the measured binary to an accepted one.
+2. It read `thresholds.recall@3` / `thresholds.recall@5` out of the file it was
+   grading. A file that lowers its own block passes.
+3. It measured a corpus copy containing `knowledge/concepts/*.md` only, while
+   `Retrieve.Corrections()` also reads `<vault>/<companion>/Duzeltmeler.md` and
+   `Configuration.ReadRetrieve` reads five ranking keys out of `.oom/oom.json`.
+
+And it did not separate the indexed path from the full scan at all.
+
+`bench/verify_recall.py` (schema 2) closes all six. This patch is the consumer
+side: what Y-042 must check in the evidence that runner emits.
+
+Preconditions before applying
+-----------------------------
+- INT-3 has fixed the unified candidate and written its candidate manifest —
+  a file naming the accepted `source_commit` and the published exe's SHA-256,
+  authored in the lane that publishes, not in the lane that measures.
+- Two runs of `bench/verify_recall.py run` against that same exe:
+
+    python bench/verify_recall.py run \
+      --exe <published oom.exe> \
+      --candidate-manifest <manifest> \
+      --vault "<owner's vault>" \
+      --snapshot bench/.data/int3/snapshot \
+      --gold  .brief/gold-sorular.jsonl \
+      --expect-gold-sha256 d140ba3a624d574d... \
+      --index-mode full-scan \
+      --index-witness-note <note> --index-witness-query "<term> <shared term>" \
+      --raw bench/results/astra-dalga-2/raw/final-full-scan.stdout.txt \
+      --out bench/results/astra-dalga-2/recall-final-full-scan.json
+
+  and the same again with `--index-mode indexed` (after `oom sweep`/`oom compile`
+  has built the index), writing `recall-final-indexed.json`. The snapshot
+  destination must be empty or `--snapshot-reuse`d; the runner will not delete it.
+- Scar ledger rows for Y-250..Y-256 exist in `docs/scars.md` (see R2.md), so
+  Y-125 is green again.
+
+Cross-references
+----------------
+`tests/Oom.Tests/RecallCandidateBindingTests.cs` (this lane) already pins the
+contract itself — the manifest binding, the constant thresholds, the input
+inventory, the correction-id check, the before/after comparison, the two paths,
+and the witness probe against the real ranker — against committed fixture
+evidence. This patch is what makes Y-042 itself, the scar about a retrieval
+change regressing recall, enforce that contract on the product's own numbers.
+
+--------------------------------------------------------------------------------
+
+diff --git a/tests/Oom.Tests/Scars/GetirmeScars.cs b/tests/Oom.Tests/Scars/GetirmeScars.cs
+--- a/tests/Oom.Tests/Scars/GetirmeScars.cs
++++ b/tests/Oom.Tests/Scars/GetirmeScars.cs
+@@ -197,29 +197,113 @@
+-    [Fact(DisplayName = "Y-042 · Episodik ve kavram recall zemini aynı koşumda korunur")]
++    // yazan: claude · opus-5
++    /// <summary>
++    /// The floor has to come from a run, the run has to name the binary it measured, and the
++    /// binary has to be the one somebody accepted.
++    ///
++    /// <para>This test used to read its baseline out of
++    /// <c>bench/results/recall-2026-09-09-r2-gate.json</c> — the file <c>bench/PROVENANCE.md</c>
++    /// §3 names, by path, as its worked example of a results file that records
++    /// <c>index.error</c> and asserts <c>pass.recall@5: true</c> in the same breath. That file
++    /// carries none of §2's tuple, and the assertions never touched the ranking: they compared a
++    /// past run's numbers against constants, which passes whatever today's binary does, and the
++    /// one live assertion at the end checks that five concept results come back, which is a shape
++    /// rather than a recall.</para>
++    ///
++    /// <para>What it reads now is two measurements of one accepted binary, produced by
++    /// <c>bench/verify_recall.py</c>: the full scan and the indexed path, measured separately over
++    /// the same snapshot of every retrieval input. Four things are checked before any number is:
++    /// the binary is the one an externally issued candidate manifest names; every input was
++    /// snapshotted, hashed, and still had the same hash when the run ended; the retrieval output
++    /// described those inputs, correction ids included; and the path the file claims to have
++    /// measured was demonstrated by a witness rather than assumed. A recall computed over an
++    /// unidentified binary, a corpus that moved, or a "indexed" run that silently fell back to a
++    /// full scan is not a lower bound on anything.</para>
++    ///
++    /// <para>The thresholds are constants here. They are also constants in
++    /// <c>bench/verify_recall.py</c> and in <c>RecallCandidateBindingTests</c>, and they are read
++    /// from no file: a gate whose bar comes out of the evidence it is grading has no bar. The
++    /// class names are the gold set's own. <c>tek-not</c> and <c>cok-not</c> say how many notes
++    /// answer a question; they are not an episodic/concept split and are not renamed into one. The
++    /// episodic axis this scar's wording implies still has no instrument anywhere in this
++    /// repository, and each evidence file's <c>episodic_axis.measured</c> records that absence
++    /// rather than letting two unrelated labels stand in for it.</para>
++    /// </summary>
++    [Fact(DisplayName = "Y-042 · Getirme değişikliği, kabul edilen ikiliye bağlı ölçülmüş recall kanıtına çarpar")]
+     public void Y042_RetrievalChangeMustPassBothRecallAxes()
+     {
+-        // The fixture is the committed measurement, not a literal typed into the test: adding the
+-        // hand layer to the index is exactly the change that regressed the gold set once
+-        // (recall@3 102→94, recall@5 110→103), so the floor has to come from a recorded run.
+-        // The run carries two recall axes scored together — `tek-not`, where one specific note
+-        // answers, and `cok-not`, where several do. The episodic axis the scar's wording implies
+-        // has no measurement anywhere in this repository; these are the two axes that exist, and
+-        // the assertion fails if either is missing from the run or drops below its recorded value.
+-        var path = Path.Combine(ScarFixture.RepositoryRoot(), "bench", "results", "recall-2026-09-09-r2-gate.json");
+-        using var document = JsonDocument.Parse(File.ReadAllText(path));
+-        var classes = document.RootElement.GetProperty("per_sinif");
+-        var single = classes.GetProperty("tek-not");
+-        var multiple = classes.GetProperty("cok-not");
+-        Assert.True(single.GetProperty("n").GetInt32() >= 90);
+-        Assert.True(multiple.GetProperty("n").GetInt32() >= 20);
+-        Assert.True(single.GetProperty("recall@5").GetDouble() >= 0.85);   // recorded 0.8788
+-        Assert.True(multiple.GetProperty("recall@5").GetDouble() >= 0.90); // recorded 0.9231
+-        var overall = document.RootElement.GetProperty("overall");
+-        Assert.True(overall.GetProperty("recall@3").GetDouble() >= document.RootElement.GetProperty("thresholds").GetProperty("recall@3").GetDouble());
+-        Assert.True(overall.GetProperty("recall@5").GetDouble() >= document.RootElement.GetProperty("thresholds").GetProperty("recall@5").GetDouble());
++        // The two paths are two measurements. Neither may stand in for the other, and both are
++        // required: a change that keeps the full scan's recall while breaking the index's
++        // candidate generation is exactly the shape of regression this scar exists for.
++        var scan = Evidence("recall-final-full-scan.json");
++        var indexed = Evidence("recall-final-indexed.json");
++        Assert.Equal("full-scan", scan.RootElement.GetProperty("index_mode").GetString());
++        Assert.Equal("indexed", indexed.RootElement.GetProperty("index_mode").GetString());
++
++        // One accepted binary, one snapshot of inputs, two runs over it. Two files that disagree
++        // about either are two different experiments and cannot be read as one gate.
++        Assert.Equal(scan.RootElement.GetProperty("binary_sha256").GetString(),
++            indexed.RootElement.GetProperty("binary_sha256").GetString());
++        Assert.Equal(scan.RootElement.GetProperty("inputs").GetProperty("inputs_digest").GetString(),
++            indexed.RootElement.GetProperty("inputs").GetProperty("inputs_digest").GetString());
++
++        foreach (var document in new[] { scan, indexed })
++            AssertMeasuredTheAcceptedCandidate(document.RootElement);
++
++        scan.Dispose();
++        indexed.Dispose();
++
++        // And the hand layer must not swallow the concept axis in the live ranker: a query that
++        // no correction covers still returns its five concepts.
++        var vault = ScarFixture.RetrievalVault();
++        try
++        {
++            var measured = new Retrieve(new RetrieveOptions(VaultPath: vault, Top: 5))
++                .Query("gold set kapsama eşik kanarya sınıf", "benchmark-" + Guid.NewGuid().ToString("N")[..8], 5);
++            Assert.Equal(5, measured.Hits.Count);
++            Assert.All(measured.Hits, hit => Assert.Equal("concept", hit.Source));
++        }
++        finally
++        {
++            ScarFixture.Remove(vault);
++        }
++    }
++
++    // The gate. Written here, in bench/verify_recall.py, and in RecallCandidateBindingTests;
++    // read from no evidence file.
++    private const double Y042RecallAt3 = 0.80;
++    private const double Y042RecallAt5 = 0.88;
++    private const int Y042ScoredMinimum = 125;
++
++    private static JsonDocument Evidence(string name)
++    {
++        var path = Path.Combine(ScarFixture.RepositoryRoot(), "bench", "results", "astra-dalga-2", name);
++        Assert.True(File.Exists(path),
++            $"ölçülmüş recall kanıtı yok: bench/results/astra-dalga-2/{name} — bench/verify_recall.py "
++            + "run ile üretin (bkz. denetim/astra-dalga-2/R2.md)");
++        return JsonDocument.Parse(File.ReadAllText(path));
++    }
++
++    private static void AssertMeasuredTheAcceptedCandidate(JsonElement root)
++    {
++        // 1. the binary is the one the candidate manifest names, compared rather than described.
++        var candidate = root.GetProperty("candidate");
++        Assert.True(candidate.GetProperty("exe_matches_manifest").ValueKind == JsonValueKind.True,
++            "exe aday manifestine karşı doğrulanmadı");
++        Assert.Equal(candidate.GetProperty("publish").GetProperty("sha256").GetString(),
++            root.GetProperty("binary_sha256").GetString());
++        Assert.Equal(candidate.GetProperty("source_commit").GetString(),
++            root.GetProperty("source_commit").GetString());
++
++        // 2. the inputs were snapshotted, and they did not move while the run was in flight.
++        var inputs = root.GetProperty("inputs");
++        Assert.True(inputs.GetProperty("snapshot").GetProperty("disjoint").GetBoolean());
++        Assert.True(inputs.GetProperty("corrections").GetProperty("present").GetBoolean(),
++            "düzeltmeler ölçülen girdilerde yok: Retrieve.Corrections() onları okuyor");
++        Assert.True(root.GetProperty("identity_stability").GetProperty("stable").GetBoolean());
++
++        // 3. the output described those inputs, and the path was demonstrated, not assumed.
++        Assert.Equal("ok", root.GetProperty("run_status").GetString());
++        Assert.True(root.GetProperty("output_integrity").GetProperty("ok").GetBoolean());
++        Assert.True(root.GetProperty("index_witness").GetProperty("proven").GetBoolean(),
++            "ölçülen getirme yolu kanıtlanmadı: sessiz tam tarama indeksli kanıt sayılmaz");
++
++        // 4. only now, the numbers — against constants.
++        var overall = root.GetProperty("overall");
++        Assert.True(overall.GetProperty("n").GetInt32() >= Y042ScoredMinimum);
++        Assert.True(overall.GetProperty("recall@3").GetDouble() >= Y042RecallAt3);
++        Assert.True(overall.GetProperty("recall@5").GetDouble() >= Y042RecallAt5);
++
++        // Both answer-cardinality classes stay present and keep their floors: an overall number can
++        // hold while one class collapses, which is how adding the hand layer to the index regressed
++        // the gold set once (recall@3 102→94, recall@5 110→103).
++        var classes = root.GetProperty("per_sinif");
++        var single = classes.GetProperty("tek-not");
++        var multiple = classes.GetProperty("cok-not");
++        Assert.True(single.GetProperty("n").GetInt32() >= 90);
++        Assert.True(multiple.GetProperty("n").GetInt32() >= 20);
++        Assert.True(single.GetProperty("recall@5").GetDouble() >= 0.85);
++        Assert.True(multiple.GetProperty("recall@5").GetDouble() >= 0.90);
++
++        // The hook path and the negative controls are measured in the same pass and reported in
++        // their own block; they are read here as their own thing and never as a recall.
++        var controls = root.GetProperty("controls");
++        Assert.Equal("kanarya", controls.GetProperty("negative_controls").GetProperty("label").GetString());
++        Assert.Contains("never a substitute", controls.GetProperty("measures").GetString()!, StringComparison.Ordinal);
++
++        // The episodic axis stays open rather than being manufactured out of two labels that do
++        // not mean it.
++        Assert.False(root.GetProperty("episodic_axis").GetProperty("measured").GetBoolean());
++    }
++
+--------------------------------------------------------------------------------
+
+How to read this diff
+---------------------
+The live-ranker block at the end of the old method is kept verbatim, but it moves
+from the end of the method into the middle of it, and a hand-written unified diff
+cannot express a move — so it appears in the added hunk above and its old copy is
+simply gone. The applied file should contain exactly: the rewritten
+`Y042_RetrievalChangeMustPassBothRecallAxes`, the three `Y042*` constants,
+`Evidence`, and `AssertMeasuredTheAcceptedCandidate`. Nothing else in
+`GetirmeScars.cs` changes.
+
+If the measurement comes back below the gate
+--------------------------------------------
+The result is kept and the gate stays red. The thresholds are not moved, the gold
+set is not edited, and a `run_status` other than `"ok"` is not argued past: under
+PROVENANCE.md §3 such a file carries no verdict at all, and this test refuses it
+at `Assert.Equal("ok", ...)` before it ever reaches a number.

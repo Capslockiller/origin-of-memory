@@ -1,0 +1,187 @@
+{
+  "binary_sha256": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30",
+  "candidate": {
+    "candidate_id": "astra-dalga-2-selftest-fixture",
+    "checkout_is_not_provenance": true,
+    "checkout_matches_manifest": true,
+    "exe_matches_manifest": true,
+    "issued_at": "2026-09-11",
+    "issued_by": "bench/verify_recall.py selftest (fixture; INT-3 supplies the real one)",
+    "manifest_path": "<repo>\\bench\\.data\\verify\\candidate-manifest.json",
+    "manifest_sha256": "0bc4819a9063c5339647f474756fd940739f02ccde5e8c7392c8e94ca96091e2",
+    "publish": {
+      "exe": "oom.exe",
+      "sha256": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30"
+    },
+    "runner_checkout_commit": "bec80ca25be2242e08266fb4b8cf4419c854d7dc",
+    "source_commit": "bec80ca25be2242e08266fb4b8cf4419c854d7dc",
+    "why": "the executable's provenance is this manifest, not the commit the runner happens to sit on: the lane that measures is not the lane that builds, and git rev-parse in the measuring tree describes neither the exe nor the tree it came from"
+  },
+  "command": "python bench/verify_recall.py selftest --exe <repo>/src/Oom/bin/Release/net9.0-windows10.0.19041.0/win-x64/oom.exe --measured-by 'claude · opus-5' --hook-sample 10",
+  "controls": null,
+  "decision": null,
+  "episodic_axis": {
+    "measured": false,
+    "reason": "No instrument in this repository measures an episodic recall axis. The gold set's classes are answer-cardinality labels (one note answers vs several); they are reported here under their own names and are NOT renamed to 'episodic'/'concept'. This axis is open, not covered."
+  },
+  "gate": "recall-evidence",
+  "identity": {
+    "backend_prefix": null,
+    "corpus": {
+      "expected": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2",
+      "files": 160,
+      "measured_vault": "<repo>\\bench\\.data\\verify\\snapshot",
+      "sha256": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2",
+      "snapshot": true,
+      "source_vault": "<repo>\\bench\\.data\\verify\\fixture",
+      "verified": true
+    },
+    "corrections": {
+      "bytes": 193,
+      "expected": "1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f",
+      "headings": 2,
+      "ids": [
+        "Duzeltmeler.md#1",
+        "Duzeltmeler.md#2"
+      ],
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\🔮 850-Companion\\Duzeltmeler.md",
+      "present": true,
+      "retires": [
+        "fix-003.md"
+      ],
+      "sha256": "1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f",
+      "titles": [
+        "Fikstur duzeltmesi bir",
+        "Fikstur duzeltmesi iki"
+      ],
+      "verified": true
+    },
+    "executable": {
+      "expected": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30",
+      "expected_from": "candidate manifest",
+      "path": "<repo>\\src\\Oom\\bin\\Release\\net9.0-windows10.0.19041.0\\win-x64\\oom.exe",
+      "sha256": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30",
+      "verified": true
+    },
+    "gold": {
+      "canaries": 5,
+      "expected": "ec7b12c1e507c5febe3e1e974b25d390adf2659f7a3366799dd1aa44548909e4",
+      "path": "<repo>\\bench\\.data\\verify\\fixture\\gold-fixture.jsonl",
+      "rows": 130,
+      "scored": 125,
+      "sha256": "ec7b12c1e507c5febe3e1e974b25d390adf2659f7a3366799dd1aa44548909e4",
+      "verified": true
+    },
+    "inputs_digest": "59f287bba96901b01595e34d8af7cd9dd0063ba7e46a707fc9d211d0f16d0c3c",
+    "settings": {
+      "expected": "5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2",
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\.oom\\oom.json",
+      "present": true,
+      "retrieval_keys": {
+        "minOverlap": 1,
+        "perNoteChars": 600,
+        "strictScore": 0.0,
+        "top": 5,
+        "totalChars": 3000
+      },
+      "sha256": "5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2",
+      "verified": true
+    }
+  },
+  "identity_stability": null,
+  "index": {
+    "manifest": null,
+    "mode": "full-scan",
+    "note": "there is no CLI flag that moves the product's state root; it is derived from the vault path (VaultPaths.Hash). --state-root exists for fixtures that drive a backend shim, and any override is recorded here.",
+    "state_db": "<home>\\AppData\\Local\\oom\\b0a5c1bfae86b9aa\\state.db",
+    "state_db_present": false,
+    "state_db_sha256_before": null,
+    "state_root_derived": "<home>\\AppData\\Local\\oom\\b0a5c1bfae86b9aa",
+    "state_root_overridden": false,
+    "state_root_used": "<home>\\AppData\\Local\\oom\\b0a5c1bfae86b9aa"
+  },
+  "index_mode": "full-scan",
+  "index_witness": null,
+  "inputs": {
+    "corpus": {
+      "dir": "knowledge/concepts",
+      "files": 160,
+      "sha256": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2"
+    },
+    "corrections": {
+      "bytes": 193,
+      "headings": 2,
+      "ids": [
+        "Duzeltmeler.md#1",
+        "Duzeltmeler.md#2"
+      ],
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\🔮 850-Companion\\Duzeltmeler.md",
+      "present": true,
+      "retires": [
+        "fix-003.md"
+      ],
+      "sha256": "1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f",
+      "titles": [
+        "Fikstur duzeltmesi bir",
+        "Fikstur duzeltmesi iki"
+      ]
+    },
+    "inputs_digest": "59f287bba96901b01595e34d8af7cd9dd0063ba7e46a707fc9d211d0f16d0c3c",
+    "settings": {
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\.oom\\oom.json",
+      "present": true,
+      "retrieval_keys": {
+        "minOverlap": 1,
+        "perNoteChars": 600,
+        "strictScore": 0.0,
+        "top": 5,
+        "totalChars": 3000
+      },
+      "sha256": "5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2"
+    },
+    "snapshot": {
+      "destination": "<repo>\\bench\\.data\\verify\\snapshot",
+      "disjoint": true,
+      "problems": [
+        "snapshot destination is not empty (3 entries) and --snapshot-reuse was not given; refusing to delete it"
+      ],
+      "requested": true,
+      "reused": false,
+      "source": "<repo>\\bench\\.data\\verify\\fixture"
+    }
+  },
+  "measured": "2026-09-11",
+  "measured_by": "claude · opus-5",
+  "overall": null,
+  "pass": null,
+  "per_sinif": null,
+  "raw_artifact": "none-kept",
+  "refused_before_measuring": true,
+  "run_status": "invalid",
+  "run_status_reasons": [
+    "snapshot destination is not empty (3 entries) and --snapshot-reuse was not given; refusing to delete it"
+  ],
+  "schema": 2,
+  "source_commit": "bec80ca25be2242e08266fb4b8cf4419c854d7dc",
+  "substitute": {
+    "active": false,
+    "for": null,
+    "reason": null
+  },
+  "thresholds": {
+    "authority": "not this file. These values are constants in bench/verify_recall.py and are mirrored as constants in tests/Oom.Tests/RecallCandidateBindingTests.cs. They are recorded here so a reader can see what was applied; a consumer that reads its bar out of this block lets the evidence set its own exam.",
+    "per_sinif": {
+      "cok-not": {
+        "n": 20,
+        "recall@5": 0.9
+      },
+      "tek-not": {
+        "n": 90,
+        "recall@5": 0.85
+      }
+    },
+    "recall@3": 0.8,
+    "recall@5": 0.88,
+    "scored_minimum": 125
+  }
+}

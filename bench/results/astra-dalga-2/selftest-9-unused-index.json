@@ -1,0 +1,3740 @@
+{
+  "backend": {
+    "command": "<home>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe <repo>\\bench\\.data\\verify\\index_backend.py --shim-state-db <repo>\\bench\\.data\\verify\\fixture-state-root\\state.db --ignore-index <repo>\\src\\Oom\\bin\\Release\\net9.0-windows10.0.19041.0\\win-x64\\oom.exe --vault <repo>\\bench\\.data\\verify\\snapshot retrieve --batch <repo>\\bench\\.data\\verify\\gold-batch.jsonl --top 5",
+    "elapsed_ms": 79.7,
+    "read_only": true,
+    "returncode": 0
+  },
+  "binary_sha256": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30",
+  "candidate": {
+    "candidate_id": "astra-dalga-2-selftest-fixture",
+    "checkout_is_not_provenance": true,
+    "checkout_matches_manifest": true,
+    "exe_matches_manifest": true,
+    "issued_at": "2026-09-11",
+    "issued_by": "bench/verify_recall.py selftest (fixture; INT-3 supplies the real one)",
+    "manifest_path": "<repo>\\bench\\.data\\verify\\candidate-manifest.json",
+    "manifest_sha256": "0bc4819a9063c5339647f474756fd940739f02ccde5e8c7392c8e94ca96091e2",
+    "publish": {
+      "exe": "oom.exe",
+      "sha256": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30"
+    },
+    "runner_checkout_commit": "bec80ca25be2242e08266fb4b8cf4419c854d7dc",
+    "source_commit": "bec80ca25be2242e08266fb4b8cf4419c854d7dc",
+    "why": "the executable's provenance is this manifest, not the commit the runner happens to sit on: the lane that measures is not the lane that builds, and git rev-parse in the measuring tree describes neither the exe nor the tree it came from"
+  },
+  "command": "python bench/verify_recall.py selftest --exe <repo>/src/Oom/bin/Release/net9.0-windows10.0.19041.0/win-x64/oom.exe --measured-by 'claude · opus-5' --hook-sample 10",
+  "controls": {
+    "detail": [
+      {
+        "id": "q126",
+        "injected": false,
+        "reason": null,
+        "sinif": "kanarya"
+      },
+      {
+        "id": "q127",
+        "injected": false,
+        "reason": null,
+        "sinif": "kanarya"
+      },
+      {
+        "id": "q128",
+        "injected": false,
+        "reason": null,
+        "sinif": "kanarya"
+      },
+      {
+        "id": "q129",
+        "injected": false,
+        "reason": null,
+        "sinif": "kanarya"
+      },
+      {
+        "id": "q130",
+        "injected": false,
+        "reason": null,
+        "sinif": "kanarya"
+      },
+      {
+        "id": "q001",
+        "injected": false,
+        "reason": null,
+        "sinif": "cok-not"
+      },
+      {
+        "id": "q002",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      },
+      {
+        "id": "q003",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      },
+      {
+        "id": "q004",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      },
+      {
+        "id": "q005",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      },
+      {
+        "id": "q006",
+        "injected": false,
+        "reason": null,
+        "sinif": "cok-not"
+      },
+      {
+        "id": "q007",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      },
+      {
+        "id": "q008",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      },
+      {
+        "id": "q009",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      },
+      {
+        "id": "q010",
+        "injected": false,
+        "reason": null,
+        "sinif": "tek-not"
+      }
+    ],
+    "instrument": "oom.exe --vault <vault> retrieve --hook  (stdin: UserPromptSubmit payload)",
+    "measures": "the hook path's injection decision; NOT recall, and never a substitute for it",
+    "negative_controls": {
+      "false_positive_rate": 0.0,
+      "injected": 0,
+      "label": "kanarya",
+      "n": 5
+    },
+    "pass": null,
+    "positive_sample": {
+      "injected": 0,
+      "injection_rate": 0.0,
+      "n": 10
+    },
+    "vacuous": true,
+    "vacuous_note": "the positive sample never injected, so a zero false-positive rate on the negative controls distinguishes nothing"
+  },
+  "corpus_manifest": [
+    {
+      "bytes": 358,
+      "name": "fix-000.md",
+      "sha256": "584fcc96281570a55888b203c22336619dc238f0f2f3c4430d7a8d74b0c54a2a"
+    },
+    {
+      "bytes": 292,
+      "name": "fix-001.md",
+      "sha256": "0f30cbb4726567e7dd8fb4c249d4bc791fb025d1256b7ee923dad2c8c14eba6a"
+    },
+    {
+      "bytes": 301,
+      "name": "fix-002.md",
+      "sha256": "e2c7802b3e4324c37e7847735c18c9bbd36e6e15deaae052e057c24e5c9b80ab"
+    },
+    {
+      "bytes": 348,
+      "name": "fix-003.md",
+      "sha256": "374d7342214515b6b33d7987e1c16a3c3fe9ded824577beea307d2c2e7aac53e"
+    },
+    {
+      "bytes": 343,
+      "name": "fix-004.md",
+      "sha256": "a5dbbafa3d8a237792f69e4d6c581a528bb2f771d291e787386fa73eb12b876e"
+    },
+    {
+      "bytes": 313,
+      "name": "fix-005.md",
+      "sha256": "5cc1e58b9f0aeca29c9f905ec534dad107ab2339bb9f69c77fb3a1e1016c6f6c"
+    },
+    {
+      "bytes": 369,
+      "name": "fix-006.md",
+      "sha256": "7332ed0f4aecfe781bbe206238d92287ab275a72d8576b2d28e93e26725f874c"
+    },
+    {
+      "bytes": 316,
+      "name": "fix-007.md",
+      "sha256": "5cda8d96639b78f946a9eeccf19caef6bc10e7cac975bb324dbe2befedf5e903"
+    },
+    {
+      "bytes": 363,
+      "name": "fix-008.md",
+      "sha256": "0dd070ee3fe210add84848374437d9c6b02dfd16b3efa206a48eec6a28bf98cd"
+    },
+    {
+      "bytes": 374,
+      "name": "fix-009.md",
+      "sha256": "e246c1aa2242ed3fad35c7bb6a0a7ab5012f0dc60d3de8e6d6677cc4c630e8c3"
+    },
+    {
+      "bytes": 319,
+      "name": "fix-010.md",
+      "sha256": "ee37b55e42b2cba4c9a386feb576b7bf715c7cf073f162ae504cc389f1a910e8"
+    },
+    {
+      "bytes": 392,
+      "name": "fix-011.md",
+      "sha256": "ca2c71c76cc8057dc8219b2f6cbeabc376de9714b8420de87c2d66013ff8ced2"
+    },
+    {
+      "bytes": 389,
+      "name": "fix-012.md",
+      "sha256": "86e4e61ac05897adbd7efae60876f20a5f7d5221334b657f50dc16a6e83d1c7b"
+    },
+    {
+      "bytes": 345,
+      "name": "fix-013.md",
+      "sha256": "ffcaa11f7435c0dc89dee5581559a0afb28db417d160ef9b579c8ca4329dd3c3"
+    },
+    {
+      "bytes": 358,
+      "name": "fix-014.md",
+      "sha256": "f9b63964bfe6330af49060312cbcf4a6438c3e93302fd1410df4fb3ef0552f74"
+    },
+    {
+      "bytes": 313,
+      "name": "fix-015.md",
+      "sha256": "5722a6ccc1637798d96bf4523822335e783642d4d1cb333a06802ff7cffdee7c"
+    },
+    {
+      "bytes": 391,
+      "name": "fix-016.md",
+      "sha256": "14ebe32e53469cf506dfa2ccaab705f8ee377e38310239a859c394f985648645"
+    },
+    {
+      "bytes": 304,
+      "name": "fix-017.md",
+      "sha256": "376b41602c90aaf662d5d000a8c769ec1bcfe4e8ecddf6d3d63123f00ed25ec6"
+    },
+    {
+      "bytes": 353,
+      "name": "fix-018.md",
+      "sha256": "2928692c04ffe5ef27228ae72937d28de2fb34fcb251e0c97fa88684d46b2837"
+    },
+    {
+      "bytes": 385,
+      "name": "fix-019.md",
+      "sha256": "14778a29a68f96ae7b1493fb9422c18e5468612533473cad95d8ea67f20c76f1"
+    },
+    {
+      "bytes": 356,
+      "name": "fix-020.md",
+      "sha256": "9564a64ab3c296a9417def937cdf668ea73161c5edd7d01f6613b62c144ec0b6"
+    },
+    {
+      "bytes": 359,
+      "name": "fix-021.md",
+      "sha256": "fb9bed27f4c448f1d0c6816d646be62a427bee4e831ddaddeae387843b72bc98"
+    },
+    {
+      "bytes": 361,
+      "name": "fix-022.md",
+      "sha256": "26b96c5dde05cecb8c7754746105856fe2c697ab9b4e3b8ba7ce74c5edc2986e"
+    },
+    {
+      "bytes": 311,
+      "name": "fix-023.md",
+      "sha256": "ce53730d9c8d303081a02d8d16164d563a375afdf64a4c858e7f51f20f746d15"
+    },
+    {
+      "bytes": 390,
+      "name": "fix-024.md",
+      "sha256": "4b76c309adfa87530fc63cf3bf8551481a531560e1d6fe68e77686bab4173f59"
+    },
+    {
+      "bytes": 306,
+      "name": "fix-025.md",
+      "sha256": "c1a7346eeba6eda1b3907e91e6974d9959bd363a7bf81bde7d4fbf841ada6339"
+    },
+    {
+      "bytes": 310,
+      "name": "fix-026.md",
+      "sha256": "b568164e9373ef1badd71e0713ae8dd545e31b76bcf2968347f5f022a514b511"
+    },
+    {
+      "bytes": 323,
+      "name": "fix-027.md",
+      "sha256": "f0c5ca7639b40377a2e35c7acef5a659ef9adfc81feeea510ce337a7852f2924"
+    },
+    {
+      "bytes": 303,
+      "name": "fix-028.md",
+      "sha256": "2ae1ffa2ad82bede2e552400933e43d5ff172b37dd8638feba30df3454c90d53"
+    },
+    {
+      "bytes": 318,
+      "name": "fix-029.md",
+      "sha256": "2054cd4531ac5837a5c54bdf246f98380541a052d534f2985bc04ac9d4de0327"
+    },
+    {
+      "bytes": 335,
+      "name": "fix-030.md",
+      "sha256": "d4edb0e405ff74a10b72aba5a9858c5e1ec0eb48381b353778127ad591199b99"
+    },
+    {
+      "bytes": 401,
+      "name": "fix-031.md",
+      "sha256": "4b528993f6a2b9331bf4488ec501d0da7f5e101f72ace9f88f2088d4e5766a68"
+    },
+    {
+      "bytes": 326,
+      "name": "fix-032.md",
+      "sha256": "244b6106b88a2bb3b190d5362088d9891d5af4952657a65b2b8f07f662a68bfc"
+    },
+    {
+      "bytes": 292,
+      "name": "fix-033.md",
+      "sha256": "1005f19f6a2e44652da6606d6d6c1e6144217223eba4fa7c2c41ff948102f7a0"
+    },
+    {
+      "bytes": 339,
+      "name": "fix-034.md",
+      "sha256": "f2893fb2490f8041cdedc6de108d3a2b1421d72f66e3d94b8ea48c7ec093dde4"
+    },
+    {
+      "bytes": 355,
+      "name": "fix-035.md",
+      "sha256": "b807aa21a661f1043bba56c3c44c7d095d3d3f45c522bcb711c1e0e22224ed2c"
+    },
+    {
+      "bytes": 319,
+      "name": "fix-036.md",
+      "sha256": "4872045c094c3659c7856c17c661786f1f93b9db7bdf3f2f83ff8b7bc672d64d"
+    },
+    {
+      "bytes": 371,
+      "name": "fix-037.md",
+      "sha256": "68377be5603cb98b219c8b4500a76cabd1f5ffd0846abd77416244cbdc30f178"
+    },
+    {
+      "bytes": 323,
+      "name": "fix-038.md",
+      "sha256": "d755560efcafabd6855b919c3ad84fed805d6555eb2ae37252e19053da7a8665"
+    },
+    {
+      "bytes": 301,
+      "name": "fix-039.md",
+      "sha256": "b7795876c4dbd92a2082494f2c3b3ba6c485425690026d8b28820fdb7982376e"
+    },
+    {
+      "bytes": 390,
+      "name": "fix-040.md",
+      "sha256": "deef1596a847475aff0e47eb2fe65b8f712f1bd4afcfd075680a0502ecedc13b"
+    },
+    {
+      "bytes": 354,
+      "name": "fix-041.md",
+      "sha256": "0f8382a517aae9c018fb6f17c6eb9d85b81863c912aa4adc349bae9df5e7e6a3"
+    },
+    {
+      "bytes": 302,
+      "name": "fix-042.md",
+      "sha256": "121bd687a7fcc51fea420e28d732522d5ff5a0e5a256fb021fedc99df8ec4229"
+    },
+    {
+      "bytes": 377,
+      "name": "fix-043.md",
+      "sha256": "2cd9f84185e77f6e56a715b84ca7f022f03897ae648a7526035f3e75ef2a967c"
+    },
+    {
+      "bytes": 300,
+      "name": "fix-044.md",
+      "sha256": "095fa029c31dc318c46415ac2424cce4a5f790f83a1d1a8d3cdea27e270b0e2f"
+    },
+    {
+      "bytes": 318,
+      "name": "fix-045.md",
+      "sha256": "a6fd670cab56ab4b3b263a944f97da7134e3002733cea03d41f35586d9c5ce60"
+    },
+    {
+      "bytes": 361,
+      "name": "fix-046.md",
+      "sha256": "b9ebfc6d77efc54b7f1df9dddbe1beb559c186e6f4f4769e430de7040121243f"
+    },
+    {
+      "bytes": 348,
+      "name": "fix-047.md",
+      "sha256": "859f3b7b7060750a80970f15b11ef4fc380bd921e7dc94544be8656395538424"
+    },
+    {
+      "bytes": 316,
+      "name": "fix-048.md",
+      "sha256": "65a7207499ab48c9f6734a2df721c1c52554641ebd75f9bbfaa5055c12da6acc"
+    },
+    {
+      "bytes": 370,
+      "name": "fix-049.md",
+      "sha256": "b0f9efbb975847239668124a8dbf903ee53b64765984c5c77cb9b022fd055474"
+    },
+    {
+      "bytes": 346,
+      "name": "fix-050.md",
+      "sha256": "3a2dd79eb2ac9152b8adaf35555811ca418748ec34c452114165d8870fc8ccfb"
+    },
+    {
+      "bytes": 304,
+      "name": "fix-051.md",
+      "sha256": "30a763860b4f44a83c10f8c93df75781bc625896a18a20e04cd13f5674a86256"
+    },
+    {
+      "bytes": 316,
+      "name": "fix-052.md",
+      "sha256": "6eef3c5986fd2f2a4e20df8847a9a90ffd3c14089ccefd7b5c111f5299cd6ddf"
+    },
+    {
+      "bytes": 353,
+      "name": "fix-053.md",
+      "sha256": "d83c47494efa8e71e2bb8da3db1d0e630beeeab5d4ead2bb402872732d993dbc"
+    },
+    {
+      "bytes": 351,
+      "name": "fix-054.md",
+      "sha256": "1583ed8d54255bf3f3dfff49b00df71ffc2a8a11fb3b14a8a0219cf5e31fb0f7"
+    },
+    {
+      "bytes": 292,
+      "name": "fix-055.md",
+      "sha256": "565b73c3dc1079e72cf32d16a284bd02801bc219aa1ac3cbd6df283a7c398119"
+    },
+    {
+      "bytes": 363,
+      "name": "fix-056.md",
+      "sha256": "8529e527d6a0ff5b7581d2667379228409fab69a2d83c96eab3d8d229d9b495d"
+    },
+    {
+      "bytes": 331,
+      "name": "fix-057.md",
+      "sha256": "607cbda3f65e875082f9404cd45ffdd37cc2177fc9cc54860b80c3c35cfe3f7c"
+    },
+    {
+      "bytes": 316,
+      "name": "fix-058.md",
+      "sha256": "3015de75cf5d1803d341ed53da4a8920b1283c85963e2da8b6035682a9d8f31a"
+    },
+    {
+      "bytes": 317,
+      "name": "fix-059.md",
+      "sha256": "a2ca355e01ed95cf459d4658f4ce3aae9d54d41e194ed1a086360f39606582ce"
+    },
+    {
+      "bytes": 348,
+      "name": "fix-060.md",
+      "sha256": "234f92cc3e89f5c9af91c2bd0174614b02b1b34a1e775244e6160315279f44ce"
+    },
+    {
+      "bytes": 352,
+      "name": "fix-061.md",
+      "sha256": "228db4e1dc7ed40db60b57ea14c9ddd91e6d5bde9cd493410489b75cfcfd176d"
+    },
+    {
+      "bytes": 332,
+      "name": "fix-062.md",
+      "sha256": "a12cf499c8bafd727b93228e2e3003ee3c64eb6ff8906428a3972fba2eefef5f"
+    },
+    {
+      "bytes": 393,
+      "name": "fix-063.md",
+      "sha256": "3a7cddbe27cfc0a3e5bf01d707523adde9ef55aaf516e1d11864da7d1b1a4889"
+    },
+    {
+      "bytes": 372,
+      "name": "fix-064.md",
+      "sha256": "98ea77a5914a5e6685cff1530f921de45e27ef4a94bbdecb47c5b9e4c8bf748c"
+    },
+    {
+      "bytes": 339,
+      "name": "fix-065.md",
+      "sha256": "e0e0a76ca091eb9841d8a78cc0301ba6b34b11619bcb2781ffb0293d57857631"
+    },
+    {
+      "bytes": 333,
+      "name": "fix-066.md",
+      "sha256": "b406cf50eed0a4f7c6f808ae48d60b4bbba2db2ea5ce5dae4c7932adf9a66140"
+    },
+    {
+      "bytes": 369,
+      "name": "fix-067.md",
+      "sha256": "2b1c80de290b175ca506e3d61d6448d19adc96aaa36641321e5cb29ed9d84fbb"
+    },
+    {
+      "bytes": 363,
+      "name": "fix-068.md",
+      "sha256": "e52ce61f56f5c3d58f0eb7d1e5d3928dc5db7d9e637446ab2420b6a717d5d7ff"
+    },
+    {
+      "bytes": 386,
+      "name": "fix-069.md",
+      "sha256": "322c9c65cd5bb0a87e1cff0edb198b33d5a602091825dd3819550024b642b3be"
+    },
+    {
+      "bytes": 359,
+      "name": "fix-070.md",
+      "sha256": "ce926bb2a5782a834637ad7e850cf873dd6246dfd41d91f6913f590f3c6e2aaa"
+    },
+    {
+      "bytes": 368,
+      "name": "fix-071.md",
+      "sha256": "334f80d6978faf8fc93802654c752270c8c3ddcf47d0df6895c0832c3fc76850"
+    },
+    {
+      "bytes": 393,
+      "name": "fix-072.md",
+      "sha256": "2e30af0232beb1dd6ad6acea97f0de69b97d7d9cbde8976ce31781119358fe2b"
+    },
+    {
+      "bytes": 327,
+      "name": "fix-073.md",
+      "sha256": "3352a0ded418c7bbbbb959685d3a0227d0abdd155388445fa9738ea0cdba3d47"
+    },
+    {
+      "bytes": 337,
+      "name": "fix-074.md",
+      "sha256": "ea8025f15c1d337028812c3391a5537898c8008e952ef49f105e99b006e0f048"
+    },
+    {
+      "bytes": 291,
+      "name": "fix-075.md",
+      "sha256": "b424caad5c9fd6eda5b83963367374f3de290edcf4ec7a3bc9a7434a94326ad9"
+    },
+    {
+      "bytes": 345,
+      "name": "fix-076.md",
+      "sha256": "a1d3e5c587ce631e3a20882c8e9a5146d01611d0edce019fc2a0b02f0f8a9fa9"
+    },
+    {
+      "bytes": 394,
+      "name": "fix-077.md",
+      "sha256": "ea3142ec4e61d4ce4d1b704ebcde130209cb44a18d995ac29500683dc4036f63"
+    },
+    {
+      "bytes": 378,
+      "name": "fix-078.md",
+      "sha256": "b1043e184afad2cba64a5652bf12a31506871144f2ee541b88ff3d4226a5a187"
+    },
+    {
+      "bytes": 304,
+      "name": "fix-079.md",
+      "sha256": "e8ab7540bcbf5690d9cb181399b6c999da91168b1e92f3d4d594edae99c77be1"
+    },
+    {
+      "bytes": 368,
+      "name": "fix-080.md",
+      "sha256": "445ca4f94a8402fe043880e40313132e7234e19ddfcbf1c0a28a87ff07335a2e"
+    },
+    {
+      "bytes": 365,
+      "name": "fix-081.md",
+      "sha256": "cf2a911f01b999d334a14513aa59e6b088e5d2e285229f1b952ab067e6c390de"
+    },
+    {
+      "bytes": 366,
+      "name": "fix-082.md",
+      "sha256": "a21e36525aaeb04d79881039fe3c82c4b87728855709811bea8119b2682af2a6"
+    },
+    {
+      "bytes": 293,
+      "name": "fix-083.md",
+      "sha256": "b867d2df6c1e49e76148843484a26d8c7695613865e6d323d79676a986d39017"
+    },
+    {
+      "bytes": 400,
+      "name": "fix-084.md",
+      "sha256": "4684024db4205735edd7cc8f1b2816cb02094897c68d9a0915e477c78c7706bb"
+    },
+    {
+      "bytes": 396,
+      "name": "fix-085.md",
+      "sha256": "7afeae07906e080ba2a626d0b3e2770fa6264ada883c000e459bdeae3df0d623"
+    },
+    {
+      "bytes": 324,
+      "name": "fix-086.md",
+      "sha256": "7ce894729e98827af5123666b355524cb6014c7f765aed991451c2c2b0cbc808"
+    },
+    {
+      "bytes": 401,
+      "name": "fix-087.md",
+      "sha256": "88f3ea123babe7a3c433a4627227bd74c719e8538f0ba0f10ceab04d0dc2cbfc"
+    },
+    {
+      "bytes": 299,
+      "name": "fix-088.md",
+      "sha256": "06660ab42398f6bf56d8f74bdb238578d0a92f8390488827972b783bbeaaca8b"
+    },
+    {
+      "bytes": 368,
+      "name": "fix-089.md",
+      "sha256": "c785c7045271e334afcdacad9312a99d975a6e861e3ae570c23f9e7c243341db"
+    },
+    {
+      "bytes": 312,
+      "name": "fix-090.md",
+      "sha256": "9fe4d69d8287cb94a095cc3a3dd0a534af053393bc585cd946848bcee7ed4dbe"
+    },
+    {
+      "bytes": 358,
+      "name": "fix-091.md",
+      "sha256": "a95f4bc842873e4067c24eb5037583b4deac3795b884c8f9a492923056010146"
+    },
+    {
+      "bytes": 339,
+      "name": "fix-092.md",
+      "sha256": "68077df62effc324cec6cfa3c8f9875da419519aa83e4f6c7b8a01365ae5beca"
+    },
+    {
+      "bytes": 374,
+      "name": "fix-093.md",
+      "sha256": "2440ba514e2f5455a2ed72deb6dabc77403a93346a3ad3e38ff02e895454c201"
+    },
+    {
+      "bytes": 310,
+      "name": "fix-094.md",
+      "sha256": "bd50879bee577a89ab2ac45a34332cc87d8c1acc055f1d935f92f28db4642334"
+    },
+    {
+      "bytes": 351,
+      "name": "fix-095.md",
+      "sha256": "2fe0b163ab3c065d455dbb41252d3a967f13a7a07edee84c488de910e3ed5c6e"
+    },
+    {
+      "bytes": 316,
+      "name": "fix-096.md",
+      "sha256": "17330d83d7edbbffa35712918536fd61a956f543aebb41aebfac3a9a59864de8"
+    },
+    {
+      "bytes": 380,
+      "name": "fix-097.md",
+      "sha256": "f989f38a5a79f452dbd2452a223b7c5344d693399b2ffad0a3c1cfe74901be2a"
+    },
+    {
+      "bytes": 336,
+      "name": "fix-098.md",
+      "sha256": "8ab03726d4eb5940749d1df26ab614ad599b1336cc9b141b3920b4083f016af9"
+    },
+    {
+      "bytes": 361,
+      "name": "fix-099.md",
+      "sha256": "4b5f1757c9ca115b085dc60ff40541911e92e45b23a24bfc78fcb1b0af63f062"
+    },
+    {
+      "bytes": 325,
+      "name": "fix-100.md",
+      "sha256": "e45b311f8d547e4623c57bc43ebc52a3b03d5d3aad17c3e239029911cc9f38c6"
+    },
+    {
+      "bytes": 316,
+      "name": "fix-101.md",
+      "sha256": "841edf2073d459d73323370feb9048e961934b1a4aa1e2424232e56c770a3319"
+    },
+    {
+      "bytes": 321,
+      "name": "fix-102.md",
+      "sha256": "174abba4b5702641bce950a16e50ae3f3d6281289e6a537bca31fb155262a9bd"
+    },
+    {
+      "bytes": 320,
+      "name": "fix-103.md",
+      "sha256": "cee40dc97afd086a75f4d605847a70e240a267d3a2eb82902183726683b64a52"
+    },
+    {
+      "bytes": 303,
+      "name": "fix-104.md",
+      "sha256": "131d5f30b435451f3a6a35cbf9c17570c9fd5205a6684a0539a65c0233376062"
+    },
+    {
+      "bytes": 292,
+      "name": "fix-105.md",
+      "sha256": "57e70b141213bf0601aa3096a5d1b50e5451af31d1e254e7d93d16d0ef7d1715"
+    },
+    {
+      "bytes": 334,
+      "name": "fix-106.md",
+      "sha256": "e3b815145205c9674e211f11b519e750e5cee05417cf693024003e652dfa87a7"
+    },
+    {
+      "bytes": 384,
+      "name": "fix-107.md",
+      "sha256": "9d271a7f95a396b61493d247e3801c2878e2c5fd8ec4cf3c6e4b0e7f5c1596f2"
+    },
+    {
+      "bytes": 322,
+      "name": "fix-108.md",
+      "sha256": "de4caa1cf3f4cd4e2f014833c9e782ea065f0776f93575e82dc988ecc50ee8c1"
+    },
+    {
+      "bytes": 378,
+      "name": "fix-109.md",
+      "sha256": "45d897541fe7ee406c18310364251558f05eef68dadd61be0a546e46345866b2"
+    },
+    {
+      "bytes": 288,
+      "name": "fix-110.md",
+      "sha256": "efedea5f7471b2fd40e2aeca950a620bca72576a082e107709cfca05ec42531c"
+    },
+    {
+      "bytes": 385,
+      "name": "fix-111.md",
+      "sha256": "e89e0f8dec6affbab81a9744d88948ec32de1868351e1c1bb71dad63c4e80e0b"
+    },
+    {
+      "bytes": 344,
+      "name": "fix-112.md",
+      "sha256": "45d0e6f074fdb2a99c5a3222dadabda411bdb3dea5944112a04e68958956f4db"
+    },
+    {
+      "bytes": 399,
+      "name": "fix-113.md",
+      "sha256": "80c83c02ff90d5f44ea06c52aae52e968e5c3ad1ea8522bab3d27db6609805da"
+    },
+    {
+      "bytes": 284,
+      "name": "fix-114.md",
+      "sha256": "c18a93b612c87efb4c135d7e003957dbe8855016f0122bdca3ce7056c7f3cad9"
+    },
+    {
+      "bytes": 360,
+      "name": "fix-115.md",
+      "sha256": "6b087a9468e004ddeb38b98fa291963de4153b58ae5d6bdb8f49005024cdb2c7"
+    },
+    {
+      "bytes": 299,
+      "name": "fix-116.md",
+      "sha256": "5c26e3c872911533dd44e5321228a8ab20d8519991fbeb160ed39368ef66253c"
+    },
+    {
+      "bytes": 372,
+      "name": "fix-117.md",
+      "sha256": "f92bdd81e14365657d638619cc41ead83b6f5db24245d6033476eb28d8a8ba9e"
+    },
+    {
+      "bytes": 375,
+      "name": "fix-118.md",
+      "sha256": "1fc60ccb4e82ca6b278ef2373d2f42fa81e59e14134cbf371660295bd22c9c60"
+    },
+    {
+      "bytes": 384,
+      "name": "fix-119.md",
+      "sha256": "a9c43e7e124b7b7319ddb2257f2d87f12421b2f295632a0e048ae38d340529ec"
+    },
+    {
+      "bytes": 344,
+      "name": "fix-120.md",
+      "sha256": "2c8a9e1ba45b03f06af745f3be90c20e3aadd5877dbcaa7cdeafb7360c4dfc86"
+    },
+    {
+      "bytes": 396,
+      "name": "fix-121.md",
+      "sha256": "e6191546234a711438cc5ae5d0000aa291bb0c0da50c203309d4db94f645df9f"
+    },
+    {
+      "bytes": 341,
+      "name": "fix-122.md",
+      "sha256": "a6848efc9d846db7b70cab08a83d0fc468d5e4a8ab53fdf15c56f5d38bb64cd0"
+    },
+    {
+      "bytes": 305,
+      "name": "fix-123.md",
+      "sha256": "690e0c24f9c4069621876ee1257cb867686b7fffd0711fb6d906c2c62db7c8fa"
+    },
+    {
+      "bytes": 342,
+      "name": "fix-124.md",
+      "sha256": "3f4b7230c9949dcd0f7a9b43cc36ecf3941497fdbf5ad0bb61c0971fab56c0f3"
+    },
+    {
+      "bytes": 343,
+      "name": "fix-125.md",
+      "sha256": "79816bd2962964ea49a2c3407de2c149e1df3f1f9f2052d99b49885487e9611e"
+    },
+    {
+      "bytes": 319,
+      "name": "fix-126.md",
+      "sha256": "06c2f13bdd7281150b5545315282dd191939650c6b1c154aca6970ed296eef3c"
+    },
+    {
+      "bytes": 366,
+      "name": "fix-127.md",
+      "sha256": "c2a7e612b7ad204ce43aa5bb21cc5583dd76a8c41c8e9c18b851ee09ff0de2ba"
+    },
+    {
+      "bytes": 343,
+      "name": "fix-128.md",
+      "sha256": "7f32bef5784c12ee27b1a5de70964f8783d2ddfe4ad1a55ed3ecc4c1cd6d3f88"
+    },
+    {
+      "bytes": 307,
+      "name": "fix-129.md",
+      "sha256": "df9752ecc0f15d585535b87b6c204c930183e7d6682eed6f890bf124389bba7a"
+    },
+    {
+      "bytes": 316,
+      "name": "fix-130.md",
+      "sha256": "c76605ceca20ec976a3bc416a98cb72fbcc0a606aab66c28b4ec87a3aef48a31"
+    },
+    {
+      "bytes": 301,
+      "name": "fix-131.md",
+      "sha256": "25e579f9ad3bb2f6e982120a38484c597c31c28b2f62e9dde9a93331396c307e"
+    },
+    {
+      "bytes": 374,
+      "name": "fix-132.md",
+      "sha256": "d303cf5916aa90391e873173d13302253956b543f0eaeccfb08c11ed76700384"
+    },
+    {
+      "bytes": 368,
+      "name": "fix-133.md",
+      "sha256": "6966f1aafaacfad2938da36944a38df90de62e5621d6e00729e270b94d59210b"
+    },
+    {
+      "bytes": 318,
+      "name": "fix-134.md",
+      "sha256": "817b4acfefb6e524a51ed9e2ac08f0c0fe56e25abe67d3713be5ba9f56bda4e0"
+    },
+    {
+      "bytes": 394,
+      "name": "fix-135.md",
+      "sha256": "9f177955597de915acc3736a67e18bacf4d9808da3304ba2bbe9898d81341f7c"
+    },
+    {
+      "bytes": 353,
+      "name": "fix-136.md",
+      "sha256": "7e13ce7b8b7baacfbd876169f4ccdb267247aa021ff94b37d1fb021ac5a814d3"
+    },
+    {
+      "bytes": 371,
+      "name": "fix-137.md",
+      "sha256": "e1b122dd4e4bb28f5f28f80ce7c9396ba810a6420a0adb328654f2710ce36f71"
+    },
+    {
+      "bytes": 386,
+      "name": "fix-138.md",
+      "sha256": "feb0c33d7484f44355d736cf5f40398c0e708e358ab948baecd7dc3cc184efee"
+    },
+    {
+      "bytes": 391,
+      "name": "fix-139.md",
+      "sha256": "f92f8109ac69b0acb9e71ee7bd05fdd41478979500e6e2453f6d4da34f4466f4"
+    },
+    {
+      "bytes": 343,
+      "name": "fix-140.md",
+      "sha256": "918681bb98196150e782fd7f9fca415ffd1adb38811d6a84fdd79d4137fc5cb1"
+    },
+    {
+      "bytes": 340,
+      "name": "fix-141.md",
+      "sha256": "f7741460caf0f4f10bd567ba404459d57c7cbfa96a1fd8e0a27a64fddcc1eadc"
+    },
+    {
+      "bytes": 381,
+      "name": "fix-142.md",
+      "sha256": "0ba01a2265395a10563adcbc2f9a4074001197da4cfabe9cfcb4112343d1fff5"
+    },
+    {
+      "bytes": 392,
+      "name": "fix-143.md",
+      "sha256": "a352c8fbddee4c3e4b892070cd653e75c81166ee079fdf924827daf1258a6db0"
+    },
+    {
+      "bytes": 315,
+      "name": "fix-144.md",
+      "sha256": "a9dc9f78bd1cf0e0916ec810054149f144158120fe8628a1b25bdd26e3f69344"
+    },
+    {
+      "bytes": 372,
+      "name": "fix-145.md",
+      "sha256": "d950bfca3261e1d11722e43043a1a687db0095f28127e24ab9fe4165bde74992"
+    },
+    {
+      "bytes": 390,
+      "name": "fix-146.md",
+      "sha256": "f813d8d52013517d80ec688c15787745ee2bf6ec773b7b391a9c77c3aee9c52f"
+    },
+    {
+      "bytes": 392,
+      "name": "fix-147.md",
+      "sha256": "130fb07eecf2da74dd3785837c5fd45e2e8eb52ed76c5aa4b4ababb8d660cd6e"
+    },
+    {
+      "bytes": 376,
+      "name": "fix-148.md",
+      "sha256": "c6cc10c7794f1f0e4f00132997c565d6a8f1566032708a278139ea52b7cb9890"
+    },
+    {
+      "bytes": 377,
+      "name": "fix-149.md",
+      "sha256": "95679728aef30aec29d43071f8135bbcfdd57c15cab45ee2307d47129cf37af2"
+    },
+    {
+      "bytes": 308,
+      "name": "fix-150.md",
+      "sha256": "b8a6d870d98488bab044b59cd768d033897c6b9593081a935aad91015554449f"
+    },
+    {
+      "bytes": 391,
+      "name": "fix-151.md",
+      "sha256": "52337b87ef8f1027564be39e58d3efe724f2b171b2c273b92318dc6fcf2edb78"
+    },
+    {
+      "bytes": 389,
+      "name": "fix-152.md",
+      "sha256": "752747c7826c3c39b1dfa2dd1246530a76de6701145fc89725e0ffcc84a37269"
+    },
+    {
+      "bytes": 330,
+      "name": "fix-153.md",
+      "sha256": "3c40bad835fb8799ddf9d0b95793b1d1102d8aa0e235c97de16cb72137a6ecb8"
+    },
+    {
+      "bytes": 294,
+      "name": "fix-154.md",
+      "sha256": "8e6d749da4bbb664a83fe9547526797343ea01e6afdf4d0404922c299537aeb4"
+    },
+    {
+      "bytes": 303,
+      "name": "fix-155.md",
+      "sha256": "ab9cc3b69ee142becda0b4a69bc0792ac9dc65308c09d122e4c38b4d46255c3c"
+    },
+    {
+      "bytes": 287,
+      "name": "fix-156.md",
+      "sha256": "745fe5de81e57a1847f72355095742c8c5c3b5bc09eb8ba60c2dac567690066f"
+    },
+    {
+      "bytes": 352,
+      "name": "fix-157.md",
+      "sha256": "b76fd8d379091bdc88a69b7fb0bf24e20a34e507cba1fd66dc8d67678b591e0d"
+    },
+    {
+      "bytes": 356,
+      "name": "fix-158.md",
+      "sha256": "7dbf67c2c5ca6f8d63de507186b8270d4aec91aab5488d6afc8ecf58d0407c3f"
+    },
+    {
+      "bytes": 295,
+      "name": "fix-159.md",
+      "sha256": "7744be5b42975bace395ffbf6f0af4c04ddcd92c7909ee9c19494e95780e7c6e"
+    }
+  ],
+  "dataset": {
+    "canaries_excluded": 5,
+    "classes": [
+      "cok-not",
+      "tek-not"
+    ],
+    "path": "<repo>\\bench\\.data\\verify\\fixture\\gold-fixture.jsonl",
+    "rows": 130,
+    "scored": 125
+  },
+  "decision": null,
+  "episodic_axis": {
+    "measured": false,
+    "reason": "No instrument in this repository measures an episodic recall axis. The gold set's classes are answer-cardinality labels (one note answers vs several); they are reported here under their own names and are NOT renamed to 'episodic'/'concept'. This axis is open, not covered."
+  },
+  "gate": "recall-evidence",
+  "identity": {
+    "backend_prefix": [
+      "<home>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "<repo>\\bench\\.data\\verify\\index_backend.py",
+      "--shim-state-db",
+      "<repo>\\bench\\.data\\verify\\fixture-state-root\\state.db",
+      "--ignore-index"
+    ],
+    "corpus": {
+      "expected": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2",
+      "files": 160,
+      "measured_vault": "<repo>\\bench\\.data\\verify\\snapshot",
+      "sha256": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2",
+      "snapshot": true,
+      "source_vault": "<repo>\\bench\\.data\\verify\\fixture",
+      "verified": true
+    },
+    "corrections": {
+      "bytes": 193,
+      "expected": "1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f",
+      "headings": 2,
+      "ids": [
+        "Duzeltmeler.md#1",
+        "Duzeltmeler.md#2"
+      ],
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\🔮 850-Companion\\Duzeltmeler.md",
+      "present": true,
+      "retires": [
+        "fix-003.md"
+      ],
+      "sha256": "1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f",
+      "titles": [
+        "Fikstur duzeltmesi bir",
+        "Fikstur duzeltmesi iki"
+      ],
+      "verified": true
+    },
+    "executable": {
+      "expected": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30",
+      "expected_from": "candidate manifest",
+      "path": "<repo>\\src\\Oom\\bin\\Release\\net9.0-windows10.0.19041.0\\win-x64\\oom.exe",
+      "sha256": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30",
+      "verified": true
+    },
+    "gold": {
+      "canaries": 5,
+      "expected": "ec7b12c1e507c5febe3e1e974b25d390adf2659f7a3366799dd1aa44548909e4",
+      "path": "<repo>\\bench\\.data\\verify\\fixture\\gold-fixture.jsonl",
+      "rows": 130,
+      "scored": 125,
+      "sha256": "ec7b12c1e507c5febe3e1e974b25d390adf2659f7a3366799dd1aa44548909e4",
+      "verified": true
+    },
+    "inputs_digest": "59f287bba96901b01595e34d8af7cd9dd0063ba7e46a707fc9d211d0f16d0c3c",
+    "settings": {
+      "expected": "5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2",
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\.oom\\oom.json",
+      "present": true,
+      "retrieval_keys": {
+        "minOverlap": 1,
+        "perNoteChars": 600,
+        "strictScore": 0.0,
+        "top": 5,
+        "totalChars": 3000
+      },
+      "sha256": "5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2",
+      "verified": true
+    }
+  },
+  "identity_stability": {
+    "changed": [],
+    "checked": [
+      "corpus",
+      "corrections",
+      "settings",
+      "gold",
+      "executable"
+    ],
+    "inputs_digest_after": "59f287bba96901b01595e34d8af7cd9dd0063ba7e46a707fc9d211d0f16d0c3c",
+    "inputs_digest_before": "59f287bba96901b01595e34d8af7cd9dd0063ba7e46a707fc9d211d0f16d0c3c",
+    "stable": true,
+    "why": "an input that moved between the first query and the last one splits the run across two measurements, and nothing in the numbers would say so"
+  },
+  "index": {
+    "manifest": {
+      "generation": 1,
+      "manifest_digest": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2"
+    },
+    "manifest_after_witness": {
+      "generation": 1,
+      "manifest_digest": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2"
+    },
+    "mode": "indexed",
+    "note": "there is no CLI flag that moves the product's state root; it is derived from the vault path (VaultPaths.Hash). --state-root exists for fixtures that drive a backend shim, and any override is recorded here.",
+    "state_db": "<repo>\\bench\\.data\\verify\\fixture-state-root\\state.db",
+    "state_db_present": true,
+    "state_db_sha256_before": "606dea4093f47ffc14aa42cea1b64cf784b0329abbb40e44e5369e6beb87b3a3",
+    "state_root_derived": "<home>\\AppData\\Local\\oom\\b0a5c1bfae86b9aa",
+    "state_root_overridden": true,
+    "state_root_used": "<repo>\\bench\\.data\\verify\\fixture-state-root"
+  },
+  "index_mode": "indexed",
+  "index_witness": {
+    "backed_up": true,
+    "command": "<home>\\AppData\\Local\\Programs\\Python\\Python312\\python.exe <repo>\\bench\\.data\\verify\\index_backend.py --shim-state-db <repo>\\bench\\.data\\verify\\fixture-state-root\\state.db --ignore-index <repo>\\src\\Oom\\bin\\Release\\net9.0-windows10.0.19041.0\\win-x64\\oom.exe --vault <repo>\\bench\\.data\\verify\\snapshot retrieve --query zeug042ma kume07tipi --top 5 --json",
+    "error": null,
+    "expected": "the witness note must NOT come back once its notes_fts row is gone",
+    "hits": [
+      "fix-042.md",
+      "fix-043.md",
+      "fix-044.md",
+      "fix-045.md",
+      "fix-046.md"
+    ],
+    "instrument": "delete the witness note's notes_fts row, leave oom_index_meta untouched, then query the witness term and see whether the note can still be reached",
+    "manifest_after": {
+      "generation": 1,
+      "manifest_digest": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2"
+    },
+    "manifest_before": {
+      "generation": 1,
+      "manifest_digest": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2"
+    },
+    "narrowing_proven": false,
+    "note": "fix-042.md",
+    "proven": false,
+    "query": "zeug042ma kume07tipi",
+    "restore_verified": true,
+    "restored": true,
+    "returncode": 0,
+    "rows_deleted": 1,
+    "state_db": "<repo>\\bench\\.data\\verify\\fixture-state-root\\state.db",
+    "witness_returned": true
+  },
+  "inputs": {
+    "corpus": {
+      "dir": "knowledge/concepts",
+      "files": 160,
+      "sha256": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2"
+    },
+    "corrections": {
+      "bytes": 193,
+      "headings": 2,
+      "ids": [
+        "Duzeltmeler.md#1",
+        "Duzeltmeler.md#2"
+      ],
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\🔮 850-Companion\\Duzeltmeler.md",
+      "present": true,
+      "retires": [
+        "fix-003.md"
+      ],
+      "sha256": "1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f",
+      "titles": [
+        "Fikstur duzeltmesi bir",
+        "Fikstur duzeltmesi iki"
+      ]
+    },
+    "inputs_digest": "59f287bba96901b01595e34d8af7cd9dd0063ba7e46a707fc9d211d0f16d0c3c",
+    "settings": {
+      "path": "<repo>\\bench\\.data\\verify\\snapshot\\.oom\\oom.json",
+      "present": true,
+      "retrieval_keys": {
+        "minOverlap": 1,
+        "perNoteChars": 600,
+        "strictScore": 0.0,
+        "top": 5,
+        "totalChars": 3000
+      },
+      "sha256": "5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2"
+    },
+    "snapshot": {
+      "destination": "<repo>\\bench\\.data\\verify\\snapshot",
+      "disjoint": true,
+      "problems": [],
+      "requested": true,
+      "reused": true,
+      "source": "<repo>\\bench\\.data\\verify\\fixture"
+    }
+  },
+  "measured": "2026-09-11",
+  "measured_by": "claude · opus-5",
+  "output_integrity": {
+    "faults": [],
+    "ok": true
+  },
+  "overall": {
+    "mrr@5": 0.836,
+    "n": 125,
+    "recall@3": 0.8,
+    "recall@5": 0.944
+  },
+  "pass": null,
+  "per_sinif": {
+    "cok-not": {
+      "mrr@5": 1.0,
+      "n": 20,
+      "recall@3": 1.0,
+      "recall@5": 1.0
+    },
+    "tek-not": {
+      "mrr@5": 0.8048,
+      "n": 105,
+      "recall@3": 0.7619,
+      "recall@5": 0.9333
+    }
+  },
+  "raw_artifact": "bench/results/astra-dalga-2/raw/unused-index.stdout.txt",
+  "records": [
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-000",
+        "fix-007"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q001",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-000"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-007"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-001"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q002",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-001"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-002"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q003",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-002"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-003"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q004",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-000"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-001"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-002"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-003"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-004"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-004"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q005",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-004"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-005",
+        "fix-012"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q006",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-005"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-012"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-006"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q007",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-006"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-007"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q008",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-007"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-008"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q009",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-008"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-009"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q010",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-006"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-007"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-008"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-009"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-010"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-010",
+        "fix-017"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q011",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-010"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-017"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-011"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q012",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-011"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-012"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q013",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-012"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-013"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q014",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-013"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-014"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q015",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-014"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [
+        "fix-015"
+      ],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q016",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 19.0,
+          "slug": "fix-138"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-146"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-006"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-022"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-030"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-016"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q017",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-016"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-017"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q018",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-017"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-018"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q019",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-018"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-019"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q020",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-019"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-020",
+        "fix-027"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q021",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-020"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-027"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-021"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q022",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-018"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-019"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-020"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-021"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-022"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-022"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q023",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-022"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-023"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q024",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-023"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-024"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q025",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-024"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-025",
+        "fix-032"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q026",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-025"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-032"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-026"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q027",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-026"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-027"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q028",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-024"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-025"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-026"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-027"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-028"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-028"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q029",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-028"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-029"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q030",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-029"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-030",
+        "fix-037"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q031",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-030"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-037"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [
+        "fix-031"
+      ],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q032",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 23.0,
+          "slug": "fix-069"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-012"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-053"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-118"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-117"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-032"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q033",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-032"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-033"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q034",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-030"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-031"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-032"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-033"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-034"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-034"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q035",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-034"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-035",
+        "fix-042"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q036",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-035"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-042"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-036"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q037",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-036"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-037"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q038",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-037"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-038"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q039",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-038"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-039"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q040",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-036"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-037"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-038"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-039"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-040"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-040",
+        "fix-047"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q041",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-040"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-047"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-041"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q042",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-041"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-042"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q043",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-042"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-043"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q044",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-043"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-044"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q045",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-044"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-045"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q046",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-042"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-043"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-044"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-045"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-046"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-046"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q047",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-046"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [
+        "fix-047"
+      ],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q048",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 20.0,
+          "slug": "fix-118"
+        },
+        {
+          "score": 20.0,
+          "slug": "fix-135"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-021"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-091"
+        },
+        {
+          "score": 17.0,
+          "slug": "fix-095"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-048"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q049",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-048"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-049"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q050",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-049"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-050",
+        "fix-057"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q051",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-050"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-057"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-051"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q052",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-048"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-049"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-050"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-051"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-052"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-052"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q053",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-052"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-053"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q054",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-053"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-054"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q055",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-054"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-055",
+        "fix-062"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q056",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-055"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-062"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-056"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q057",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-056"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-057"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q058",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-054"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-055"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-056"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-057"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-058"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-058"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q059",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-058"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-059"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q060",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-059"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-060",
+        "fix-067"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q061",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-060"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-067"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-061"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q062",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-061"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-062"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q063",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-062"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [
+        "fix-063"
+      ],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q064",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 19.0,
+          "slug": "fix-132"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-067"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-092"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-139"
+        },
+        {
+          "score": 17.0,
+          "slug": "fix-013"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-064"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q065",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-064"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-065",
+        "fix-072"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q066",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-065"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-072"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-066"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q067",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-066"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-067"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q068",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-067"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-068"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q069",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-068"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-069"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q070",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-066"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-067"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-068"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-069"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-070"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-070",
+        "fix-077"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q071",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-070"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-077"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-071"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q072",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-071"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-072"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q073",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-072"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-073"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q074",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-073"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-074"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q075",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-074"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-075"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q076",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-072"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-073"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-074"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-075"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-076"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-076"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q077",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-076"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-077"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q078",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-077"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-078"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q079",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-078"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [
+        "fix-079"
+      ],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q080",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 21.0,
+          "slug": "fix-019"
+        },
+        {
+          "score": 20.0,
+          "slug": "fix-146"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-063"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-072"
+        },
+        {
+          "score": 17.0,
+          "slug": "fix-067"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-080",
+        "fix-087"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q081",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-080"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-087"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-081"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q082",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-078"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-079"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-080"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-081"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-082"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-082"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q083",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-082"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-083"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q084",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-083"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-084"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q085",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-084"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-085",
+        "fix-092"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q086",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-085"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-092"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-086"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q087",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-086"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-087"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q088",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-084"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-085"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-086"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-087"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-088"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-088"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q089",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-088"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-089"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q090",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-089"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-090",
+        "fix-097"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q091",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-090"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-097"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-091"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q092",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-091"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-092"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q093",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-092"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-093"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q094",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-090"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-091"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-092"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-093"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-094"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-094"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q095",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-094"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [
+        "fix-095"
+      ],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q096",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 20.0,
+          "slug": "fix-117"
+        },
+        {
+          "score": 17.0,
+          "slug": "fix-012"
+        },
+        {
+          "score": 17.0,
+          "slug": "fix-069"
+        },
+        {
+          "score": 17.0,
+          "slug": "fix-074"
+        },
+        {
+          "score": 17.0,
+          "slug": "fix-143"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-096"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q097",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-096"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-097"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q098",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-097"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-098"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q099",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-098"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-099"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q100",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-096"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-097"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-098"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-099"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-100"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-100",
+        "fix-107"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q101",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-100"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-107"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-101"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q102",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-101"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-102"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q103",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-102"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-103"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q104",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-103"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-104"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q105",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-104"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-105"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q106",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-102"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-103"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-104"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-105"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-106"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-106"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q107",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-106"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-107"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q108",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-107"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-108"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q109",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-108"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-109"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q110",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-109"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-110",
+        "fix-117"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q111",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-110"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-117"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [
+        "fix-111"
+      ],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q112",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 21.0,
+          "slug": "fix-139"
+        },
+        {
+          "score": 19.0,
+          "slug": "fix-068"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-019"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-038"
+        },
+        {
+          "score": 18.0,
+          "slug": "fix-143"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-112"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q113",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-112"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-113"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q114",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-113"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-114"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q115",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-114"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-115",
+        "fix-122"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q116",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-115"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-122"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-116"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q117",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-116"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-117"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q118",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-114"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-115"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-116"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-117"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-118"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-118"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q119",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-118"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-119"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q120",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-119"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-120",
+        "fix-127"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q121",
+      "sinif": "cok-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-120"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-127"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-121"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q122",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-121"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-122"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q123",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-122"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 4,
+      "gold": [
+        "fix-123"
+      ],
+      "hit@3": 0,
+      "hit@5": 1,
+      "id": "q124",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-120"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-121"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-122"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-123"
+        },
+        {
+          "score": 2.0,
+          "slug": "fix-124"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": 1,
+      "gold": [
+        "fix-124"
+      ],
+      "hit@3": 1,
+      "hit@5": 1,
+      "id": "q125",
+      "sinif": "tek-not",
+      "top": [
+        {
+          "score": 2.0,
+          "slug": "fix-124"
+        }
+      ]
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q126",
+      "sinif": "kanarya",
+      "top": []
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q127",
+      "sinif": "kanarya",
+      "top": []
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q128",
+      "sinif": "kanarya",
+      "top": []
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q129",
+      "sinif": "kanarya",
+      "top": []
+    },
+    {
+      "first_gold_rank": null,
+      "gold": [],
+      "hit@3": 0,
+      "hit@5": 0,
+      "id": "q130",
+      "sinif": "kanarya",
+      "top": []
+    }
+  ],
+  "refused_before_measuring": false,
+  "run_status": "invalid",
+  "run_status_reasons": [
+    "index witness failed: the note whose notes_fts row was deleted still came back, or the index could not be restored. Retrieval falls back to a full corpus scan in silence when the index is missing, stale or unreadable, so an unproven witness means this run is not evidence about the indexed path.",
+    "backend was invoked through a shim; binary_sha256 does not describe what actually answered the queries",
+    "verdicts nulled per PROVENANCE.md SS3: pass, decision"
+  ],
+  "schema": 2,
+  "source_commit": "bec80ca25be2242e08266fb4b8cf4419c854d7dc",
+  "substitute": {
+    "active": true,
+    "for": "<repo>\\src\\Oom\\bin\\Release\\net9.0-windows10.0.19041.0\\win-x64\\oom.exe",
+    "reason": "backend shim stood in for the executable"
+  },
+  "thresholds": {
+    "authority": "not this file. These values are constants in bench/verify_recall.py and are mirrored as constants in tests/Oom.Tests/RecallCandidateBindingTests.cs. They are recorded here so a reader can see what was applied; a consumer that reads its bar out of this block lets the evidence set its own exam.",
+    "per_sinif": {
+      "cok-not": {
+        "n": 20,
+        "recall@5": 0.9
+      },
+      "tek-not": {
+        "n": 90,
+        "recall@5": 0.85
+      }
+    },
+    "recall@3": 0.8,
+    "recall@5": 0.88,
+    "scored_minimum": 125
+  }
+}

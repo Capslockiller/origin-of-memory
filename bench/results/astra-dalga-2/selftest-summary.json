@@ -1,0 +1,289 @@
+{
+  "binary_sha256": "a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30",
+  "command": "python bench/verify_recall.py selftest --exe <repo>/src/Oom/bin/Release/net9.0-windows10.0.19041.0/win-x64/oom.exe --measured-by 'claude · opus-5' --hook-sample 10",
+  "decision": {
+    "recall_gate": null,
+    "selftest": true,
+    "why_recall_gate_is_null": "measured against a fixture corpus, not the gold set; a fixture number is not a product verdict"
+  },
+  "does_not_measure": "the product's recall on the owner's gold set; that run happens against the final unified candidate's published exe in INT-3. It also does not measure the product's own index: the indexed scenarios drive a backend shim against a fixture state.db, because Retrieve.Build() is not reachable from the CLI without running sweep/compile/doctor. The real binary's narrowing is pinned in tests/Oom.Tests/RecallCandidateBindingTests.cs instead.",
+  "expectations": {
+    "a fabricated correction id is refused after measuring": true,
+    "a non-empty snapshot destination refuses before measuring": true,
+    "a stale candidate manifest refuses before measuring": true,
+    "an honoured index proves narrowing": true,
+    "an ignored index does not prove narrowing and leaves no verdict": true,
+    "an input that moved during the run leaves no verdict": true,
+    "an overlapping snapshot destination refuses before measuring": true,
+    "fabricated corpus notes are refused after measuring": true,
+    "honest full scan issues a verdict": true,
+    "indexed with no state.db refuses before measuring": true
+  },
+  "fixture": {
+    "corpus_files": 160,
+    "corpus_sha256": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2",
+    "corrections_ids": [
+      "Duzeltmeler.md#1",
+      "Duzeltmeler.md#2"
+    ],
+    "corrections_sha256": "1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f",
+    "gold_rows": 130,
+    "gold_sha256": "ec7b12c1e507c5febe3e1e974b25d390adf2659f7a3366799dd1aa44548909e4",
+    "seed": 20260911,
+    "settings_sha256": "5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2",
+    "witness_note": "fix-042.md",
+    "witness_query": "zeug042ma kume07tipi"
+  },
+  "gate": "recall-evidence-selftest",
+  "measured": "2026-09-11",
+  "measured_by": "claude · opus-5",
+  "measures": "that verify_recall.py issues a verdict only when the executable matches an externally supplied candidate manifest, every retrieval input was snapshotted and stayed still, correction ids are real, and the measured path (full scan or indexed) was proven by a witness rather than assumed",
+  "pass": {
+    "every_scenario_behaved_as_specified": true
+  },
+  "raw_artifact": "bench/results/astra-dalga-2/raw/honest.stdout.txt",
+  "run_status": "ok",
+  "run_status_reasons": [],
+  "scenarios": [
+    {
+      "decision": {
+        "computed_from": "the scored questions only; controls are reported separately and cannot substitute for this verdict",
+        "controls_gate": true,
+        "index_mode": "full-scan",
+        "recall_gate": true
+      },
+      "evidence": "selftest-1-honest-full-scan.json",
+      "exit_code": 0,
+      "expectation": "candidate manifest verified, inputs snapshotted and stable, no index present and the witness note comes back -> a full-scan verdict is issued",
+      "index_mode": "full-scan",
+      "index_witness_proven": true,
+      "inputs_stable": true,
+      "overall": {
+        "mrr@5": 0.8595,
+        "n": 125,
+        "recall@3": 0.856,
+        "recall@5": 0.912
+      },
+      "pass": {
+        "index_path_proven": true,
+        "inputs_stable": true,
+        "per_sinif": {
+          "cok-not": true,
+          "tek-not": true
+        },
+        "recall@3": true,
+        "recall@5": true,
+        "scored_minimum": true
+      },
+      "reasons": [],
+      "refused_before_measuring": false,
+      "run_status": "ok",
+      "scenario": "selftest-1-honest-full-scan"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-2-stale-candidate.json",
+      "exit_code": 2,
+      "expectation": "the candidate manifest names a different exe (old evidence, new binary) -> refuse BEFORE measuring, no verdict",
+      "index_mode": "full-scan",
+      "index_witness_proven": null,
+      "inputs_stable": null,
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "executable identity mismatch: measured 'a66c9d381b70945baab1381bdad2954ac64060ce3f4ffcd6184b44b4d5a78c30', expected '0000000000000000000000000000000000000000000000000000000000000000'"
+      ],
+      "refused_before_measuring": true,
+      "run_status": "invalid",
+      "scenario": "selftest-2-stale-candidate"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-3-corrupt-output.json",
+      "exit_code": 3,
+      "expectation": "backend returns notes that are not in the corpus -> invalid, no verdict",
+      "index_mode": "full-scan",
+      "index_witness_proven": false,
+      "inputs_stable": true,
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "q001: returned 'hayali-0-0.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-1.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-2.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-3.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-4.md', which is not in the measured corpus",
+        "q002: returned 'hayali-1-0.md', which is not in the measured corpus"
+      ],
+      "refused_before_measuring": false,
+      "run_status": "invalid",
+      "scenario": "selftest-3-corrupt-output"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-4-fabricated-correction.json",
+      "exit_code": 3,
+      "expectation": "backend returns Duzeltmeler.md#99 against a two-heading corrections file -> invalid; schema 1's unconditional '#' amnesty passed exactly this",
+      "index_mode": "full-scan",
+      "index_witness_proven": false,
+      "inputs_stable": true,
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "q001: returned correction id 'Duzeltmeler.md#99', which the measured Duzeltmeler.md cannot produce (2 id(s) loaded)",
+        "q002: returned correction id 'Duzeltmeler.md#99', which the measured Duzeltmeler.md cannot produce (2 id(s) loaded)",
+        "q003: returned correction id 'Duzeltmeler.md#99', which the measured Duzeltmeler.md cannot produce (2 id(s) loaded)",
+        "q004: returned correction id 'Duzeltmeler.md#99', which the measured Duzeltmeler.md cannot produce (2 id(s) loaded)",
+        "q005: returned correction id 'Duzeltmeler.md#99', which the measured Duzeltmeler.md cannot produce (2 id(s) loaded)",
+        "q006: returned correction id 'Duzeltmeler.md#99', which the measured Duzeltmeler.md cannot produce (2 id(s) loaded)"
+      ],
+      "refused_before_measuring": false,
+      "run_status": "invalid",
+      "scenario": "selftest-4-fabricated-correction"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-5-overlapping-snapshot.json",
+      "exit_code": 2,
+      "expectation": "the snapshot destination sits inside the source vault -> refuse before measuring, and nothing is deleted",
+      "index_mode": "full-scan",
+      "index_witness_proven": null,
+      "inputs_stable": null,
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "snapshot destination overlaps the source vault: <repo>\\bench\\.data\\verify\\fixture\\snapshot-inside / <repo>\\bench\\.data\\verify\\fixture",
+        "corpus identity mismatch: measured None, expected '10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2'",
+        "corrections identity mismatch: measured None, expected '1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f'",
+        "settings identity mismatch: measured None, expected '5ede3fdcaf2d7d6bbdc321379446cf57781da087e67d3afbe0f786265c45b6a2'",
+        "witness note 'fix-042.md' is not in the measured corpus"
+      ],
+      "refused_before_measuring": true,
+      "run_status": "invalid",
+      "scenario": "selftest-5-overlapping-snapshot"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-6-dirty-snapshot-destination.json",
+      "exit_code": 2,
+      "expectation": "the snapshot destination already holds files and --snapshot-reuse was not given -> refuse; schema 1 called shutil.rmtree here",
+      "index_mode": "full-scan",
+      "index_witness_proven": null,
+      "inputs_stable": null,
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "snapshot destination is not empty (3 entries) and --snapshot-reuse was not given; refusing to delete it"
+      ],
+      "refused_before_measuring": true,
+      "run_status": "invalid",
+      "scenario": "selftest-6-dirty-snapshot-destination"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-7-input-changed-midrun.json",
+      "exit_code": 3,
+      "expectation": "the corrections file is edited while the run is in flight -> the post-run re-hash catches it, identity_stability.stable is false, no verdict",
+      "index_mode": "full-scan",
+      "index_witness_proven": true,
+      "inputs_stable": false,
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "q126: returned correction id 'Duzeltmeler.md#3', which the measured Duzeltmeler.md cannot produce (2 id(s) loaded)",
+        "inputs changed during the run: corrections: '1ff7d92b3f7d2c99ca8f47172dd2ea83950a8906346136493272d6a433ac917f' -> '959ed66b995f31e7b866273f51a182f2b2c77398ffef31a4db413ce714b7b70d'",
+        "backend was invoked through a shim; binary_sha256 does not describe what actually answered the queries"
+      ],
+      "refused_before_measuring": false,
+      "run_status": "invalid",
+      "scenario": "selftest-7-input-changed-midrun"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-8-indexed-narrowing-proven.json",
+      "exit_code": 4,
+      "expectation": "a backend that honours the candidate index cannot return the note whose notes_fts row was deleted -> the indexed path is proven (the run still carries no verdict, because a shim answered it)",
+      "index_mode": "indexed",
+      "index_witness_proven": true,
+      "inputs_stable": true,
+      "overall": {
+        "mrr@5": 0.836,
+        "n": 125,
+        "recall@3": 0.8,
+        "recall@5": 0.944
+      },
+      "pass": null,
+      "reasons": [
+        "backend was invoked through a shim; binary_sha256 does not describe what actually answered the queries",
+        "verdicts nulled per PROVENANCE.md SS3: pass, decision"
+      ],
+      "refused_before_measuring": false,
+      "run_status": "invalid",
+      "scenario": "selftest-8-indexed-narrowing-proven"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-9-unused-index.json",
+      "exit_code": 4,
+      "expectation": "a state.db exists and the run is labelled indexed, but the backend never consults it -> the witness note comes back, narrowing is not proven, no verdict",
+      "index_mode": "indexed",
+      "index_witness_proven": false,
+      "inputs_stable": true,
+      "overall": {
+        "mrr@5": 0.836,
+        "n": 125,
+        "recall@3": 0.8,
+        "recall@5": 0.944
+      },
+      "pass": null,
+      "reasons": [
+        "index witness failed: the note whose notes_fts row was deleted still came back, or the index could not be restored. Retrieval falls back to a full corpus scan in silence when the index is missing, stale or unreadable, so an unproven witness means this run is not evidence about the indexed path.",
+        "backend was invoked through a shim; binary_sha256 does not describe what actually answered the queries",
+        "verdicts nulled per PROVENANCE.md SS3: pass, decision"
+      ],
+      "refused_before_measuring": false,
+      "run_status": "invalid",
+      "scenario": "selftest-9-unused-index"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-10-indexed-without-state-db.json",
+      "exit_code": 2,
+      "expectation": "--index-mode indexed with no state.db at the state root -> refuse before measuring rather than silently measure a full scan",
+      "index_mode": "indexed",
+      "index_witness_proven": null,
+      "inputs_stable": null,
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "--index-mode indexed but no state.db exists at <repo>\\bench\\.data\\verify\\empty-state-root\\state.db; this run would silently measure a full corpus scan. Build the index first (oom sweep / oom compile); this gate does not create a state root."
+      ],
+      "refused_before_measuring": true,
+      "run_status": "invalid",
+      "scenario": "selftest-10-indexed-without-state-db"
+    }
+  ],
+  "schema": 2,
+  "source_commit": "bec80ca25be2242e08266fb4b8cf4419c854d7dc",
+  "substitute": {
+    "active": true,
+    "for": "the owner's gold set at Degerlendirme/gold-sorular.jsonl and the concept vault",
+    "reason": "This is the lane's own synthetic fixture vault and gold set, not the owner's. It proves the gate's wiring and its refusal paths; it is NOT a measurement of the product's recall and no number here describes it."
+  },
+  "thresholds": {
+    "authority": "not this file. These values are constants in bench/verify_recall.py and are mirrored as constants in tests/Oom.Tests/RecallCandidateBindingTests.cs. They are recorded here so a reader can see what was applied; a consumer that reads its bar out of this block lets the evidence set its own exam.",
+    "per_sinif": {
+      "cok-not": {
+        "n": 20,
+        "recall@5": 0.9
+      },
+      "tek-not": {
+        "n": 90,
+        "recall@5": 0.85
+      }
+    },
+    "recall@3": 0.8,
+    "recall@5": 0.88,
+    "scored_minimum": 125
+  }
+}
