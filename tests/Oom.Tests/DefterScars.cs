@@ -141,6 +141,27 @@ public sealed class DefterScars
                     // Fixture düzeltmesi: damga 3 diyordu, tablo ise sürüm 1 biçimindeydi. Her basamak
                     // her açılışta koştuğu sürece fark görünmüyordu; damga artık inanıldığı için fixture
                     // gerçekten sürüm 3 biçiminde olmalı. Damga (3) ve bütün beklentiler aynen korunuyor.
+                    // Sürüm 3 biçimi, tam haliyle: yalnız `calls` taşıyan bir dosya sürüm 3 değildir.
+                    "CREATE TABLE sessions(session_id TEXT PRIMARY KEY, transcript_path TEXT, last_turn_index INTEGER, last_flush_ts TEXT);" +
+                    "CREATE TABLE flush_log(ts TEXT, session_id TEXT, reason TEXT, outcome TEXT, turns INTEGER, chars INTEGER, backend TEXT);" +
+                    "CREATE TABLE retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);" +
+                    "CREATE TABLE sweep_stamps(path TEXT PRIMARY KEY, mtime TEXT, size INTEGER, outcome TEXT);" +
+                    "CREATE TABLE coverage(ts TEXT, total INTEGER, covered INTEGER, uncovered_json TEXT);" +
+                    "CREATE TABLE daily_ingest(name TEXT PRIMARY KEY, digest TEXT, status TEXT, attempts INTEGER, reasons TEXT, ts TEXT);" +
+                    "CREATE TABLE compile_runs(ts TEXT, daily TEXT, status TEXT, created INTEGER, updated INTEGER, ms INTEGER);" +
+                    "CREATE TABLE quarantine(digest TEXT PRIMARY KEY, source TEXT, reason TEXT, ts TEXT, path TEXT);" +
+                    "CREATE TABLE health(ts TEXT, component TEXT, level TEXT, code TEXT, key TEXT, detail TEXT);" +
+                    "CREATE TABLE notified(class TEXT, key TEXT, ts TEXT);" +
+                    "CREATE TABLE locks(name TEXT PRIMARY KEY, machine TEXT, pid INTEGER, ts TEXT);" +
+                    "CREATE TABLE kota(ts TEXT, \"window\" TEXT, used_pct REAL, resets_at TEXT);" +
+                    "CREATE TABLE retrieve_served(session_id TEXT, query_sig TEXT, note TEXT, ts TEXT);" +
+                    "CREATE TABLE ingest_done(source TEXT, digest TEXT, ts TEXT, PRIMARY KEY(source, digest));" +
+                    "CREATE TABLE vault_meta(key TEXT PRIMARY KEY, value TEXT);" +
+                    "CREATE VIEW v_flush_log AS SELECT ts, session_id, reason, outcome, turns, chars, backend FROM flush_log;" +
+                    "CREATE VIEW v_coverage AS SELECT ts, total, covered, uncovered_json FROM coverage;" +
+                    "CREATE VIEW v_health AS SELECT ts, component, level, code, key, detail FROM health;" +
+                    "CREATE VIEW v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;" +
+                    "CREATE VIEW v_calls AS SELECT ts, backend, component, tier, model, purpose FROM calls;" +
                     "CREATE TABLE calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT, operation_id TEXT, attempt_id TEXT, attempt_no INTEGER, uncached_in_tok INTEGER);" +
                     "CREATE UNIQUE INDEX ix_calls_attempt_id ON calls(attempt_id) WHERE attempt_id IS NOT NULL;" +
                     "INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose) VALUES('t','claude','Flush','Fast','m',10,5,15,3,4,1,20,'ok','actual','summary');" +

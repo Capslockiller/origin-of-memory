@@ -456,6 +456,40 @@ public sealed class SchemaV5MigrationTests
     {
         var sql = new StringBuilder();
 
+        // Sürüm 1 (100e6ce) biçimi: damgalanan sürümün gerçekten taşıdığı tablolar. Damga
+        // artık inanıldığı için fixture de o sürümün tam şeklinde olmak zorunda.
+        sql.Append("CREATE TABLE retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);");
+        sql.Append("CREATE TABLE sweep_stamps(path TEXT PRIMARY KEY, mtime TEXT, size INTEGER, outcome TEXT);");
+        sql.Append("CREATE TABLE coverage(ts TEXT, total INTEGER, covered INTEGER, uncovered_json TEXT);");
+        sql.Append("CREATE TABLE daily_ingest(name TEXT PRIMARY KEY, digest TEXT, status TEXT, attempts INTEGER, reasons TEXT, ts TEXT);");
+        sql.Append("CREATE TABLE compile_runs(ts TEXT, daily TEXT, status TEXT, created INTEGER, updated INTEGER, ms INTEGER);");
+        sql.Append("CREATE TABLE quarantine(digest TEXT PRIMARY KEY, source TEXT, reason TEXT, ts TEXT, path TEXT);");
+        sql.Append("CREATE TABLE health(ts TEXT, component TEXT, level TEXT, code TEXT, key TEXT, detail TEXT);");
+        sql.Append("CREATE TABLE notified(class TEXT, key TEXT, ts TEXT);");
+        sql.Append("CREATE TABLE locks(name TEXT PRIMARY KEY, machine TEXT, pid INTEGER, ts TEXT);");
+        sql.Append("CREATE TABLE kota(ts TEXT, \"window\" TEXT, used_pct REAL, resets_at TEXT);");
+
+        // Sürüm 2 (v2.0.0): beş salt-okunur görünüm.
+        if (version >= 2)
+        {
+            sql.Append("CREATE VIEW v_flush_log AS SELECT ts, session_id, reason, outcome, turns, chars, backend FROM flush_log;");
+            sql.Append("CREATE VIEW v_coverage AS SELECT ts, total, covered, uncovered_json FROM coverage;");
+            sql.Append("CREATE VIEW v_health AS SELECT ts, component, level, code, key, detail FROM health;");
+            sql.Append("CREATE VIEW v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;");
+            sql.Append("CREATE VIEW v_calls AS SELECT ts, backend, component, tier, model, purpose FROM calls;");
+        }
+
+        // Sürüm 3 (v2.1.0): ingest_done ve vault_meta.
+        if (version >= 3)
+        {
+            sql.Append("CREATE TABLE ingest_done(source TEXT, digest TEXT, ts TEXT, PRIMARY KEY(source, digest));");
+            sql.Append("CREATE TABLE vault_meta(key TEXT PRIMARY KEY, value TEXT);");
+        }
+
+        // Sürüm 4 (ea3879e): v_call_usage.
+        if (version >= 4)
+            sql.Append("CREATE VIEW v_call_usage AS SELECT backend, model, COUNT(*) AS attempt_count FROM calls GROUP BY backend, model;");
+
         if (calls)
         {
             var columns = "ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, " +

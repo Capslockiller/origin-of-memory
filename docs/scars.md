@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 178, Geçti: 178, Başarısız: 0. Kapı testleriyle birlikte toplam 222 test, 222 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 200, Geçti: 200, Başarısız: 0. Kapı testleriyle birlikte toplam 244 test, 238 geçti, 6 karar bekliyor. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -178,6 +178,28 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-223 | test-disiplini | Korpusta-var-mı kontrolü olmadan, uydurma not adlarıyla cevap veren bir backend `recall 0.000` **ve** `run_status: ok` üretebiliyordu — yayımlanabilir, kusursuz biçimli, yanlış bir sayı. Bozuk getirme çıktısı artık skorsuzluğa düşüyor | RecallEvidenceTests.Y223_* | yeşil |
 | Y-224 | test-disiplini | Kapı 125 puanlanan soruyu sayıyor; kanca yolu ve negatif kontroller ayrı raporlanıyor ve kapısız recall onların yerine geçmiyor | RecallEvidenceTests.Y224_* | yeşil |
 | Y-225 | test-disiplini | Sınıf etiketleri yeniden adlandırılmıyor: `tek-not`/`çok-not`, `episodik`/`kavram` diye sunulmuyor; episodik eksen `measured: false` ile yapısal olarak açık kalıyor | RecallEvidenceTests.Y225_* | yeşil |
+| Y-230 | durum-deposu | Yayımlanmış sürüm 2 yükseltiliyor: kayıt **içerikleri** korunuyor, yedek alınıp doğrulanıyor | SchemaIntegrityTests.Y230_* | yeşil |
+| Y-231 | durum-deposu | **Tag `v2.1.0` ile yazılmış gerçek bir dosya damga 3 taşır ve `calls` 15 sütunludur.** Merdivenin 2. ve 3. basamakları yalnız damgası altlarında olan dosyada koştuğu için o dosya "sürüm 5" damgası alıp `operation_id`, `attempt_id`, `attempt_no`, `uncached_in_tok` olmadan kalıyordu — `RecordCall` bunları adıyla yazdığı için göçten sonra defter hiç yazılamazdı. Basamak numarasından şekle geçildi | SchemaIntegrityTests.Y231_* | yeşil |
+| Y-232 | durum-deposu | Geçerli sürüm 4 tek basamakla 5'e çıkıyor ve satırları değişmiyor | SchemaIntegrityTests.Y232_* | yeşil |
+| Y-233 | durum-deposu | Genişletilmiş sürüm 4 reddedilmiyor: fazlası olan dosya bozuk değildir | SchemaIntegrityTests.Y233_* | yeşil |
+| Y-234 | durum-deposu | Sağlam sürüm 5 tekrar açılışta hiçbir basamak koşmuyor ve ikinci yedek üretmiyor | SchemaIntegrityTests.Y234_* | yeşil |
+| Y-235 | durum-deposu | Eksik `sweep_stamps` taşıyan sürüm 3 reddediliyor; dosyanın **baytına** dokunulmuyor | SchemaIntegrityTests.Y235_* | yeşil |
+| Y-236 | durum-deposu | Eksik `calls` sütunu taşıyan sürüm 4 reddediliyor; veri ve sürüm değişmiyor | SchemaIntegrityTests.Y236_* | yeşil |
+| Y-237 | durum-deposu | Eksik görünüm taşıyan sürüm 5 reddediliyor | SchemaIntegrityTests.Y237_* | yeşil |
+| Y-238 | durum-deposu | Eksik indeks taşıyan sürüm 5 reddediliyor ve indeks **sessizce geri kurulmuyor** — eksik yapıyı raporlamak için DDL koşmuyor | SchemaIntegrityTests.Y238_* | yeşil |
+| Y-239 | durum-deposu | Fiziksel bozulma, şema eksikliğinden **ayrı gerekçeyle** reddediliyor: ikisi aynı hüküm değil | SchemaIntegrityTests.Y239_* | yeşil |
+| Y-240 | durum-deposu | Gelecek sürüm reddediliyor ve dosyanın baytına dokunulmuyor | SchemaIntegrityTests.Y240_* | yeşil |
+| Y-241 | durum-deposu | Yazan açılış reddedilse de teşhis alınabiliyor, ve teşhis hiçbir şey yaratmıyor — `State.Diagnose` throw etmiyor | SchemaIntegrityTests.Y241_* | yeşil |
+| Y-242 | durum-deposu | Boş dosya, sürümsüz dolu dosya ve geçerli tarihî dosya birbirine karışmıyor | SchemaIntegrityTests.Y242_* | yeşil |
+| Y-243 | durum-deposu | Salt okunur açılış eksikleri bildiriyor ama reddetmiyor ve DDL çalıştırmıyor | SchemaIntegrityTests.Y243_* | yeşil |
+| Y-244 | durum-deposu | Merdivenin tamamlayamayacağı dosya **göç başlamadan** reddediliyor; teşhis bunu önceden söylüyor | SchemaIntegrityTests.Y244_* | yeşil |
+| Y-250 | test-disiplini | Kanıt, koşucunun bulunduğu checkout'un SHA'sına değil **dışarıdan verilen aday manifestine** bağlanıyor; exe'nin kaynağı kendi kendine ilan edilemiyor | RecallCandidateBindingTests.Y250_* | yeşil |
+| Y-251 | test-disiplini | Eşikler sabit; kanıt dosyası kendi `thresholds` alanıyla kendi eşiğini düşüremiyor | RecallCandidateBindingTests.Y251_* | yeşil |
+| Y-252 | test-disiplini | Ölçülen girdiler `Duzeltmeler.md` ve `.oom/oom.json`'u da kapsıyor — korpus yalnız `knowledge/concepts` değil. Örtüşen kopya hedefi reddediliyor, dolu hedef sessizce silinmiyor | RecallCandidateBindingTests.Y252_* | yeşil |
+| Y-253 | test-disiplini | `Duzeltmeler.md#…` isabeti koşulsuz muaf değil: kimlik, ürünün kendi numaralandırma kuralına karşı doğrulanıyor | RecallCandidateBindingTests.Y253_* | yeşil |
+| Y-254 | test-disiplini | Ölçüm öncesi ve sonrası kimlikler karşılaştırılıyor; değişen girdi geçerli sonuç üretmiyor — ve bu kontrol bütünlük reddinden **önce** koşuyor | RecallCandidateBindingTests.Y254_* | yeşil |
+| Y-255 | test-disiplini | Tam tarama ve indeksli yol ayrı ölçülüyor. `CandidateSource` `internal` ve `src/` içinde onu okuyan yok; "indeksli koşum" süreç çıktısından okunamaz, **gösterilmesi** gerekir | RecallCandidateBindingTests.Y255_* | yeşil |
+| Y-256 | test-disiplini | Tanık sondası gerçek üründe kanıtlanıyor: `notes_fts` satırı silinen not indeksli yolda erişilemez olmalı; gelirse daraltma olmamıştır ve indeksli hüküm reddedilir | RecallCandidateBindingTests.Y256_* | yeşil |
 | Y-170 | durum-deposu | Üçüncü DDL yeri: `Retrieve.Build()` kendi bağlantısını açıp `oom_index_meta`, `notes` ve `notes_fts`'i aynı `state.db` içinde yaratıyordu — şemanın tek sahibi olmasına rağmen. İndeks şeması artık `StateStore`'un merdiveninde; `Build()` sıfır DDL koşuyor | IndeksScars.Y170_* | yeşil |
 | Y-171 | durum-deposu | `Retrieve.Build()` kendi `Directory.CreateDirectory` çağrısını yapıyordu: test paketi her koşumda bir durum kökü sızdırıyordu (ölçüldü, sızan kökte yalnız indeks tabloları ve `user_version=0` vardı). Artık var olan dizin yazmanın koşulu; sızıntı bitti | IndeksScars.Y171_* | yeşil |
 | Y-172 | durum-deposu | Yeniden kurulum `DROP TABLE notes` ile şema sahibinin altından tabloyu alıyordu. Yerine aynı işlem içinde `DELETE` geldi: indeks indeks olarak yenileniyor, `ix_notes_updated` ve sürüm damgası yerinde kalıyor | IndeksScars.Y172_* | yeşil |
@@ -196,8 +218,8 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | getirme | 16 | 0 |
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
-| durum-deposu | 41 | 0 |
+| durum-deposu | 56 | 0 |
 | kurulum | 33 | 0 |
-| test-disiplini | 17 | 0 |
+| test-disiplini | 24 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **178** | **0** |
+| **Toplam** | **200** | **0** |
