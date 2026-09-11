@@ -121,7 +121,7 @@ public sealed class DurumDeposuScars
     /// independent opens — the whole state lives in the file, so the open path is the production
     /// path; what this does NOT prove is anything about in-memory state surviving a process exit.
     /// </summary>
-    [Fact(DisplayName = "Y-129 · Eski şemalı durum deposu kopyalanıp doğrulanarak göç eder, satırları kalır ve ikinci açılış hiçbir şey yapmaz")]
+    [Fact(DisplayName = "Y-129 · Eski durum deposu kopyalanıp doğrulanarak göç eder, satırları kalır, basamaklar raporlanır ve sağlam ikinci açılış yeni yedek üretmez")]
     public void Y129_OlderDatabaseIsMigratedByCopyAndVerifyAndKeepsItsRows()
     {
         var root = ScarFixture.TempDirectory();
@@ -135,8 +135,21 @@ public sealed class DurumDeposuScars
                 var report = migrated.SchemaReport;
                 Assert.Equal(2, report.FoundVersion);
                 Assert.Equal(5, report.Version);
+                // The executed steps, in order, spelled out here rather than read off the
+                // production ladder — an expectation derived from Ladder or StepApplies would
+                // confirm itself. Which steps run follows the source stamp's published schema
+                // contract, not the columns this file happens to have: version 2 never shipped
+                // ingest_done, vault_meta or the call-identity columns, so steps 1 and 2 are
+                // still owed to a stamp 2 file and are not skipped for being numbered at or
+                // below its stamp. They are reported as completing that step's missing part.
                 Assert.Equal(
-                    ["2→3: önbelleksiz girdi sayacı (uncached_in_tok)", "2→4: bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)", "2→5: getirim dizini ve served defteri kapsamı (notes, notes_fts, oom_index_meta, retrieve_served kapsam sütunları)"],
+                    [
+                        "2→5: 1. basamağın eksik kalan kısmı tamamlandı: temel tablolar",
+                        "2→5: 2. basamağın eksik kalan kısmı tamamlandı: çağrı kimlikleri (operation_id, attempt_id, attempt_no)",
+                        "2→3: önbelleksiz girdi sayacı (uncached_in_tok)",
+                        "2→4: bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)",
+                        "2→5: getirim dizini ve served defteri kapsamı (notes, notes_fts, oom_index_meta, retrieve_served kapsam sütunları)"
+                    ],
                     report.Applied);
 
                 // Nothing was dropped and recreated: the pre-migration rows are still the same rows.
@@ -153,12 +166,19 @@ public sealed class DurumDeposuScars
                 Assert.Equal(0, Read(report.BackupPath!, "SELECT COUNT(*) FROM pragma_table_info('calls') WHERE name = 'usage_rank'"));
             }
 
+            var copies = Directory.GetFiles(Path.Combine(root, "backup"));
+            Assert.Single(copies);
+
             SqliteConnection.ClearAllPools();
             using var reopened = new State(null, null, database);
             Assert.Equal(5, reopened.SchemaReport.FoundVersion);
             Assert.Empty(reopened.SchemaReport.Applied);
             Assert.Null(reopened.SchemaReport.BackupPath);
             Assert.Equal(1, reopened.Scalar("SELECT COUNT(*) FROM calls"));
+
+            // A healthy second open takes no second copy: the one from the migration is still the
+            // only file in the backup directory.
+            Assert.Equal(copies, Directory.GetFiles(Path.Combine(root, "backup")));
         }
         finally
         {
