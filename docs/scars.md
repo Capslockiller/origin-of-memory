@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 128, Geçti: 128, Başarısız: 0. Kapı testleriyle birlikte toplam 169 test, 169 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 129, Geçti: 129, Başarısız: 0. Kapı testleriyle birlikte toplam 170 test, 170 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -135,6 +135,7 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-126 | yazma-yolu | `Flush` bekçiyi yalnız modelin **döndürdüğü** metne uyguluyordu; `BuildPrompt(range)` ham transkripti süzgeçsiz gönderiyordu — kullanıcının sohbete yapıştırdığı canlı bir API anahtarı makineden aynen çıkıyor, geri gelen özeti ise temizleniyordu. Sır ve KVK desenleri artık istem runner'a verilmeden önce maskeleniyor; ham transkript yerelde maskesiz kalıyor | GonderimSiniriScars.Y126_OutboundPromptIsGatedBeforeItLeavesTheMachine | yeşil |
 | Y-127 | derleyici | `Compile` bekçiyi yalnız modelin **döndürdüğü** metne uyguluyordu; `CompilePrompt` daily metnini süzgeçsiz akıllı modele veriyordu — flush'takiyle aynı delik. `Direction` kazandığı `Egress` üyesiyle gönderim sınırını adlandırıyor, `Guards` artık yönü yok saymıyor: egress maskeler ama asla reddetmez (gönderilen metin dosyaya dönüşmez), alım tarafı reddedebilir | GonderimSiniriScars.Y127_CompilePromptIsGatedBeforeItLeavesTheMachine | yeşil |
 | Y-128 | derleyici | Gönderim kapısı yazıldı ve `Y-127` ile kanıtlandı ama **üretim yolu onu çağırmıyordu**: `Program.cs` derleme komutu `runner.Run(plan.Prompt, …)` diyerek kapının yanından geçiyordu — yani `oom compile` daily'deki kimlik bilgilerini akıllı modele göndermeye devam ediyordu. Testte bağlı, üretimde ölü. Kurulu exe'nin komut yolu artık `Compile.Send`'den geçiyor; bench'in iki gönderimi de aynı kapıya bağlandı | GonderimSiniriScars.Y128_ShippedCompileCommandSendsThroughTheEgressGate | yeşil |
+| Y-160 | kurulum | Uzantının `contextLine` değeri bir komuttur ve **çıktısı** SessionStart bloğuna, kapanış cümlesinin hemen önüne — blogun talimat ağırlığı en yüksek yerine — aynen basılıyordu. Sahibi hangi komutun koşacağını yapılandırır, ne basacağını yapılandırmaz. Fikstür kasada koşturularak kanıtlandı: hem talimat şeklinde bir satır hem bir API anahtarı bloğa sağlam ulaştı. Satır artık `Direction.Egress` kapısından geçiyor; talimat bulunursa uzantı bütünüyle düşürülüyor ve düşürüldüğü bloğun kendisinde yazıyor | GonderimSiniriScars.Y160_ExtensionOutputCrossesTheEgressGateBeforeEnteringTheSessionBlock | yeşil |
 
 ## Sınıf başına durum
 
@@ -147,7 +148,7 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
 | durum-deposu | 13 | 0 |
-| kurulum | 20 | 0 |
+| kurulum | 21 | 0 |
 | test-disiplini | 11 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **128** | **0** |
+| **Toplam** | **129** | **0** |
