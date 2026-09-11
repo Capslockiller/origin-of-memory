@@ -19,11 +19,31 @@ public sealed record DoctorObservation(HealthItem Item, DateTimeOffset ObservedA
 /// <c>ingest_done</c> counted zero and was reported as empty residue.
 /// </param>
 /// <param name="Status">
-/// <c>kullanımda</c>, <c>eşleşmiyor</c>, <c>sahipsiz</c>, <c>artık</c>, <c>belirsiz</c> or
-/// <c>okunamıyor</c>. <c>artık</c> is the only verdict that claims a root holds nothing, so it is
-/// only reached when that emptiness was actually proven — see <c>belirsiz</c>.
+/// <c>kullanımda</c>, <c>eşleşmiyor</c>, <c>sahipsiz</c>, <c>artık</c>, <c>belirsiz</c>,
+/// <c>okunamıyor</c> or <c>ölçülemedi</c>. <c>artık</c> is the only verdict that claims a root
+/// holds nothing, so it is only reached when that emptiness was actually proven — see
+/// <c>belirsiz</c>. <c>ölçülemedi</c> (Y-275/Y-276) is the verdict for a root the scan declined to
+/// read at all, because reading it in place would have made SQLite create files beside the owner's
+/// database.
 /// </param>
-public sealed record StateRootReport(string Path, string Hash, string? Vault, long Rows, string Status);
+/// <param name="Reason">
+/// Why this root is <c>okunamıyor</c> or <c>ölçülemedi</c>, in the owner's language. Y-272: each
+/// unhappy verdict carries its own reason instead of everything landing in one "sorunlu" bucket.
+/// </param>
+/// <param name="SchemaKind">
+/// What <see cref="State.Diagnose"/> made of the file's schema, read from the scan's private
+/// snapshot. Null when there was nothing readable to judge.
+/// </param>
+/// <param name="SchemaSummary">The schema verdict in words; empty when the schema is not at issue.</param>
+public sealed record StateRootReport(
+    string Path,
+    string Hash,
+    string? Vault,
+    long Rows,
+    string Status,
+    string Reason = "",
+    StateFileKind? SchemaKind = null,
+    string SchemaSummary = "");
 
 public sealed record DoctorSnapshot(
     IReadOnlyList<DoctorObservation> Observations,
@@ -43,10 +63,19 @@ public sealed class Doctor
     private readonly Func<DateTimeOffset, DoctorSnapshot> probe;
     private readonly Action repair;
     private readonly Func<IReadOnlyList<HealthItem>> stateRoots;
+    private readonly long snapshotLimit;
+
+    /// <summary>
+    /// The largest database the scan will copy in order to read it safely. Past this size the root
+    /// is reported <c>ölçülemedi</c> rather than read in place, because reading it in place is the
+    /// thing that creates files beside the owner's data (Y-276).
+    /// </summary>
+    public const long DefaultSnapshotLimitBytes = 1L << 30;
 
     public Doctor(IClock? clock = null, Func<DateTimeOffset, DoctorSnapshot>? probe = null, Action? repair = null,
-        Func<IReadOnlyList<HealthItem>>? stateRoots = null)
+        Func<IReadOnlyList<HealthItem>>? stateRoots = null, long snapshotLimitBytes = DefaultSnapshotLimitBytes)
     {
+        this.snapshotLimit = snapshotLimitBytes;
         this.clock = clock ?? SystemClock.Instance;
         this.probe = probe ?? DefaultSnapshot;
         this.repair = repair ?? (() => { });
@@ -208,12 +237,12 @@ public sealed class Doctor
             var hash = Path.GetFileName(root);
             try
             {
-                reports.Add(InspectOneStateRoot(root, hash));
+                reports.Add(InspectOneStateRoot(root, hash, snapshotLimit));
             }
             catch (Exception error) when (error is SqliteException or IOException or UnauthorizedAccessException)
             {
                 // One unreadable root must never abort the scan of the other twenty-five.
-                reports.Add(new StateRootReport(root, hash, null, 0, "okunamıyor"));
+                reports.Add(new StateRootReport(root, hash, null, 0, "okunamıyor", error.Message));
             }
         }
 
@@ -222,12 +251,33 @@ public sealed class Doctor
         return reports.OrderBy(report => report.Path, StringComparer.Ordinal).ToArray();
     }
 
-    private static StateRootReport InspectOneStateRoot(string root, string hash)
+    private static StateRootReport InspectOneStateRoot(string root, string hash, long snapshotLimit)
     {
         var vault = VaultIdentity.ReadDescriptor(root);
         var databasePath = Path.Combine(root, VaultIdentity.DatabaseName);
-        var content = File.Exists(databasePath) ? ReadContent(databasePath) : StateRootContent.NoDatabase;
 
+        if (!File.Exists(databasePath))
+            return Classify(root, hash, vault, StateRootContent.NoDatabase, StateFileKind.Missing, string.Empty);
+
+        // Y-275: the owner's file is never opened. Where opening it read-only would make SQLite
+        // materialise a -wal/-shm pair beside it, the scan reads a private copy instead; where no
+        // copy can be taken honestly, it reads nothing and says so.
+        using var snapshot = StateRootSnapshot.Take(databasePath, snapshotLimit);
+        if (snapshot.DatabasePath is null)
+            return new StateRootReport(root, hash, vault, 0, "ölçülemedi", snapshot.Reason);
+
+        var diagnosis = State.Diagnose(snapshot.DatabasePath);
+        if (diagnosis.Kind is StateFileKind.Unreadable)
+            return new StateRootReport(root, hash, vault, 0, "okunamıyor",
+                diagnosis.Integrity ?? diagnosis.Summary, diagnosis.Kind, diagnosis.Summary);
+
+        var content = ReadContent(snapshot.DatabasePath);
+        return Classify(root, hash, vault, content, diagnosis.Kind, diagnosis.Summary);
+    }
+
+    private static StateRootReport Classify(string root, string hash, string? vault, StateRootContent content,
+        StateFileKind schema, string schemaSummary)
+    {
         var status = !content.Readable ? "okunamıyor"
             : vault is not null && string.Equals(VaultIdentity.Hash(vault), hash, StringComparison.Ordinal) ? "kullanımda"
             : vault is not null ? "eşleşmiyor"
@@ -236,7 +286,163 @@ public sealed class Doctor
             // the scan actually walked the whole database and understood every object in it.
             : content.EmptinessProven ? "artık"
             : "belirsiz";
-        return new StateRootReport(root, hash, vault, content.Readable ? content.Rows : 0, status);
+        var reason = status == "okunamıyor" ? "state.db bütünlük denetiminden geçmedi." : string.Empty;
+        return new StateRootReport(root, hash, vault, content.Readable ? content.Rows : 0, status, reason,
+            schema, schemaSummary);
+    }
+
+    /// <summary>
+    /// A private, read-only copy of one state root's database — the answer to the exception Y-214
+    /// pinned and the wave-2 gate refused to let stand.
+    ///
+    /// Measured, on this machine, with the product's own <c>state.db</c>: connecting
+    /// <c>Mode=ReadOnly</c> to a database whose header carries the WAL stamp creates
+    /// <c>state.db-shm</c> (32 768 bytes) and an empty <c>state.db-wal</c> beside it, and a
+    /// read-only connection cannot remove them again. Every database this product writes carries
+    /// that stamp, because <c>journal_mode=WAL</c> is persistent and lives in the file header —
+    /// so "the scan only reads" was never true of any real root.
+    ///
+    /// Three ways out were measured, not assumed:
+    /// <list type="bullet">
+    ///   <item><c>immutable=1</c> creates nothing — and is refused. It tells SQLite the file cannot
+    ///   change, which makes it skip the WAL entirely; on a live vault the scan would then read the
+    ///   pre-WAL shape and report a stale answer as current. Apex ruled that an option that can
+    ///   break freshness on a live file may not be switched on quietly, and this is that option.</item>
+    ///   <item>A database with no WAL stamp (<c>journal_mode=delete</c>) opens read-only and creates
+    ///   nothing — measured. Those roots are still read in place, with no copy at all.</item>
+    ///   <item>Copying the file and reading the copy leaves the root byte-identical — measured. The
+    ///   sidecars appear next to the copy, in a directory of this scan's own, and go away with it.</item>
+    /// </list>
+    ///
+    /// The copy is taken with the <c>-wal</c> beside it and verified: the source is hashed before
+    /// and after, and a source that moved while it was being read yields no snapshot at all. A torn
+    /// copy would answer the owner's question with a number that was never true of any moment.
+    /// </summary>
+    private sealed class StateRootSnapshot : IDisposable
+    {
+        private readonly string? directory;
+
+        private StateRootSnapshot(string? databasePath, string? directory, string reason)
+        {
+            DatabasePath = databasePath;
+            this.directory = directory;
+            Reason = reason;
+        }
+
+        /// <summary>What to open, or null when nothing may be opened.</summary>
+        public string? DatabasePath { get; }
+
+        /// <summary>Why nothing may be opened; empty when there is something to open.</summary>
+        public string Reason { get; }
+
+        public static StateRootSnapshot Take(string databasePath, long limit)
+        {
+            var wal = databasePath + "-wal";
+            var shm = databasePath + "-shm";
+
+            if (!TryDetectWriteAheadLog(databasePath, wal, shm, out var usesWal, out var failure))
+                return new StateRootSnapshot(null, null, failure);
+            if (!usesWal)
+                return new StateRootSnapshot(databasePath, null, string.Empty);
+
+            string? directory = null;
+            try
+            {
+                var size = Length(databasePath) + Length(wal);
+                if (size > limit)
+                    return new StateRootSnapshot(null, null,
+                        $"veritabanı {size} bayt, bu taramanın güvenli anlık kopya sınırı {limit} bayt; " +
+                        "kök hiç açılmadı, çünkü yerinde okumak sahibin dosyasının yanına dosya yaratırdı.");
+
+                directory = Directory.CreateTempSubdirectory("oom-doctor-").FullName;
+                var copy = System.IO.Path.Combine(directory, VaultIdentity.DatabaseName);
+                var before = Fingerprint(databasePath, wal);
+                File.Copy(databasePath, copy);
+                if (File.Exists(wal))
+                    File.Copy(wal, copy + "-wal");
+
+                if (!string.Equals(before, Fingerprint(databasePath, wal), StringComparison.Ordinal))
+                {
+                    Delete(directory);
+                    return new StateRootSnapshot(null, null,
+                        "kopyalanırken dosya değişti; tek bir ana ait tutarlı anlık kopya alınamadı.");
+                }
+
+                return new StateRootSnapshot(copy, directory, string.Empty);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                if (directory is not null)
+                    Delete(directory);
+                return new StateRootSnapshot(null, null, $"güvenli anlık kopya alınamadı: {error.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Whether this database would drag SQLite into WAL mode, answered without letting SQLite
+        /// near it: bytes 18 and 19 of the header are the file-format write and read versions, and
+        /// 2 means WAL. A plain read of the first twenty bytes creates nothing.
+        /// </summary>
+        private static bool TryDetectWriteAheadLog(string databasePath, string wal, string shm, out bool usesWal, out string failure)
+        {
+            usesWal = false;
+            failure = string.Empty;
+            if (File.Exists(wal) || File.Exists(shm))
+            {
+                usesWal = true;
+                return true;
+            }
+
+            try
+            {
+                using var stream = new FileStream(databasePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                Span<byte> header = stackalloc byte[20];
+                var read = stream.ReadAtLeast(header, header.Length, throwOnEndOfStream: false);
+                // Too short to carry a header is too short to carry a WAL stamp.
+                usesWal = read >= header.Length && (header[18] == 2 || header[19] == 2);
+                return true;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                failure = $"dosya başlığı okunamadı, bu yüzden güvenli okuma yolu seçilemedi: {error.Message}";
+                return false;
+            }
+        }
+
+        private static long Length(string path) => File.Exists(path) ? new FileInfo(path).Length : 0;
+
+        private static string Fingerprint(string databasePath, string wal)
+        {
+            var parts = new List<string>();
+            foreach (var path in new[] { databasePath, wal })
+            {
+                if (!File.Exists(path))
+                {
+                    parts.Add("yok");
+                    continue;
+                }
+
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                parts.Add(Convert.ToHexString(SHA256.HashData(stream)));
+            }
+
+            return string.Join("·", parts);
+        }
+
+        private static void Delete(string directory)
+        {
+            try { Directory.Delete(directory, recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+
+        public void Dispose()
+        {
+            if (directory is null)
+                return;
+            // The copy is what the pool is holding; it has to let go before the directory can go.
+            SqliteConnection.ClearAllPools();
+            Delete(directory);
+        }
     }
 
     /// <summary>
@@ -352,34 +558,82 @@ public sealed class Doctor
             {
                 case "artık":
                     items.Add(Item("state", HealthLevel.Warning, "stray-state-root", report.Hash,
-                        $"Sahipsiz boş durum kökü: {report.Path} — veritabanındaki hiçbir kullanıcı tablosunda satır yok, vault künyesi yok. Silme kararı sahibin; oom hiçbir şeyi silmez."));
+                        $"Sahipsiz boş durum kökü: {report.Path} — veritabanının hiçbir kullanıcı tablosunda kayıt yok ve kasa künyesi yok. Silme kararı sahibin; oom hiçbir şeyi silmez."));
                     break;
-                // Y-210: the honest middle. Nothing was found, but the scan met something it could
-                // not read or does not understand, so "boş" would be a claim it cannot support.
+                // Y-210/Y-270: the honest middle. Nothing was found, but the scan met something it
+                // could not read or does not understand, so "boş" would be a claim it cannot
+                // support — and a root reported empty is a root the owner is being invited to
+                // delete. The sentence below is apex's, verbatim, and is what the owner reads.
                 case "belirsiz":
                     items.Add(Item("state", HealthLevel.Warning, "state-root-indeterminate", report.Hash,
-                        $"Durum kökü {report.Path} boş görünüyor ama boşluğu kanıtlanamadı: tanınmayan bir yapı var ya da bir tablo okunamadı. Artık (stray) sayılmaz, silme adayı değildir."));
+                        $"Durum kökü {report.Path}: {IndeterminateGuidance} " +
+                        "(Tarama tanınmayan bir yapıyla karşılaştı ya da bir tabloyu okuyamadı; artık/stray sayılmaz, silme adayı değildir.)"));
                     break;
                 case "eşleşmiyor":
                     items.Add(Item("state", HealthLevel.Warning, "state-root-mismatch", report.Hash,
-                        $"Durum kökü {report.Path}, \"{report.Vault}\" adlı vault'u taşıyor ama bu vault'un doğru adresi {VaultIdentity.Hash(report.Vault!)} olmalı; iki veritabanı aynı vault için ulaşılabilir."));
+                        $"Durum kökü {report.Path}, \"{report.Vault}\" adlı kasayı taşıyor ama bu kasanın doğru adresi {VaultIdentity.Hash(report.Vault!)} olmalı; iki veritabanı aynı kasa için ulaşılabilir."));
                     break;
+                // Y-271: the total below is a row count across database tables. It is not a count of
+                // memories, notes or anything else the owner would recognise as theirs — one note
+                // leaves rows in several tables and several tables hold no notes at all — so it is
+                // never presented as one.
                 case "sahipsiz":
                     items.Add(Item("state", HealthLevel.Warning, "unattributed-state-root", report.Hash,
-                        $"Durum kökü {report.Path} {report.Rows} satır taşıyor ama hiçbir vault künyesi yok; boş olmadığı için sahipsiz sayılır, artık (stray) sayılmaz."));
+                        $"Durum kökü {report.Path} boş değil ama hiçbir kasa künyesi yok; sahipsiz sayılır, artık (stray) sayılmaz. " +
+                        $"Veritabanındaki teknik tablo satırı toplamı {report.Rows} — {RowsAreNotMemories}"));
                     break;
                 case "okunamıyor":
                     items.Add(Item("state", HealthLevel.Warning, "state-root-unreadable", report.Hash,
-                        $"Durum kökü {report.Path} okunamıyor: state.db bütünlük denetiminden geçmedi ya da açılamadı."));
+                        $"Durum kökü {report.Path} okunamıyor: {Because(report.Reason)} " +
+                        "Bu kökün içeriği hakkında hiçbir şey iddia edilemez; boş sayılmaz, silme adayı değildir."));
+                    break;
+                // Y-275/Y-276: the scan declined to read this one. Reporting it as a root with
+                // nothing in it would be the same lie the "artık" verdict was cleaned up to stop
+                // telling, only arrived at by a different road.
+                case "ölçülemedi":
+                    items.Add(Item("state", HealthLevel.Warning, "state-root-unmeasured", report.Hash,
+                        $"Durum kökü {report.Path} güvenle ölçülemedi: {Because(report.Reason)} " +
+                        "Tarama, okumak için sahibin dosyasının yanına dosya yaratmak zorunda kalacağı hiçbir kökü açmaz; " +
+                        "bu kök için boş/dolu hükmü verilmedi."));
                     break;
             }
+
+            // Y-273: a schema that does not match the version it claims is its own reason, with its
+            // own missing structures named. It is not folded into "okunamıyor" and it is not folded
+            // into the ownership verdict above: a root can be perfectly well attributed and still
+            // carry a file this build refuses to write to.
+            if (report.SchemaKind is StateFileKind.Incomplete or StateFileKind.Future)
+                items.Add(Item("state", HealthLevel.Warning, "state-root-schema-mismatch", report.Hash,
+                    $"Durum kökü {report.Path} şema uyuşmazlığı taşıyor: {report.SchemaSummary} " +
+                    "Şema kusuru, kökün ne taşıdığı hakkında tek başına bir şey söylemez; " +
+                    "yukarıdaki içerik hükmü ayrıdır ve dosyaları korumak gerekir."));
         }
 
         var byStatus = reports.ToLookup(report => report.Status);
         items.Insert(0, Item("state", HealthLevel.Info, "state-roots", reports.Count.ToString(),
-            $"{reports.Count} durum kökü · kullanımda {byStatus["kullanımda"].Count()} · artık {byStatus["artık"].Count()} · sahipsiz {byStatus["sahipsiz"].Count()} · eşleşmiyor {byStatus["eşleşmiyor"].Count()} · belirsiz {byStatus["belirsiz"].Count()} · okunamıyor {byStatus["okunamıyor"].Count()}"));
+            $"{reports.Count} durum kökü · kullanımda {byStatus["kullanımda"].Count()} · artık {byStatus["artık"].Count()} · sahipsiz {byStatus["sahipsiz"].Count()} · eşleşmiyor {byStatus["eşleşmiyor"].Count()} · belirsiz {byStatus["belirsiz"].Count()} · okunamıyor {byStatus["okunamıyor"].Count()} · ölçülemedi {byStatus["ölçülemedi"].Count()}"));
         return items;
     }
+
+    /// <summary>
+    /// What the owner is told about a root whose emptiness could not be proven — apex's wording,
+    /// which is the product's wording. It says what to do (keep the files, look at the vault) and
+    /// deliberately does not offer a repair: no automatic fix has been shown to work on this class
+    /// of root, and recommending one that has not would be the third wrong answer in a row.
+    /// </summary>
+    public const string IndeterminateGuidance =
+        "Bu durum kökünün boş olduğu doğrulanamadı. Dosyaları koruyun; temizleme kararı vermeden " +
+        "önce kökün bağlı olduğu kasayı ve içeriğini inceleyin.";
+
+    /// <summary>
+    /// The disclaimer that travels with every row total the scan prints. Y-271: "satır" is a
+    /// database word, and the owner reads numbers in a health report as a count of what they own.
+    /// </summary>
+    public const string RowsAreNotMemories =
+        "bu bir hafıza/not sayısı değildir ve kaç anınızın saklandığını göstermez.";
+
+    private static string Because(string reason) =>
+        string.IsNullOrWhiteSpace(reason) ? "sebep belirlenemedi." : reason.TrimEnd() + (reason.TrimEnd().EndsWith('.') ? string.Empty : ".");
 
     private static DoctorObservation Observe(DateTimeOffset now, string component, string code, string key, string detail) =>
         new(Item(component, HealthLevel.Info, code, key, detail), now);
