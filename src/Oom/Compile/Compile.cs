@@ -87,14 +87,20 @@ public sealed class Compile
     /// the gate on each note body below are untouched, and the daily is fenced as untrusted
     /// data in the prompt either way. So <see cref="Direction.Egress"/> redacts and sends.
     /// </summary>
-    public RunResult Send(Runner runner, CompilePlan plan)
+    /// <param name="purpose">
+    /// The call-ledger tag. It is a parameter only so <c>oom bench</c> can route its leg (c)
+    /// through this same boundary without its measurement calls being filed as production
+    /// compiles; every shipped compile leaves it at <c>concepts</c>.
+    /// </param>
+    public RunResult Send(Runner runner, CompilePlan plan, string purpose = "concepts")
     {
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(purpose);
 
         var outbound = _guards.Gate(plan.Prompt, Direction.Egress, ComponentKind.Compile);
         RecordBoundary(plan.Daily, outbound);
-        return runner.Run(outbound.Text, ModelTier.Smart, ComponentKind.Compile, "concepts");
+        return runner.Run(outbound.Text, ModelTier.Smart, ComponentKind.Compile, purpose);
     }
 
     /// <summary>

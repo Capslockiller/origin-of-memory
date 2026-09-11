@@ -118,7 +118,11 @@ public sealed class Bench
 
     /// <summary>Leg (c): the shipped compile prompt in, the shipped path allowlist plus
     /// <c>=== DONE ===</c> out. The <see cref="Compile"/> instance is anchored outside the vault on
-    /// purpose — only its pure validator is used, and a measurement never publishes.</summary>
+    /// purpose — its validator and its send boundary are used, and a measurement never publishes.
+    /// Y-128: the send goes through <see cref="Compile.Send"/> rather than straight to the runner.
+    /// The dailies this leg feeds the model are the owner's real dailies, so an ungated bench
+    /// shipped exactly the credentials production compile now masks — and it would have measured
+    /// a prompt the product no longer sends, which is the one thing a harness may never do.</summary>
     private static List<BenchRecord> MeasureCompile(IReadOnlyList<(string Name, string Text)> dailies, string vault, Runner runner)
     {
         var compile = new Compile(Path.Combine(Path.GetTempPath(), "oom-bench"));
@@ -127,8 +131,8 @@ public sealed class Bench
         foreach (var (name, text) in dailies)
         {
             var started = Stopwatch.StartNew();
-            var prompt = CompilePrompt.Build(name, text, rootMap, registry).Prompt;
-            var run = runner.Run(prompt, ModelTier.Smart, ComponentKind.Compile, "bench");
+            var plan = CompilePrompt.Build(name, text, rootMap, registry);
+            var run = compile.Send(runner, plan, "bench");
             string reason;
             IReadOnlyList<string> paths = [];
             if (!string.IsNullOrEmpty(run.Error))
@@ -156,17 +160,22 @@ public sealed class Bench
         var reference = options.Backend == "claude" ? "local" : "claude";
         var (referenceRecords, _, _) = MeasureFlush(transcripts, MakeRunner(reference, vault, settings));
         var judge = MakeRunner("claude", vault, settings);
+        // Y-128: the judge prompt is two summaries of the owner's own sessions, so it leaves the
+        // machine under the same rule as every other prompt. Egress redacts and never refuses,
+        // and both sides cross the same gate, so a mask cannot tilt the A/B comparison.
+        var guards = new Guards();
         List<double> scores = [];
         for (var index = 0; index < Math.Min(measured.Count, referenceRecords.Count); index++)
         {
             if (measured[index].Answer is not { Length: > 0 } mine || referenceRecords[index].Answer is not { Length: > 0 } theirs)
                 continue;
             var mineIsA = index % 2 == 0;
-            var run = judge.Run(string.Join('\n',
+            var prompt = guards.Gate(string.Join('\n',
                 "Aşağıdaki iki oturum özetini birbirinden bağımsız olarak 1–5 arasında puanla.",
                 "Yalnız tek satır yaz, başka hiçbir metin olmasın: A=<puan> B=<puan>",
                 "--- A ---", mineIsA ? mine : theirs, "--- B ---", mineIsA ? theirs : mine),
-                ModelTier.Smart, ComponentKind.Compile, "judge");
+                Direction.Egress, ComponentKind.Compile).Text;
+            var run = judge.Run(prompt, ModelTier.Smart, ComponentKind.Compile, "judge");
             var at = string.IsNullOrEmpty(run.Error) ? run.Text.IndexOf(mineIsA ? "A=" : "B=", StringComparison.OrdinalIgnoreCase) : -1;
             if (at >= 0 && at + 2 < run.Text.Length && double.TryParse(run.Text.AsSpan(at + 2, 1), CultureInfo.InvariantCulture, out var score))
                 scores.Add(score);

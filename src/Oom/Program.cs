@@ -325,7 +325,13 @@ internal static class Program
     /// `compile --dry-run` prints the plan and calls nothing; a real compile builds the spec
     /// 6.5-3 prompt, asks the smart tier and hands the file transcript to <see cref="Compile"/>.
     /// </summary>
-    private static int RunCompile(string[] args, string vault, OomSettings settings, DateTimeOffset now)
+    /// <remarks>
+    /// Y-128: <paramref name="modelRunner"/> is the one seam the scar suite needs. The send it
+    /// guards is the shipped one, so the regression that proves it gated has to drive this
+    /// method rather than <see cref="Compile.Send"/> directly — Y-127 already proves the
+    /// boundary works and proved nothing about whether the executable crosses it.
+    /// </remarks>
+    internal static int RunCompile(string[] args, string vault, OomSettings settings, DateTimeOffset now, Runner? modelRunner = null)
     {
         using var state = OpenState();
         var compile = new Compile(vault);
@@ -355,11 +361,16 @@ internal static class Program
             return 0;
         }
 
-        var runner = MakeRunner(vault, settings, state);
+        var runner = modelRunner ?? MakeRunner(vault, settings, state);
         foreach (var daily in pending)
         {
             var plan = Plan(compile, vault, daily, corpus, rootMap);
-            var run = runner.Run(plan.Prompt, ModelTier.Smart, ComponentKind.Compile, "concepts");
+            // Y-128: the model call belongs to Compile, not to the dispatcher. It sat here
+            // because Compile.Run takes the model's reply as an argument, so the component
+            // looked like a pure function with the call outside it — and that is exactly how
+            // the egress gate ended up tested and dead: Compile.Send existed, and the shipped
+            // `oom compile` still handed plan.Prompt to the runner unmasked.
+            var run = compile.Send(runner, plan);
             if (!string.IsNullOrEmpty(run.Error))
             {
                 Console.WriteLine($"derleme kuyruğa alındı ({Path.GetFileName(daily)}): {run.Error}");

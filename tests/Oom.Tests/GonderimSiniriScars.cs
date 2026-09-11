@@ -151,6 +151,69 @@ public sealed class GonderimSiniriScars
         }
     }
 
+    /// <summary>
+    /// Y-127 proved the boundary; it did not prove anyone crosses it. Y-128 is the other half:
+    /// <c>Compile.Send</c> was written, covered and correct while <c>Program.RunCompile</c> — the
+    /// only thing the shipped executable actually runs for <c>oom compile</c> — still handed
+    /// <c>plan.Prompt</c> straight to the runner. A gate nothing calls is not a gate, so this test
+    /// drives the command path and reads the bytes the child process was fed.
+    /// </summary>
+    [Fact(DisplayName = "Y-128 · Gönderilen exe'nin derleme komutu istemi kapıdan geçirir")]
+    public void Y128_ShippedCompileCommandSendsThroughTheEgressGate()
+    {
+        var vault = ScarFixture.TempDirectory();
+        // A name no real vault has consumed: Pending() skips dailies the state store already
+        // ingested, and a skipped daily would make this test green without sending anything.
+        var dailyName = "2026-09-11-y128.md";
+        var dailyText = string.Join('\n',
+        [
+            "# Günlük Log: 2026-09-11",
+            "",
+            "## Oturumlar",
+            "### Oturum (12:00)",
+            "## Bağlam",
+            "- Dağıtım anahtarını sohbete yapıştırdım: " + AnthropicCanary,
+            "- Depo jetonu da oradaydı: " + GithubCanary
+        ]);
+        var dailyPath = Path.Combine(vault, "daily", dailyName);
+        Directory.CreateDirectory(Path.GetDirectoryName(dailyPath)!);
+        File.WriteAllText(dailyPath, dailyText);
+
+        // No "=== DONE ===" in the reply: the command reaches the send, the send happens, and
+        // compile then declines the transcript — so this scar never publishes into the fixture.
+        var process = new RecordingProcess(JsonSerializer.Serialize(new { result = "kavram bloğu yok" }));
+        var chain = new Dictionary<ComponentKind, IReadOnlyList<string>> { [ComponentKind.Compile] = ["claude"] };
+        var runner = new Runner(process, null, null, null, "http://127.0.0.1:11434/v1", true, chain);
+
+        try
+        {
+            // The production entry point for `oom compile`, with nothing faked but the child
+            // process. If the runner call moves back out of Compile.Send, this goes red.
+            var code = Program.RunCompile([], vault, OomSettings.Defaults(vault), ScarFixture.Now, runner);
+            Assert.Equal(0, code);
+
+            var sent = process.StandardInput;
+            Assert.NotNull(sent);
+
+            // The command really did send this daily — otherwise the assertions below are vacuous.
+            Assert.Contains(dailyName, sent, StringComparison.Ordinal);
+            Assert.Contains("Dağıtım anahtarını", sent, StringComparison.Ordinal);
+
+            // And the bytes that left the machine carry no credential.
+            Assert.DoesNotContain(AnthropicCanary, sent, StringComparison.Ordinal);
+            Assert.DoesNotContain(GithubCanary, sent, StringComparison.Ordinal);
+            Assert.Contains("[SIR:anthropic-key]", sent, StringComparison.Ordinal);
+            Assert.Contains("[SIR:github-token]", sent, StringComparison.Ordinal);
+
+            // The masking is on the way out only: the owner's daily is untouched on disk.
+            Assert.Contains(AnthropicCanary, File.ReadAllText(dailyPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
+
     private static string Transcript(string sessionId)
     {
         var start = new DateTimeOffset(2026, 9, 9, 12, 0, 0, TimeSpan.FromHours(3));
