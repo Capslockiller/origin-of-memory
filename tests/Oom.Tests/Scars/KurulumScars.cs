@@ -36,7 +36,7 @@ public sealed class KurulumScars(ITestOutputHelper output)
         Assert.Contains("unknown", new Install().ValidateConfiguration("{\"unknown\":true}"));
     }
 
-    [Fact(DisplayName = "Y-068 · Authored satır sayısı hedefe göre raporlanır ve frontmatter parser tek kopyadır")]
+    [Fact(DisplayName = "Y-068 · Authored satır sayısı üç tanıma göre raporlanır ve frontmatter parser tek kopyadır")]
     public void Y068_ModuleLineCountIsReportedAgainstTargetAndSingleParserIsEnforced()
     {
         // Sahibin kararı, 2026-09-11 (64. oturum): satır tavanı artık geçilemez bir kapı değil,
@@ -44,13 +44,32 @@ public sealed class KurulumScars(ITestOutputHelper output)
         // ayrıştırmayı engelliyor, açıklayıcı yorumu pahalı kılıyor ve 491 karakterlik tek satırı
         // boş satırla aynı fiyata sayıyor. Sadeleştirme ve ölü kod temizliği, özellik işi bitince
         // ayrı bir tur olarak yapılacak. Bu test sayıyı ölçer ve raporlar; sayı yüzünden DÜŞMEZ.
+        //
+        // Dış denetim, 2026-09-11: tek tanım (boş satır + yorum dahil) ölçüyü bozuyordu — yorum
+        // silmek kod silmekle aynı puanı kazanıyordu. Bu yüzden test artık üç tanımı birden
+        // raporlar: toplam, boş-olmayan, ve boş-olmayan+yorum-olmayan (kod-only). 9.100 hedefi
+        // yalnız TOPLAM'a karşı ölçülür ve ham rakamla önceki koşularla kıyaslanabilir kalır;
+        // kod-only için bir hedef burada UYDURULMAZ — sadeleştirme turu kod-only rakama göre
+        // yargılanmalı, o sayının hedefini koymak sahibin kararıdır, bu testin değil. Hiçbiri
+        // eşiğe dönüşmedi: üçü de yalnız RAPORLANIR, hiçbiri yüzünden bu test DÜŞMEZ.
         const int Target = 9_100;
         var root = ScarFixture.RepositoryRoot();
         var files = Directory.EnumerateFiles(Path.Combine(root, "src", "Oom"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(part => part is "obj" or "bin")) // authored C# only, not compiler output (owner-approved 2026-09-09)
             .ToArray();
-        var authored = files.Sum(path => File.ReadLines(path).Count());
-        output.WriteLine($"authored C# satırı: {authored} · hedef: {Target} · fark: {authored - Target:+#;-#;0}");
+        var fileLines = files.Select(path => File.ReadLines(path).ToArray()).ToArray();
+        var total = fileLines.Sum(lines => lines.Length);
+        var nonBlank = fileLines.Sum(lines => lines.Count(line => !string.IsNullOrWhiteSpace(line)));
+        var codeOnly = fileLines.Sum(lines => lines.Count(line =>
+        {
+            var trimmed = line.TrimStart();
+            return trimmed.Length > 0 && !trimmed.StartsWith("//", StringComparison.Ordinal)
+                && !trimmed.StartsWith("/*", StringComparison.Ordinal) && !trimmed.StartsWith("*", StringComparison.Ordinal);
+        }));
+        output.WriteLine(
+            $"authored C# satırı — dosya: {files.Length} · toplam: {total} · boş-olmayan: {nonBlank} · " +
+            $"kod-only (boş+yorum hariç): {codeOnly} · hedef (toplam'a karşı): {Target} · fark: {total - Target:+#;-#;0} · " +
+            "kod-only hedefi yok — sadeleştirme turu bu rakama göre yargılanır, sayıyı sahibi koyar");
         var parserDefinitions = files.SelectMany(path => File.ReadLines(path)).Count(line => line.Contains(" Note Parse(", StringComparison.Ordinal));
         Assert.Equal(1, parserDefinitions);
     }
