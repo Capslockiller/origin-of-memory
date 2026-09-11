@@ -188,9 +188,12 @@ internal static class Program
     private static int Announce(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
         var hook = HookPayload.Read(ReadStandardInput());
-        using var state = OpenState();
-        Context.PublishStatusLine(state.ReadStatusLine(now));
-        var options = settings.Context with { PendingNotification = state.ReadPendingNotification(now) };
+        // `context` runs on every SessionStart and writes nothing: it reads the last quota sample
+        // and the queued notification. A vault whose state has never been written gets a block
+        // without those two lines, not a new state root (Y-161).
+        using var state = OpenStateForReading();
+        Context.PublishStatusLine(state?.ReadStatusLine(now));
+        var options = settings.Context with { PendingNotification = state?.ReadPendingNotification(now) };
         var result = new Context(options).Build(vault, now);
         var text = WithExtensions(result.Text, settings, vault);
 
@@ -387,9 +390,15 @@ internal static class Program
     /// <summary>The health table of spec 6.8; the exit code is always 0.</summary>
     private static int Health(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
-        using var state = OpenState();
-        var doctor = new Doctor(null, moment => Snapshot(moment, vault, settings, state), () => Repair(vault, settings, state));
-        var result = args.Contains("--fix") ? doctor.Fix() : doctor.Check(now);
+        // `doctor --fix` repairs, so it opens the write handle and provisions the root; a plain
+        // `doctor` only measures and must not mint a root just by being pointed at a vault (Y-161).
+        var fixing = args.Contains("--fix");
+        using var state = fixing ? OpenState() : OpenStateForReading();
+        var doctor = new Doctor(null,
+            moment => Snapshot(moment, vault, settings, state),
+            () => { if (state is not null) Repair(vault, settings, state); },
+            StateRootHealth);
+        var result = fixing ? doctor.Fix() : doctor.Check(now);
         if (args.Contains("--json"))
         {
             Console.WriteLine(doctor.ToJson(result));
@@ -442,26 +451,36 @@ internal static class Program
         return CompilePrompt.Build(Path.GetFileName(daily), body, rootMap, compile.BuildRegistry(corpus, hubs));
     }
 
-    private static DoctorSnapshot Snapshot(DateTimeOffset now, string vault, OomSettings settings, State state)
+    /// <summary>
+    /// <paramref name="state"/> is <c>null</c> when a read-only <c>doctor</c> found no database.
+    /// "No state" is then a row in the health table, not a crash and not a reason to create the
+    /// root: every count reads zero and the missing file is named out loud (Y-161).
+    /// </summary>
+    private static DoctorSnapshot Snapshot(DateTimeOffset now, string vault, OomSettings settings, State? state)
     {
-        var flushes = state.Scalar("SELECT COUNT(*) FROM flush_log WHERE outcome <> 'summary'");
-        var rejected = state.Scalar("SELECT COUNT(*) FROM flush_log WHERE outcome IN ('retry','parked')");
+        long Count(string sql) => state is null ? 0 : state.Scalar(sql);
+
+        var flushes = Count("SELECT COUNT(*) FROM flush_log WHERE outcome <> 'summary'");
+        var rejected = Count("SELECT COUNT(*) FROM flush_log WHERE outcome IN ('retry','parked')");
         // The newest coverage row is the 7-day window the sweep just measured (spec 6.8); summing every row ever written mixed windows and reported a coverage nobody has.
-        var covered = state.Scalar("SELECT IFNULL((SELECT covered FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
-        var total = state.Scalar("SELECT IFNULL((SELECT total FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
+        var covered = Count("SELECT IFNULL((SELECT covered FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
+        var total = Count("SELECT IFNULL((SELECT total FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
         var invalid = Concepts(vault).Count - Corpus(vault).Count;
         var database = VaultPaths.StateDatabase();
         // Y-113: a live reachability read supersedes a stale hook-failed ledger row for the same file.
         var reach = new Doctor().CheckClaudeReachability(Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
         List<DoctorObservation> observations =
         [
-            Observe(now, "state", "state-db", "state.db", $"{database} · {(database is not null && File.Exists(database) ? new FileInfo(database).Length : 0)} bayt"),
-            Observe(now, "state", "fts5-ok", "notes_fts", $"İndekste {Rows(state, "notes_fts")} not"),
+            state is null
+                ? new DoctorObservation(new HealthItem("state", HealthLevel.Warning, "state-yok", "state.db",
+                    $"Durum veritabanı yok: {database} — bu vault için hiçbir yazan komut koşmamış. Salt okunur komutlar onu yaratmaz; `oom sweep` ya da `oom doctor --fix` yaratır."), now)
+                : Observe(now, "state", "state-db", "state.db", $"{database} · {(database is not null && File.Exists(database) ? new FileInfo(database).Length : 0)} bayt"),
+            Observe(now, "state", "fts5-ok", "notes_fts", $"İndekste {(state is null ? 0 : Rows(state, "notes_fts"))} not"),
             Observe(now, "notes", "corpus", "concepts", $"{Corpus(vault).Count} geçerli kavram notu"),
             Observe(now, "runner", "backend", "flush", $"backend.flush=[{string.Join(", ", settings.Backend.Flush)}]"),
             Observe(now, "runner", "claude-config", "isolation", settings.ClaudeConfigDirectory(vault)),
             Observe(now, "sweep", "roots", "sweep.roots", string.Join(" · ", settings.Sweep.Roots)),
-            Observe(now, "calls", "call-summary", "7d", $"{state.Scalar("SELECT COUNT(*) FROM calls")} çağrı kaydı"),
+            Observe(now, "calls", "call-summary", "7d", $"{Count("SELECT COUNT(*) FROM calls")} çağrı kaydı"),
             Observe(now, "sweep", "flush-log", "rows", $"{flushes} flush_log satırı"),
             .. settings.UnknownKeys.Select(key => new DoctorObservation(
                 new HealthItem("config", HealthLevel.Warning, "unknown-key", key, $"oom.json içinde bilinmeyen anahtar: {key}"), now)),
@@ -476,9 +495,9 @@ internal static class Program
             total == 0 ? 1.0 : (double)covered / total,
             flushes == 0 ? 0.0 : (double)rejected / flushes,
             Pending(vault, state).Count,
-            (int)state.Scalar("SELECT COUNT(*) FROM retry_queue WHERE attempts >= 5"),
-            (int)state.Scalar("SELECT COUNT(*) FROM retry_queue"),
-            (int)state.Scalar("SELECT COUNT(*) FROM quarantine"),
+            (int)Count("SELECT COUNT(*) FROM retry_queue WHERE attempts >= 5"),
+            (int)Count("SELECT COUNT(*) FROM retry_queue"),
+            (int)Count("SELECT COUNT(*) FROM quarantine"),
             Math.Max(0, invalid), (int)total); // Y-118: the 7d population size doctor uses to pick uyarı vs hata.
     }
 
@@ -617,6 +636,9 @@ internal static class Program
         Top = top,
         TotalChars = Math.Max(settings.Retrieve.TotalChars, top * settings.Retrieve.PerNoteChars),
         VaultPath = vault,
+        // Naming the index file creates nothing (Y-161): `retrieve` and `mcp` only read it, and
+        // `Retrieve.Build()` — the write side, reached from sweep and `doctor --fix` — provisions
+        // the directory itself when it actually rebuilds.
         IndexPath = VaultPaths.StateDatabase()
     });
 
@@ -637,7 +659,28 @@ internal static class Program
         return new Flush(options, null, MakeRunner(vault, settings, state), null, new WindowsNotifier(state), state);
     }
 
-    private static State OpenState() => new(null, null, VaultPaths.StateDatabase());
+    /// <summary>
+    /// The write path. The state root is created because this command is going to write into it,
+    /// and it says so here rather than as a side effect of asking where the file lives (Y-161).
+    /// </summary>
+    private static State OpenState() => new(null, null, VaultPaths.EnsureStateDatabase(), StateAccess.ReadWrite);
+
+    /// <summary>
+    /// The read path: the vault's state database if it already exists, otherwise <c>null</c>.
+    /// Creates nothing. <c>null</c> means "no state yet" and every caller reports that — a
+    /// command that only reads may neither crash nor mint a root (Y-161).
+    /// </summary>
+    private static State? OpenStateForReading() => State.OpenReadOnly();
+
+    /// <summary>
+    /// The stray-state-root scan, wired into the <c>doctor</c> COMMAND rather than into
+    /// <see cref="Doctor"/>'s default. <see cref="Doctor"/> keeps the scan off by default so that
+    /// constructing one in the test suite does not start opening the owner's real databases; the
+    /// shipped command is the one place that turns it on. It reports and deletes nothing: the 26
+    /// existing roots carry no descriptor and surface as <c>artık</c> or <c>sahipsiz</c>, and what
+    /// to do about them is the owner's decision on a concrete list (Y-162).
+    /// </summary>
+    internal static IReadOnlyList<HealthItem> StateRootHealth() => new Doctor().StateRootItems();
 
     private static DateTimeOffset? LastCompile(State state)
     {
@@ -686,13 +729,15 @@ internal static class Program
     }
 
     /// <summary>Dailies no compile run has consumed yet; the anchor-carrying ones are the candidates.</summary>
-    private static IReadOnlyList<string> Pending(string vault, State state)
+    private static IReadOnlyList<string> Pending(string vault, State? state)
     {
         var directory = Path.Combine(vault, "daily");
         if (!Directory.Exists(directory))
             return [];
 
-        var ingested = state.ReadColumn("SELECT name FROM daily_ingest WHERE status IN ('ingested','adopted')") // Y-117: adopted counts as compiled too.
+        // No database means no record that anything was ingested, which is what it says: every
+        // daily counts as pending. It never means "assume they were compiled" (Y-161).
+        var ingested = (state?.ReadColumn("SELECT name FROM daily_ingest WHERE status IN ('ingested','adopted')") ?? Array.Empty<string>()) // Y-117: adopted counts as compiled too.
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return [.. Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)

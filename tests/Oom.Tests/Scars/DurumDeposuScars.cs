@@ -1,6 +1,8 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Oom.Contracts;
+using Oom.Tests.Gates;
 using Oom.Tests.Scars.Fixtures;
 
 namespace Oom.Tests.Scars;
@@ -240,6 +242,136 @@ public sealed class DurumDeposuScars
             Assert.Equal(StateAccess.ReadOnly, reader!.Access);
             Assert.Equal(1, reader.Scalar("SELECT COUNT(*) FROM flush_log"));
             Assert.Empty(reader.SchemaReport.Applied);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// Y-161 · The point of the whole lane, made concrete: a unit test that calls
+    /// <c>State.OpenReadOnly</c> or <c>VaultIdentity.EnsureDatabase</c> directly proves nothing
+    /// about whether <c>Program.cs</c>'s command dispatcher actually reaches those helpers for a
+    /// given command — only running the SHIPPED <c>oom.exe</c> and watching what it does to disk
+    /// proves that. A read-only command (`context`, `retrieve`) must leave no state root behind;
+    /// a write command (`compile`, even with `--dry-run`, since `--dry-run` only suppresses the
+    /// model call and still opens the write handle) must create one.
+    /// </summary>
+    [Fact(DisplayName = "Y-161 · Yayımlanan exe: salt okunur komut durum kökü yaratmaz, yazan komut yaratır")]
+    public void Y161_ShippedExecutableCreatesNoStateRootOnReadOnlyCommandsButDoesOnWrite()
+    {
+        var root = ScarFixture.TempDirectory();
+        var vault = Path.Combine(root, "kasa");
+        Directory.CreateDirectory(vault);
+        var stateRoot = VaultIdentity.StateRoot(vault);
+        try
+        {
+            Assert.False(Directory.Exists(stateRoot), $"önceki bir koşumdan kalma durum kökü temizlenmemiş: {stateRoot}");
+
+            var context = GateFixture.Run("context", "--vault", vault);
+            Assert.True(context.ExitCode == 0, $"'context --vault {vault}' çıkış kodu {context.ExitCode} döndürdü: {context.StandardError}");
+            Assert.False(Directory.Exists(stateRoot), $"salt okunur 'context' komutu durum kökünü yarattı: {stateRoot}");
+
+            // No-hit sorgunun kendi çıkış kodu var; burada tek ilgilenilen şey diskte iz bırakmaması.
+            var retrieve = GateFixture.Run("retrieve", "--query", "tokenizasyon", "--vault", vault);
+            Assert.False(Directory.Exists(stateRoot),
+                $"salt okunur 'retrieve' komutu durum kökünü yarattı: {stateRoot} (stderr: {retrieve.StandardError})");
+
+            var compile = GateFixture.Run("compile", "--dry-run", "--vault", vault);
+            Assert.True(compile.ExitCode == 0, $"'compile --dry-run --vault {vault}' çıkış kodu {compile.ExitCode} döndürdü: {compile.StandardError}");
+            Assert.True(Directory.Exists(stateRoot), $"yazan 'compile --dry-run' komutu durum kökünü yaratmadı: {stateRoot}");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+            ScarFixture.Remove(stateRoot);
+        }
+    }
+
+    /// <summary>
+    /// Y-162 · <see cref="Doctor"/>'s stray-root scan is off by default precisely so the rest of
+    /// this suite does not start opening the owner's real <c>%LOCALAPPDATA%\oom</c> databases just
+    /// by constructing a <c>Doctor</c> (see the constructor comment in Doctor.cs). That default is
+    /// exactly why a unit test against <c>Doctor</c> directly cannot prove the production path
+    /// turns the scan on — this test drives the shipped `oom doctor` command instead, which is the
+    /// only place that wires the real scan into the health output. It must still be read-only.
+    /// </summary>
+    [Fact(DisplayName = "Y-162 · Yayımlanan exe: doctor durum kökü yaratmaz ve başıboş kök taramasını kullanıcıya bildirir")]
+    public void Y162_ShippedExecutableDoctorIsReadOnlyAndCarriesStateRootScan()
+    {
+        var root = ScarFixture.TempDirectory();
+        var vault = Path.Combine(root, "kasa");
+        Directory.CreateDirectory(vault);
+        var stateRoot = VaultIdentity.StateRoot(vault);
+        try
+        {
+            var doctor = GateFixture.Run("doctor", "--json", "--vault", vault);
+            Assert.True(doctor.ExitCode == 0, $"'doctor --json --vault {vault}' çıkış kodu {doctor.ExitCode} döndürdü: {doctor.StandardError}");
+            Assert.False(Directory.Exists(stateRoot), $"'doctor' (--fix olmadan) durum kökünü yarattı: {stateRoot}");
+
+            using var document = JsonDocument.Parse(doctor.StandardOutput);
+            var items = document.RootElement.GetProperty("items").EnumerateArray().ToArray();
+            var allCodes = items.Select(item => item.GetProperty("Code").GetString()).ToArray();
+
+            Assert.True(allCodes.Contains("state-roots"),
+                $"doctor çıktısında 'state-roots' kodlu sağlık kalemi yok; bulunan kodlar: {string.Join(", ", allCodes)}");
+
+            var stateComponentCodes = items
+                .Where(item => item.GetProperty("Component").GetString() == "state")
+                .Select(item => item.GetProperty("Code").GetString())
+                .ToArray();
+            Assert.True(stateComponentCodes.Contains("state-yok"),
+                $"doctor çıktısında eksik veritabanını dürüstçe bildiren 'state-yok' kodu yok; " +
+                $"'state' bileşeninde bulunan kodlar: {string.Join(", ", stateComponentCodes)}");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+            ScarFixture.Remove(stateRoot);
+        }
+    }
+
+    /// <summary>
+    /// Y-163 · <c>%LOCALAPPDATA%\oom</c> does not hold only state roots — it also holds <c>backup</c>
+    /// and <c>claude-config</c>, which were being walked and reported as stray roots simply because
+    /// they sit next to the real ones. The scan must recognise a state root by its NAME (exactly
+    /// 16 lowercase hex characters, the shape <see cref="VaultIdentity.Hash(string)"/> produces),
+    /// not merely by its position under the oom folder.
+    /// </summary>
+    [Fact(DisplayName = "Y-163 · Tarama yalnız durum köklerine bakar; backup ve claude-config başıboş kök diye bildirilmez")]
+    public void Y163_ScanOnlyConsidersStateRootHashedDirectories()
+    {
+        var root = ScarFixture.TempDirectory();
+        try
+        {
+            var scanLocal = Path.Combine(root, "yerel");
+            var roots = Path.Combine(scanLocal, "oom");
+            var hashDirectory = Path.Combine(roots, VaultIdentity.Hash(@"E:\y163 kasa"));
+            var backup = Path.Combine(roots, "backup");
+            var claudeConfig = Path.Combine(roots, "claude-config");
+            Directory.CreateDirectory(hashDirectory);
+            Directory.CreateDirectory(backup);
+            Directory.CreateDirectory(claudeConfig);
+            File.WriteAllText(Path.Combine(backup, "not-a-state-root.txt"), "yedek dosyası — durum kökü değil");
+            File.WriteAllText(Path.Combine(claudeConfig, "config.json"), "{}");
+
+            var reports = new Doctor().InspectStateRoots(scanLocal);
+            Assert.True(reports.Count == 1,
+                $"tarama tam olarak bir durum kökü bulmalıydı, {reports.Count} buldu: {string.Join(", ", reports.Select(r => r.Path))}");
+            Assert.Equal(Path.GetFileName(hashDirectory), reports[0].Hash);
+            Assert.DoesNotContain(reports, r => Path.GetFileName(r.Path) is "backup" or "claude-config");
+
+            var items = new Doctor().StateRootItems(scanLocal);
+            Assert.Equal("state-roots", items[0].Code);
+            Assert.DoesNotContain(items, item => item.Key is "backup" or "claude-config");
+
+            // The scan only reports — it must never touch what it walked past.
+            Assert.True(Directory.Exists(backup), $"tarama 'backup' dizinini sildi: {backup}");
+            Assert.True(Directory.Exists(claudeConfig), $"tarama 'claude-config' dizinini sildi: {claudeConfig}");
         }
         finally
         {

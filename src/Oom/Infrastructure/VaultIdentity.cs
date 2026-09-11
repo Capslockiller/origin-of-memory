@@ -64,6 +64,18 @@ public static class VaultIdentity
             : Path.GetDirectoryName(StateRoot(string.Empty))!;
 
     /// <summary>
+    /// Whether a subdirectory of <see cref="StateRootsDirectory"/> is a state root at all — the
+    /// sixteen lowercase hex digits <see cref="Hash"/> produces, nothing else.
+    /// </summary>
+    /// <remarks>
+    /// Y-163: the roots directory also holds <c>backup</c> and <c>claude-config</c>, which are
+    /// not state roots. Scanning every subdirectory reported both as empty stray roots, and a
+    /// report that invites the owner to delete his Claude configuration is worse than no report.
+    /// </remarks>
+    public static bool IsStateRootName(string? name) =>
+        name is { Length: 16 } && name.All(character => character is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
+
+    /// <summary>
     /// The spelling of a vault path that two spellings of the same vault agree on. It is used to
     /// <em>detect</em> a second reachable root, never to name one: <see cref="Hash"/> stays the
     /// identity, so a vault written as <c>E:/x</c> and as <c>E:\x</c> still hashes apart and the

@@ -59,17 +59,26 @@ public static class VaultPaths
     /// vault. The database lives outside the vault because the vault is synced by
     /// Google Drive and SQLite WAL files do not survive that (D9).
     /// </summary>
-    public static string? StateDatabase()
-    {
-        if (ReadVault() is not { } vault)
-            return null;
+    /// <remarks>
+    /// Y-161: this used to call <c>Directory.CreateDirectory</c>, so merely ASKING where the
+    /// database is minted a state root. Every read-only command asks — <c>doctor</c>,
+    /// <c>retrieve</c>, <c>mcp</c>, <c>context</c> — and one run with a temporary
+    /// <c>--vault</c> left one root behind; 26 unattributable roots accumulated on one machine
+    /// that way. A question creates nothing now. A command that is going to write says so out
+    /// loud through <see cref="EnsureStateDatabase"/>.
+    /// </remarks>
+    public static string? StateDatabase() =>
+        // One vault, one state root: the hash is VaultIdentity's, so `compile` and `retrieve`
+        // do not end up with two databases for the same vault.
+        ReadVault() is { } vault ? VaultIdentity.DatabasePath(vault) : null;
 
-        // One vault, one state root: the hash is the compile side's, so `compile` and
-        // `retrieve` do not end up with two databases for the same vault.
-        var directory = LaneCVaultPaths.StateRoot(vault);
-        Directory.CreateDirectory(directory);
-        return Path.Combine(directory, "state.db");
-    }
+    /// <summary>
+    /// The write path's entry point: creates the state root and returns the database path, or
+    /// <c>null</c> with no vault. The only place in the runtime that brings a state root into
+    /// existence, besides the installer, which stamps its descriptor as well.
+    /// </summary>
+    public static string? EnsureStateDatabase() =>
+        ReadVault() is { } vault ? VaultIdentity.EnsureDatabase(vault) : null;
 }
 
 /// <summary>

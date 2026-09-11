@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -106,14 +105,12 @@ internal static class GateFixture
 
     /// <summary>
     /// Where the executable puts a vault's state (D9). The tests recompute it so the directory
-    /// the run created under %LOCALAPPDATA% is removed again with the vault itself.
+    /// the run created under %LOCALAPPDATA% is removed again with the vault itself. This used to
+    /// hand-roll a third copy of the hash: a copy means the gate suite measured a function
+    /// production does not use, and its <see cref="Path.GetFullPath(string)"/> step was the
+    /// spelling production had already rejected — so it asks <see cref="VaultIdentity"/> instead.
     /// </summary>
-    internal static string StateRoot(string vault)
-    {
-        var hash = Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(Path.GetFullPath(vault).TrimEnd(Path.DirectorySeparatorChar))), 0, 8).ToLowerInvariant();
-        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        return Path.Combine(string.IsNullOrEmpty(local) ? Path.Combine(Path.GetTempPath(), "oom-local") : local, "oom", hash);
-    }
+    internal static string StateRoot(string vault) => VaultIdentity.StateRoot(vault);
 }
 
 /// <summary>A temp directory that removes itself, and the state root the executable derived from it.</summary>

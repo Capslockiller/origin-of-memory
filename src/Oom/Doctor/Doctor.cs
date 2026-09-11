@@ -169,7 +169,9 @@ public sealed class Doctor
             return [];
 
         var reports = new List<StateRootReport>();
-        foreach (var root in Directory.EnumerateDirectories(directory))
+        // Y-163: only the hash-named directories are state roots. `backup` and `claude-config`
+        // live in the same folder and were being reported as stray roots to delete.
+        foreach (var root in Directory.EnumerateDirectories(directory).Where(candidate => VaultIdentity.IsStateRootName(Path.GetFileName(candidate))))
         {
             var hash = Path.GetFileName(root);
             try
