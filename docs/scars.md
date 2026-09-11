@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 125, Geçti: 125, Başarısız: 0. Kapı testleriyle birlikte toplam 166 test, 166 geçti. Tarih: 2026-09-11, şerit SOZ, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 126, Geçti: 126, Başarısız: 0. Kapı testleriyle birlikte toplam 167 test, 167 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -132,12 +132,13 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-123 | durum-deposu | Şema 3'ten göçte eski `in_tok` (cache dahil toplam girdi) yeni `uncached_in_tok` (yalnız cache-dışı girdi) sanılıp tahminle doldurulabilirdi; göç eski satırları OLDUĞU GİBİ bırakıyor — `uncached_in_tok`/`operation_id`/`attempt_id` NULL, `usage_rank=0`, `usage_semantics='legacy-total-input-v0'` — ve yalnız `user_version`'ı 4'e yükseltiyor | DefterScars.Y123_MigrationPreservesLegacyRowsWithoutGuessingUncachedInput | yeşil |
 | Y-124 | test-disiplini | Geri döngü sözleşmesi (sayısal loopback zorunluluğu, yönlendirmenin izlenmemesi, proxy kullanılmaması, eski `localhost` yazımının DNS'siz çevirisi) yalnız kodda vardı, hiçbir belgede yazılı değildi | LoopbackScars.Y124_InstallDocStatesTheLoopbackContract | yeşil |
 | Y-125 | test-disiplini | Test paketi Y-119…Y-123'ü DisplayName'e ekledi ama `docs/scars.md` hiç güncellenmedi — defter test paketinin gerisinde sessizce kalabiliyordu; artık her `[Fact]`/`[Theory]` DisplayName'indeki her Y-numarası `scars.md`'de bir satıra bağlı olmak zorunda | TestDisipliniScars.Y125_EveryDisplayedScarNumberHasAScarsMdRow | yeşil |
+| Y-126 | yazma-yolu | `Flush` bekçiyi yalnız modelin **döndürdüğü** metne uyguluyordu; `BuildPrompt(range)` ham transkripti süzgeçsiz gönderiyordu — kullanıcının sohbete yapıştırdığı canlı bir API anahtarı makineden aynen çıkıyor, geri gelen özeti ise temizleniyordu. Sır ve KVK desenleri artık istem runner'a verilmeden önce maskeleniyor; ham transkript yerelde maskesiz kalıyor | GonderimSiniriScars.Y126_OutboundPromptIsGatedBeforeItLeavesTheMachine | yeşil |
 
 ## Sınıf başına durum
 
 | Sınıf | Yeşil | Kırmızı |
 |---|---|---|
-| yazma-yolu | 23 | 0 |
+| yazma-yolu | 24 | 0 |
 | özetleyici | 7 | 0 |
 | derleyici | 16 | 0 |
 | getirme | 11 | 0 |
@@ -147,4 +148,4 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | kurulum | 20 | 0 |
 | test-disiplini | 11 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **125** | **0** |
+| **Toplam** | **126** | **0** |
