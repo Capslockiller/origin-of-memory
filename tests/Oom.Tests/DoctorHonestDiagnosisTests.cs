@@ -428,6 +428,333 @@ public sealed class DoctorHonestDiagnosisTests
         });
     }
 
+    /// <summary>
+    /// Y-280 · The race the fixed fixtures could not show. Four still databases prove that a copy
+    /// of a file nobody is writing comes back unchanged; they prove nothing about a live root, and
+    /// a live root is the only kind the owner has. SQLite says it plainly: an ordinary file copy
+    /// taken while a transaction is active can carry mixed content —
+    /// https://sqlite.org/howtocorrupt.html#backup_or_restore_while_a_transaction_is_active
+    ///
+    /// So a writer commits and checkpoints throughout this test while the scan runs against the
+    /// same root. Every committed transaction puts one row in each of two tables, which makes the
+    /// invariant checkable from the outside: a total that belongs to one moment is even. An odd
+    /// total is a database copied at one moment and a log copied at another, and it is a number
+    /// that was never true of the owner's vault.
+    /// </summary>
+    [Fact(DisplayName = "Y-280 · Eşzamanlı yazma ve checkpoint boyunca alınan kopya tek bir ana aittir")]
+    public void Y280_AConcurrentWriterAndCheckpointerNeverProduceATornCount()
+    {
+        WithProfile(profile =>
+        {
+            var root = Path.Combine(profile.Roots, RootName(1));
+            // Big enough that copying it takes long enough for a commit or a checkpoint to land in
+            // the middle of the copy. On a hundred-kilobyte fixture the copy is over before the
+            // writer can get a word in, and a test that cannot lose is not measuring anything.
+            Provision(root, Seed(SeedPairs));
+            var database = Path.Combine(root, VaultIdentity.DatabaseName);
+            Assert.True(new FileInfo(database).Length > 2_000_000,
+                "fikstür geçersiz: veritabanı kopyalanırken yarışacak kadar büyük değil");
+
+            // Pooling off: this connection is the test's own writer and must not be reachable by
+            // the ClearAllPools the scan runs, or the test would be measuring its own plumbing.
+            using var writer = new SqliteConnection($"Data Source={database};Pooling=False");
+            writer.Open();
+            Commit(writer, SeedPairs + 1);
+
+            Assert.True(new FileInfo(database + "-wal").Length > 0,
+                "fikstür geçersiz: yazıcı WAL bırakmadı, bu testin ölçtüğü yarış yok demektir");
+
+            var before = Names(profile.LocalAppData);
+            var committed = 1;
+            var running = true;
+            var pump = Task.Run(() =>
+            {
+                var index = SeedPairs + 2;
+                while (Volatile.Read(ref running))
+                {
+                    Commit(writer, index++);
+                    Interlocked.Increment(ref committed);
+                    using var checkpoint = writer.CreateCommand();
+                    // TRUNCATE is the cruel one: it empties the log and moves its pages into the
+                    // database file, so a scan that copies the two halves independently can end up
+                    // with a database from before the checkpoint and a log from after it.
+                    checkpoint.CommandText = index % 4 == 0 ? "PRAGMA wal_checkpoint(TRUNCATE)" : "PRAGMA wal_checkpoint(PASSIVE)";
+                    checkpoint.ExecuteNonQuery();
+                    // A vault in use is written in bursts, not without pause; the gaps are where an
+                    // honest measurement becomes possible at all, and they are part of the scenario.
+                    Thread.Sleep(1);
+                }
+            });
+
+            var verdicts = new List<StateRootReport>();
+            for (var pass = 0; pass < 60; pass++)
+                verdicts.Add(Assert.Single(new Doctor().InspectStateRoots(profile.LocalAppData)));
+
+            Volatile.Write(ref running, false);
+            pump.Wait(TimeSpan.FromMinutes(1));
+
+            foreach (var verdict in verdicts)
+            {
+                // Either a consistent answer, or no answer with a reason. There is no third thing,
+                // and "artık" — the verdict that invites a deletion — is not available at all.
+                Assert.True(verdict.Status is "sahipsiz" or "ölçülemedi",
+                    $"canlı kök beklenmedik hüküm aldı: {verdict.Status} · {verdict.Reason}");
+                if (verdict.Status == "ölçülemedi")
+                {
+                    Assert.NotEqual(0, verdict.Reason.Length);
+                    Assert.Equal(0, verdict.Rows);
+                    continue;
+                }
+
+                Assert.True(verdict.Rows % 2 == 0,
+                    $"kopya iki ayrı ana ait: {verdict.Rows} satır, tek sayı — hiçbir anda doğru olmayan bir sayı");
+            }
+
+            // The race is real in this fixture and it is not quietly tolerated. The writer moved
+            // the file under most of these copies, and every copy that could not be shown to belong
+            // to one moment was thrown away rather than counted. Measured on this machine over
+            // sixty scans: 29 declined with the before/after check in place, 0 declined with it
+            // removed — the same sixty copies, all of them trusted.
+            Assert.True(verdicts.Count(verdict => verdict.Status == "ölçülemedi") >= 3,
+                "kaynak kopyalama boyunca değişti ama hiçbir kopya reddedilmedi: hareket eden bir dosyadan alınan " +
+                "görüntü sınanmadan sahibe sayı olarak sunuluyor");
+
+            // The scan left nothing of its own beside the owner's files; the writer's own sidecars
+            // are the only things in there and they were there before the scan started.
+            Assert.Equal(before, Names(profile.LocalAppData));
+
+            // And with the writer quiet but still attached — rows sitting in a log nobody has
+            // checkpointed, which is what a vault looks like between two saves — the scan reads the
+            // log and gets the number exactly right.
+            var settled = Assert.Single(new Doctor().InspectStateRoots(profile.LocalAppData));
+            Assert.Equal("sahipsiz", settled.Status);
+            Assert.Equal(2 * (SeedPairs + committed), settled.Rows);
+            Assert.True(committed > 1, "fikstür geçersiz: yazıcı hiç işlem tamamlamadı");
+        });
+    }
+
+    /// <summary>
+    /// Y-281 · The guard, measured rather than asserted in a comment. While the scan reads a root
+    /// in place — the one path on which the owner's own file is opened at all — the operating
+    /// system refuses every handle that wants to write it. That is what makes the header probe
+    /// safe: the file cannot become a WAL database between the moment the scan reads
+    /// <c>journal_mode</c> out of its header and the moment SQLite opens it, so the read-only open
+    /// that would have created <c>state.db-wal</c> and <c>state.db-shm</c> beside the owner's data
+    /// can never be reached with a stale answer.
+    ///
+    /// The one-byte snapshot limit is here to keep the measurement honest rather than to constrain
+    /// anything: it makes the copy impossible, so the only way this scan can answer at all is by
+    /// reading the file where it lies, and the only thing that can be holding writers off while it
+    /// does is the guard. Without it a scan that fell back to copying would hold writers off during
+    /// <c>File.Copy</c> — measured — and this test would pass while proving nothing.
+    /// </summary>
+    [Fact(DisplayName = "Y-281 · Yerinde okunan kök, okuma boyunca hiçbir yazıcıyı kabul etmez")]
+    public void Y281_WhileTheScanReadsARootInPlaceNoWriterCanAttachToIt()
+    {
+        WithProfile(profile =>
+        {
+            var root = Path.Combine(profile.Roots, RootName(1));
+            Provision(root, PairInsert(0));
+            Demote(root);
+            var database = Path.Combine(root, VaultIdentity.DatabaseName);
+            var stamp = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(database)));
+
+            var running = true;
+            var blocked = 0;
+            var admitted = 0;
+            var probe = Task.Run(() =>
+            {
+                while (Volatile.Read(ref running))
+                {
+                    try
+                    {
+                        using var handle = new FileStream(database, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+                        Interlocked.Increment(ref admitted);
+                    }
+                    catch (IOException)
+                    {
+                        Interlocked.Increment(ref blocked);
+                    }
+                }
+            });
+
+            var verdicts = new List<StateRootReport>();
+            for (var pass = 0; pass < 60; pass++)
+                verdicts.Add(Assert.Single(new Doctor(snapshotLimitBytes: 1).InspectStateRoots(profile.LocalAppData)));
+
+            Volatile.Write(ref running, false);
+            probe.Wait(TimeSpan.FromMinutes(1));
+
+            // Not "was a writer refused once" but "was the file protected for the whole read". A
+            // guard taken for the header probe and let go again before SQLite opens the file would
+            // still turn the odd writer away, and would still leave the window apex named wide
+            // open. Measured on this machine, over sixty scans against one root: 0,826 of the
+            // attempts refused with the guard held across the read, 0,018 with it released right
+            // after the probe. The threshold sits between two numbers that are a factor of forty
+            // apart, and both halves of it are reported by the failure message.
+            var refused = (double)blocked / (blocked + admitted);
+            Assert.True(refused > 0.5,
+                $"tarama sahibin dosyasını okurken korumasız kaldı: {blocked}/{blocked + admitted} deneme geri çevrildi ({refused:F3})");
+            Assert.True(admitted > 0,
+                "fikstür geçersiz: dosya tarama koşmazken de yazmaya açılamıyor, ölçülen şey tarama değil");
+
+            foreach (var verdict in verdicts)
+                Assert.True(verdict.Status is "sahipsiz" or "ölçülemedi",
+                    $"WAL'sız kök beklenmedik hüküm aldı: {verdict.Status} · {verdict.Reason}");
+            Assert.Contains(verdicts, verdict => verdict.Status == "sahipsiz" && verdict.Rows == 2);
+
+            // Nothing turned this database into a WAL database, and nothing was left beside it.
+            Assert.False(File.Exists(database + "-wal") || File.Exists(database + "-shm"),
+                "tarama sahibin klasörüne yan dosya bıraktı");
+            Assert.Equal(stamp, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(database))));
+        });
+    }
+
+    /// <summary>
+    /// Y-282 · What the guard is for, without a thread in sight. Reading in place is allowed only
+    /// while no writer can attach; when one already has, the scan does not open the owner's file at
+    /// all — it goes the long way round, through the copy, where a mode change after the header
+    /// probe lands in the scan's own temporary folder and not in the owner's.
+    ///
+    /// The snapshot limit is the instrument: it constrains the copy and nothing else, so a root
+    /// that answers under a one-byte limit was read in place and a root that reports
+    /// <c>ölçülemedi</c> under the same limit was not. Same root, same non-WAL header, same limit —
+    /// the only difference between the two halves is whether somebody else is holding the file.
+    /// </summary>
+    [Fact(DisplayName = "Y-282 · Yazıcı bağlıyken WAL'sız kök yerinde okunmaz, kopyaya düşer")]
+    public void Y282_ARootAnotherWriterHoldsIsNeverReadInPlace()
+    {
+        WithProfile(profile =>
+        {
+            var root = Path.Combine(profile.Roots, RootName(1));
+            Provision(root, PairInsert(0));
+            Demote(root);
+            var database = Path.Combine(root, VaultIdentity.DatabaseName);
+
+            // Nobody attached: the scan can promise the file will not change under it, so it reads
+            // it where it lies and the copy limit never comes into play.
+            var alone = Assert.Single(new Doctor(snapshotLimitBytes: 1).InspectStateRoots(profile.LocalAppData));
+            Assert.Equal("sahipsiz", alone.Status);
+            Assert.Equal(2, alone.Rows);
+
+            using var writer = new SqliteConnection($"Data Source={database};Pooling=False");
+            writer.Open();
+
+            var held = Assert.Single(new Doctor(snapshotLimitBytes: 1).InspectStateRoots(profile.LocalAppData));
+            Assert.Equal("ölçülemedi", held.Status);
+            Assert.NotEqual(0, held.Reason.Length);
+            Assert.Equal(0, held.Rows);
+
+            // With room to copy, the same held root is measured again — correctly, and out of a
+            // copy, so the owner's folder is still untouched.
+            var copied = Assert.Single(new Doctor().InspectStateRoots(profile.LocalAppData));
+            Assert.Equal("sahipsiz", copied.Status);
+            Assert.Equal(2, copied.Rows);
+            Assert.False(File.Exists(database + "-wal") || File.Exists(database + "-shm"),
+                "tarama sahibin klasörüne yan dosya bıraktı");
+        });
+    }
+
+    /// <summary>
+    /// Y-283 · The copy has to be of everything the database needs to be itself. A rollback journal
+    /// with a live writer behind it means pages of a transaction that has not committed may already
+    /// be sitting in the database file; the journal is what puts them back. Copying the file alone
+    /// and counting it would publish a half-finished transaction as a finished one, so the scan
+    /// declines instead and says which file it declined over.
+    /// </summary>
+    [Fact(DisplayName = "Y-283 · Açık işlemin geri alma günlüğü varken kök ölçülemedi sayılır")]
+    public void Y283_AHotRollbackJournalIsDeclinedRatherThanCopiedWithoutIt()
+    {
+        WithProfile(profile =>
+        {
+            var root = Path.Combine(profile.Roots, RootName(1));
+            Provision(root, PairInsert(0));
+            Demote(root);
+            var database = Path.Combine(root, VaultIdentity.DatabaseName);
+
+            using var writer = new SqliteConnection($"Data Source={database};Pooling=False");
+            writer.Open();
+            using var transaction = writer.BeginTransaction();
+            using (var command = writer.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = PairInsert(1);
+                command.ExecuteNonQuery();
+            }
+
+            Assert.True(File.Exists(database + "-journal") && new FileInfo(database + "-journal").Length > 0,
+                "fikstür geçersiz: açık işlem geri alma günlüğü yaratmadı");
+
+            var report = Assert.Single(new Doctor().InspectStateRoots(profile.LocalAppData));
+            Assert.Equal("ölçülemedi", report.Status);
+            Assert.Equal(0, report.Rows);
+            Assert.Contains("-journal", report.Reason, StringComparison.Ordinal);
+
+            var item = Assert.Single(new Doctor().StateRootItems(profile.LocalAppData),
+                candidate => candidate.Code == "state-root-unmeasured");
+            Assert.Contains(report.Reason, item.Detail, StringComparison.Ordinal);
+
+            // Declining is not a verdict about contents, and above all not the one that invites a
+            // deletion: two rows really are committed in there.
+            Assert.DoesNotContain(new Doctor().StateRootItems(profile.LocalAppData),
+                candidate => candidate.Code is "stray-state-root" or "unattributed-state-root");
+            Assert.False(File.Exists(database + "-wal") || File.Exists(database + "-shm"),
+                "tarama sahibin klasörüne yan dosya bıraktı");
+
+            transaction.Rollback();
+        });
+    }
+
+    /// <summary>
+    /// Y-284 · A root the way a killed process leaves one: transactions committed into the log and
+    /// nobody left alive to check them in. Nothing is holding the file, so the scan copies it under
+    /// its own guard — and the copy has to be of the pair. A database carried off without its log
+    /// is a vault as it stood at the last checkpoint, which on a root like this one is a vault with
+    /// nothing in it, and "nothing in it" is the sentence that invites a deletion.
+    ///
+    /// The fixture is built elsewhere and moved in because a writer that closes cleanly checkpoints
+    /// its log away on the way out; the only way to leave one standing is to put it there.
+    /// </summary>
+    [Fact(DisplayName = "Y-284 · Sahibi gitmiş bir kökün WAL'ı kopyaya dahil edilir")]
+    public void Y284_ALogLeftBehindByADepartedWriterIsCopiedWithTheDatabase()
+    {
+        WithProfile(profile =>
+        {
+            var donor = Path.Combine(profile.LocalAppData, "bagiscil");
+            Provision(donor, string.Empty);
+            var source = Path.Combine(donor, VaultIdentity.DatabaseName);
+
+            var root = Path.Combine(profile.Roots, RootName(1));
+            Directory.CreateDirectory(root);
+            var database = Path.Combine(root, VaultIdentity.DatabaseName);
+
+            using (var writer = new SqliteConnection($"Data Source={source};Pooling=False"))
+            {
+                writer.Open();
+                for (var pair = 1; pair <= 7; pair++)
+                    Commit(writer, pair);
+
+                // Copied while the writer still holds the log open, which is the only moment at
+                // which the log exists at all.
+                File.Copy(source, database);
+                File.Copy(source + "-wal", database + "-wal");
+            }
+
+            SqliteConnection.ClearAllPools();
+            Assert.True(new FileInfo(database + "-wal").Length > 0,
+                "fikstür geçersiz: kökte bekleyen bir WAL yok, bu testin ölçtüğü kayıp yok demektir");
+            Assert.False(File.Exists(database + "-shm"), "fikstür geçersiz: kök tek başına duran bir WAL taşımıyor");
+
+            var report = Assert.Single(new Doctor().InspectStateRoots(profile.LocalAppData));
+            Assert.Equal(14, report.Rows);
+            Assert.Equal("sahipsiz", report.Status);
+
+            // And the log the scan had to read is still exactly where the owner left it.
+            Assert.True(new FileInfo(database + "-wal").Length > 0, "tarama sahibin WAL dosyasını boşalttı");
+            Assert.False(File.Exists(database + "-shm"), "tarama sahibin klasörüne yan dosya bıraktı");
+        });
+    }
+
     // ---- fixture -----------------------------------------------------------
 
     private sealed record Profile(string LocalAppData, string Roots);
@@ -474,6 +801,74 @@ public sealed class DoctorHonestDiagnosisTests
 
         SqliteConnection.ClearAllPools();
     }
+
+    /// <summary>How many transactions Y-280 lays down before the race starts — enough to make the copy slow.</summary>
+    private const int SeedPairs = 6000;
+
+    /// <summary>A filler that makes each row big enough for the fixture to reach megabytes.</summary>
+    private const string Filler = "dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu-dolgu";
+
+    /// <summary>The same pair, laid down <paramref name="pairs"/> times in one statement each.</summary>
+    private static string Seed(int pairs) =>
+        $"WITH RECURSIVE sayac(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM sayac WHERE n < {pairs})" +
+        " INSERT INTO flush_log(ts, session_id, reason, outcome, turns, chars, backend)" +
+        $" SELECT '2026-09-01T00:00:00+03:00', 'oturum-' || n || '{Filler}', 'sessionend', 'ok', 3, 30, 'claude' FROM sayac;" +
+        $" WITH RECURSIVE sayac(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM sayac WHERE n < {pairs})" +
+        " INSERT INTO quarantine(digest, source, reason, ts, path)" +
+        $" SELECT 'ozet-' || n, 'claude', 'bozuk', '2026-09-01T00:00:00+03:00', 'x' || n || '{Filler}.md' FROM sayac";
+
+    /// <summary>
+    /// One transaction's worth of writing: a row in each of two tables, so that any snapshot taken
+    /// between two transactions carries an even number of rows and a snapshot assembled out of two
+    /// different moments can be caught carrying an odd one.
+    /// </summary>
+    private static string PairInsert(int index) =>
+        "INSERT INTO flush_log(ts, session_id, reason, outcome, turns, chars, backend)" +
+        $" VALUES ('2026-09-01T00:00:00+03:00', 'oturum-{index}', 'sessionend', 'ok', 3, 30, 'claude');" +
+        " INSERT INTO quarantine(digest, source, reason, ts, path)" +
+        $" VALUES ('ozet-{index}', 'claude', 'bozuk', '2026-09-01T00:00:00+03:00', 'x{index}.md')";
+
+    /// <summary>Commits one <see cref="PairInsert"/> as a single transaction, both rows or neither.</summary>
+    private static void Commit(SqliteConnection writer, int index)
+    {
+        using var transaction = writer.BeginTransaction();
+        using (var command = writer.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = PairInsert(index);
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>
+    /// Takes a provisioned root back out of WAL mode. <see cref="State"/> stamps every database it
+    /// creates with <c>journal_mode=WAL</c>, and the path being measured in Y-281 and Y-282 is the
+    /// other one: the database the scan is allowed to open where it lies.
+    /// </summary>
+    private static void Demote(string root)
+    {
+        var database = Path.Combine(root, VaultIdentity.DatabaseName);
+        using (var connection = new SqliteConnection($"Data Source={database};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA journal_mode=delete";
+            command.ExecuteScalar();
+        }
+
+        SqliteConnection.ClearAllPools();
+        var header = File.ReadAllBytes(database);
+        Assert.True(header[18] == 1 && header[19] == 1,
+            "fikstür geçersiz: kök WAL kipinden çıkmadı, yerinde okuma yolu sınanmıyor");
+        Assert.False(File.Exists(database + "-wal") || File.Exists(database + "-shm"),
+            "fikstür geçersiz: kip düşürüldü ama yan dosyalar duruyor");
+    }
+
+    /// <summary>Which files exist under the fixture profile — names only, for a root a writer is changing under us.</summary>
+    private static HashSet<string> Names(string directory) =>
+        Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The descriptor an installed root carries, naming the vault it serves.</summary>
     private static void Describe(string root, string vault) =>

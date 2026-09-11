@@ -309,23 +309,40 @@ public sealed class Doctor
     ///   pre-WAL shape and report a stale answer as current. Apex ruled that an option that can
     ///   break freshness on a live file may not be switched on quietly, and this is that option.</item>
     ///   <item>A database with no WAL stamp (<c>journal_mode=delete</c>) opens read-only and creates
-    ///   nothing — measured. Those roots are still read in place, with no copy at all.</item>
+    ///   nothing — measured. Those roots are read in place, but only under the guard below.</item>
     ///   <item>Copying the file and reading the copy leaves the root byte-identical — measured. The
     ///   sidecars appear next to the copy, in a directory of this scan's own, and go away with it.</item>
     /// </list>
     ///
-    /// The copy is taken with the <c>-wal</c> beside it and verified: the source is hashed before
-    /// and after, and a source that moved while it was being read yields no snapshot at all. A torn
-    /// copy would answer the owner's question with a number that was never true of any moment.
+    /// Y-280/Y-281/Y-282: hashing the source before and after the copy <em>detects</em> a source that
+    /// moved; it does not <em>stop</em> one from moving, and the decision the header probe makes —
+    /// "this file is not in WAL mode, so opening it creates nothing" — was acted on after the probe,
+    /// against a file that could have changed mode in between. So the scan now takes a write-denying
+    /// handle (<see cref="SourceGuard"/>) on the database and its log <em>before</em> it reads the
+    /// header, and holds it until it is finished:
+    /// <list type="bullet">
+    ///   <item>Guard held: nothing can write to the file while the scan reads it, so the header the
+    ///   probe read is still true when SQLite opens the file and the copy cannot be torn by a write
+    ///   or a checkpoint. This is the only state in which the owner's own file is opened at all.</item>
+    ///   <item>Guard refused — another writer is attached: the scan never opens the owner's file. It
+    ///   copies (SQLite documents that an ordinary file copy taken while a transaction is active may
+    ///   carry mixed content: https://sqlite.org/howtocorrupt.html#backup_or_restore_while_a_transaction_is_active),
+    ///   and the before/after fingerprint stays as the check that the copy belongs to one moment; a
+    ///   copy that cannot be shown to belong to one moment is discarded and the root is reported
+    ///   <c>ölçülemedi</c> rather than judged.</item>
+    /// </list>
+    /// A torn copy would answer the owner's question with a number that was never true of any moment.
     /// </summary>
     private sealed class StateRootSnapshot : IDisposable
     {
         private readonly string? directory;
+        private readonly SourceGuard? guard;
 
-        private StateRootSnapshot(string? databasePath, string? directory, string reason)
+        private StateRootSnapshot(string? databasePath, string? directory, SourceGuard? guard, string reason)
         {
             DatabasePath = databasePath;
             this.directory = directory;
+            this.guard = guard;
             Reason = reason;
         }
 
@@ -337,44 +354,85 @@ public sealed class Doctor
 
         public static StateRootSnapshot Take(string databasePath, long limit)
         {
+            // The guard is taken before a single byte of the file is read, so that every decision
+            // made from those bytes is made about a file nobody else can be changing.
+            var guard = SourceGuard.TryAcquire(databasePath, databasePath + "-wal");
+            var snapshot = Decide(databasePath, limit, guard);
+            // Whoever does not hand the guard on to the snapshot lets go of it here: the guard must
+            // outlive the read when the read is against the owner's own file, and not a moment
+            // longer than that.
+            if (!ReferenceEquals(snapshot.guard, guard))
+                guard?.Dispose();
+            return snapshot;
+        }
+
+        private static StateRootSnapshot Decide(string databasePath, long limit, SourceGuard? guard)
+        {
             var wal = databasePath + "-wal";
             var shm = databasePath + "-shm";
+            var journal = databasePath + "-journal";
 
             if (!TryDetectWriteAheadLog(databasePath, wal, shm, out var usesWal, out var failure))
-                return new StateRootSnapshot(null, null, failure);
+                return new StateRootSnapshot(null, null, null, failure);
+
             if (!usesWal)
-                return new StateRootSnapshot(databasePath, null, string.Empty);
+            {
+                // Y-281: read in place only while the guard is held. Without it the mode read out of
+                // the header a moment ago is a claim about the past — a writer can turn this file
+                // into a WAL database before SQLite opens it, and then the read-only open leaves
+                // state.db-wal and state.db-shm in the owner's folder after all.
+                if (guard is not null)
+                    return new StateRootSnapshot(databasePath, null, guard, string.Empty);
+
+                // Y-283: a rollback journal with a live writer behind it means the database file may
+                // already carry pages of a transaction that has not committed. A copy of the file
+                // without its journal would be that half-written state presented as a whole one.
+                if (Length(journal) > 0)
+                    return new StateRootSnapshot(null, null, null,
+                        "kökte geri alma günlüğü (-journal) duruyor ve başka bir yazıcı dosyayı açık tutuyor; " +
+                        "günlüksüz bir kopya yarım kalmış bir işlemi tamamlanmış gibi gösterirdi, kök hiç açılmadı.");
+            }
 
             string? directory = null;
             try
             {
                 var size = Length(databasePath) + Length(wal);
                 if (size > limit)
-                    return new StateRootSnapshot(null, null,
+                    return new StateRootSnapshot(null, null, null,
                         $"veritabanı {size} bayt, bu taramanın güvenli anlık kopya sınırı {limit} bayt; " +
                         "kök hiç açılmadı, çünkü yerinde okumak sahibin dosyasının yanına dosya yaratırdı.");
 
                 directory = Directory.CreateTempSubdirectory("oom-doctor-").FullName;
                 var copy = System.IO.Path.Combine(directory, VaultIdentity.DatabaseName);
                 var before = Fingerprint(databasePath, wal);
-                File.Copy(databasePath, copy);
-                if (File.Exists(wal))
-                    File.Copy(wal, copy + "-wal");
+
+                // Under the guard both files are copied out of handles that were opened together and
+                // that no writer can be holding, so the database and its log belong to one moment by
+                // construction rather than by inspection afterwards.
+                if (guard is not null)
+                    guard.CopyTo(copy);
+                else
+                {
+                    File.Copy(databasePath, copy);
+                    if (File.Exists(wal))
+                        File.Copy(wal, copy + "-wal");
+                }
 
                 if (!string.Equals(before, Fingerprint(databasePath, wal), StringComparison.Ordinal))
                 {
                     Delete(directory);
-                    return new StateRootSnapshot(null, null,
+                    return new StateRootSnapshot(null, null, null,
                         "kopyalanırken dosya değişti; tek bir ana ait tutarlı anlık kopya alınamadı.");
                 }
 
-                return new StateRootSnapshot(copy, directory, string.Empty);
+                // The copy is this scan's own file now; the source needs no further protection.
+                return new StateRootSnapshot(copy, directory, null, string.Empty);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
                 if (directory is not null)
                     Delete(directory);
-                return new StateRootSnapshot(null, null, $"güvenli anlık kopya alınamadı: {error.Message}");
+                return new StateRootSnapshot(null, null, null, $"güvenli anlık kopya alınamadı: {error.Message}");
             }
         }
 
@@ -437,11 +495,93 @@ public sealed class Doctor
 
         public void Dispose()
         {
-            if (directory is null)
-                return;
-            // The copy is what the pool is holding; it has to let go before the directory can go.
-            SqliteConnection.ClearAllPools();
-            Delete(directory);
+            if (directory is not null)
+            {
+                // The copy is what the pool is holding; it has to let go before the directory can go.
+                // Disposing a SqliteConnection returns it to the pool with the operating-system
+                // handle still open, so without this the delete below fails and a byte-for-byte
+                // duplicate of the owner's database is left in the temporary directory.
+                SqliteConnection.ClearAllPools();
+                Delete(directory);
+            }
+
+            // Held only while the owner's own file was being read; released the moment it is not.
+            guard?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Write-denying handles on one state root's database and write-ahead log, held for as long as
+    /// the scan is acting on what it read from them.
+    ///
+    /// This is the mechanism, as opposed to the check: <c>FileShare.Read</c> asks the operating
+    /// system to refuse every handle that wants to write these files, and — symmetrically — the open
+    /// itself fails if a writer is already attached. So an acquired guard is proof that nothing was
+    /// writing when the scan started and that nothing can start while it holds on. The before/after
+    /// fingerprint stays for the case where the guard is refused, and for platforms where share
+    /// modes are not enforced against a process that does not ask for them.
+    ///
+    /// A guard on the database alone would be enough to stop a log from appearing — a writer cannot
+    /// create <c>state.db-wal</c> without opening <c>state.db</c> for writing first — but an existing
+    /// log is taken too, so that the pair is copied out of handles that were opened together.
+    /// </summary>
+    private sealed class SourceGuard : IDisposable
+    {
+        private readonly FileStream database;
+        private readonly FileStream? wal;
+
+        private SourceGuard(FileStream database, FileStream? wal)
+        {
+            this.database = database;
+            this.wal = wal;
+        }
+
+        /// <summary>The guard, or null when someone else is already writing and no promise can be made.</summary>
+        public static SourceGuard? TryAcquire(string databasePath, string walPath)
+        {
+            var database = Deny(databasePath);
+            if (database is null)
+                return null;
+
+            FileStream? log = null;
+            if (File.Exists(walPath))
+            {
+                log = Deny(walPath);
+                if (log is null)
+                {
+                    database.Dispose();
+                    return null;
+                }
+            }
+
+            return new SourceGuard(database, log);
+        }
+
+        /// <summary>Copies the guarded pair, straight out of the handles that are keeping writers off.</summary>
+        public void CopyTo(string databaseCopy)
+        {
+            Copy(database, databaseCopy);
+            if (wal is not null)
+                Copy(wal, databaseCopy + "-wal");
+        }
+
+        private static FileStream? Deny(string path)
+        {
+            try { return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+        }
+
+        private static void Copy(FileStream source, string destination)
+        {
+            source.Position = 0;
+            using var target = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            source.CopyTo(target);
+        }
+
+        public void Dispose()
+        {
+            database.Dispose();
+            wal?.Dispose();
         }
     }
 
