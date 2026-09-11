@@ -8,6 +8,33 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 namespace Oom.Contracts;
+
+/// <summary>
+/// How far outside the vault an install is allowed to reach (Faz 5).
+/// </summary>
+/// <remarks>
+/// <para><see cref="Project"/> is the default. Everything it writes lives either inside the vault
+/// (<c>.oom\</c>, <c>.claude\settings.json</c>, <c>.mcp.json</c>) or inside that one vault's own
+/// directories under <c>%LOCALAPPDATA%\oom</c>. Installing a second vault touches none of the
+/// first one's files.</para>
+/// <para><see cref="User"/> additionally writes the five registrations that exist exactly once per
+/// machine — the shared <c>%USERPROFILE%\.claude\settings.json</c> hooks, the Claude Desktop
+/// <c>mcpServers.oom</c> entry, the <c>OdenaOS Memory Sweep</c> scheduled task, the
+/// <c>Origin of Memory.lnk</c> shortcut carrying the fixed AUMID, and the <c>oom</c> Event Log
+/// source. All five are keyed by a constant with no vault in it, so a second install used to
+/// silently repoint every one of them at the second vault and leave the first vault with hooks
+/// that no longer existed. They are therefore opt-in by name (<c>install --user-scope</c>) and
+/// never the path of least resistance.</para>
+/// </remarks>
+public enum InstallScope
+{
+    /// <summary>Writes only inside the vault and the vault's own per-vault state directories.</summary>
+    Project,
+
+    /// <summary>Also edits the machine-shared, single-instance registrations. Must be asked for.</summary>
+    User
+}
+
 public sealed class Install
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
@@ -88,12 +115,24 @@ public sealed class Install
 
     public InstallResult Run(string vaultPath, bool fromV0 = false) => Run(vaultPath, fromV0, dryRun: false);
 
+    public InstallResult Run(string vaultPath, bool fromV0, bool dryRun) => Run(vaultPath, fromV0, dryRun, InstallScope.Project);
+
+    /// <summary>The vault's own hook file: the project package, not the machine's shared one.</summary>
+    public static string ProjectSettingsPath(string vault) => Path.Combine(vault, ".claude", "settings.json");
+
+    /// <summary>The vault's own MCP registration, read by a Claude session started in the vault.</summary>
+    public static string ProjectMcpPath(string vault) => Path.Combine(vault, ".mcp.json");
+
     /// <summary>
     /// Spec 6.11. <paramref name="dryRun"/> is the migration plan path: nothing is written, the
     /// full v0 plan lands in <see cref="MigrationReport"/>, and the result carries only the paths
     /// and registrations the real run would produce.
     /// </summary>
-    public InstallResult Run(string vaultPath, bool fromV0, bool dryRun)
+    /// <param name="scope">
+    /// Defaults to <see cref="InstallScope.Project"/>. See <see cref="InstallScope"/> for why the
+    /// machine-shared registrations had to stop being the default.
+    /// </param>
+    public InstallResult Run(string vaultPath, bool fromV0, bool dryRun, InstallScope scope)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(vaultPath);
         Health = [];
@@ -115,13 +154,12 @@ public sealed class Install
         {
             return Failure($"Claude kimlik dizini reddedildi: {error.Message}");
         }
-        var planned = PlannedPaths(oom, stateRoot, claudeConfig).ToList();
+        var planned = PlannedPaths(oom, stateRoot, claudeConfig, vault, scope).ToList();
         if (fixtureMode || dryRun)
         {
-            ToastRegistered = ShortcutRegistration.IsRegistered;
+            ToastRegistered = scope == InstallScope.User && ShortcutRegistration.IsRegistered;
             if (dryRun && fromV0) MigrationReport = new Migration(clock, processRunner).Run(vault, stateRoot, userSettingsPath(), dryRun: true);
-            return new InstallResult(true, dryRun ? [] : planned,
-                ["hooks:4", $"task:{TaskName}", "aumid:" + ShortcutRegistration.ApplicationUserModelId, "shortcut", "mcp:oom"]);
+            return new InstallResult(true, dryRun ? [] : planned, [.. PlannedRegistrations(scope)]);
         }
         // Registrations are appended as they happen: the result never claims a step the machine
         // refused (the Event Log source needs elevation and is skipped without it).
@@ -143,16 +181,12 @@ public sealed class Install
             // nobody can attribute, which is why 26 of them could accumulate under one profile
             // with no way to tell an abandoned one from a live one.
             WriteIfMissing(Path.Combine(stateRoot, VaultIdentity.DescriptorName), JsonSerializer.Serialize(new { vault, schema = 1 }));
-            InstallHooks(vault, executable);
+            InstallHooks(vault, executable, scope);
             registrations.Add("hooks:4");
-            scheduler.Register(TaskName, new Sweep().BuildScheduledTaskXml(executable));
-            registrations.Add($"task:{TaskName}");
-            RegisterMcp(executable);
+            registrations.Add(ScopeTag(scope));
+            RegisterMcp(executable, vault, scope);
             registrations.Add("mcp:oom");
-            RegisterToast(executable, registrations);
-            if (eventLogRegistrar()) registrations.Add("event-log:oom");
-            else Record(HealthLevel.Info, "event-log-atlandi", "event-log",
-                "Event Log kaynağı yönetici hakkı olmadan oluşturulamadı; günlükler logs\\ altında tutuluyor.");
+            RegisterMachineWide(executable, scope, registrations);
             if (fromV0) MigrationReport = new Migration(clock, processRunner).Run(vault, stateRoot, userSettingsPath(), dryRun: false, RemoveV0Task);
             doctorAction();
             return new InstallResult(true, planned, registrations);
@@ -161,6 +195,43 @@ public sealed class Install
         {
             return new InstallResult(false, planned.Where(File.Exists).ToArray(), registrations, $"Kurulum tamamlanamadı: {exception.Message}");
         }
+    }
+
+    /// <summary>The one place that says which registrations a scope produces; the preview reads it too.</summary>
+    private static string ScopeTag(InstallScope scope) => scope == InstallScope.User ? "kapsam:kullanıcı" : "kapsam:proje";
+
+    private static IEnumerable<string> PlannedRegistrations(InstallScope scope) => scope == InstallScope.User
+        ? ["hooks:4", ScopeTag(scope), $"task:{TaskName}", "aumid:" + ShortcutRegistration.ApplicationUserModelId, "shortcut", "mcp:oom"]
+        : ["hooks:4", ScopeTag(scope), "mcp:oom", "task:atlandı", "shortcut:atlandı", "event-log:atlandı"];
+
+    /// <summary>
+    /// The five single-instance registrations. Each is keyed by a constant with no vault in it —
+    /// one task name, one shortcut path, one AUMID, one Event Log source, and, through
+    /// <see cref="InstallHooks"/> and <see cref="RegisterMcp"/>, one shared settings file — so the
+    /// second vault installed on a machine used to take all of them over from the first. In
+    /// <see cref="InstallScope.Project"/> none of them is written and the skip is reported, not
+    /// hidden: an install that quietly does less than the last one did is its own defect.
+    /// </summary>
+    private void RegisterMachineWide(string executable, InstallScope scope, ICollection<string> registrations)
+    {
+        if (scope != InstallScope.User)
+        {
+            ToastRegistered = false;
+            registrations.Add("task:atlandı");
+            registrations.Add("shortcut:atlandı");
+            registrations.Add("event-log:atlandı");
+            Record(HealthLevel.Info, "proje-kapsami", "kapsam",
+                "Proje kapsamı: zamanlanmış görev, Start menüsü kısayolu/AUMID ve Event Log kaynağı yazılmadı. " +
+                "Üçü de makinede tektir ve ikinci bir vault kurulduğunda birbirini ezer. Süpürme elle `oom sweep` ile " +
+                "koşar; makine geneli kayıtlar isteniyorsa `oom install --user-scope`.");
+            return;
+        }
+        scheduler.Register(TaskName, new Sweep().BuildScheduledTaskXml(executable));
+        registrations.Add($"task:{TaskName}");
+        RegisterToast(executable, registrations);
+        if (eventLogRegistrar()) registrations.Add("event-log:oom");
+        else Record(HealthLevel.Info, "event-log-atlandi", "event-log",
+            "Event Log kaynağı yönetici hakkı olmadan oluşturulamadı; günlükler logs\\ altında tutuluyor.");
     }
 
     /// <summary>
@@ -228,11 +299,11 @@ public sealed class Install
         {
             // These registrations are independent of the identity directory. Run them before
             // deriving that path so a safety rejection cannot leave live entry points behind.
-            RemoveHooks();
+            RemoveHooks(vault);
             registrations.Add("hooks:kaldırıldı");
             if (scheduler is InstallRuntime.SchtasksScheduler schtasks) schtasks.Unregister(TaskName);
             registrations.Add("task:kaldırıldı");
-            RemoveMcp();
+            RemoveMcp(vault);
             registrations.Add("mcp:kaldırıldı");
 
             var claudeConfig = ClaudeIsolation.ConfigurationDirectory(vault, localAppDataPath(), knownSyncRoots());
@@ -394,12 +465,18 @@ public sealed class Install
         File.WriteAllText(marker, $"Kaynak: {vault}\nZaman: {clock.Now:O}\n", Utf8);
         if (!File.Exists(marker)) throw new IOException("Yedek doğrulanamadı.");
     }
-    private static IEnumerable<string> PlannedPaths(string oom, string stateRoot, string claudeConfig) =>
-    [
-        Path.Combine(oom, "oom.exe"), Path.Combine(oom, "vault.json"), Path.Combine(oom, "oom.json"), Path.Combine(oom, "hub-config.json"),
-        claudeConfig, Path.Combine(oom, "quarantine"), Path.Combine(stateRoot, VaultIdentity.DatabaseName),
-        Path.Combine(stateRoot, VaultIdentity.DescriptorName), Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs")
-    ];
+    private static IEnumerable<string> PlannedPaths(string oom, string stateRoot, string claudeConfig, string vault, InstallScope scope)
+    {
+        string[] common =
+        [
+            Path.Combine(oom, "oom.exe"), Path.Combine(oom, "vault.json"), Path.Combine(oom, "oom.json"), Path.Combine(oom, "hub-config.json"),
+            claudeConfig, Path.Combine(oom, "quarantine"), Path.Combine(stateRoot, VaultIdentity.DatabaseName),
+            Path.Combine(stateRoot, VaultIdentity.DescriptorName), Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs")
+        ];
+        // The project package is part of the plan, so `--dry-run` names the two files the vault
+        // gains rather than leaving them to be discovered after the fact.
+        return scope == InstallScope.User ? common : [.. common, ProjectSettingsPath(vault), ProjectMcpPath(vault)];
+    }
     private static void CreateDirectories(string oom, string stateRoot)
     {
         foreach (var path in new[] { oom, Path.Combine(oom, "quarantine"), stateRoot, Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs") })
@@ -420,9 +497,16 @@ public sealed class Install
             throw new InvalidOperationException("Kurulum yalnız yayımlanmış oom.exe üzerinden çalıştırılabilir.");
         if (!Path.GetFullPath(source).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) File.Copy(source, destination, true);
     }
-    private void InstallHooks(string vault, string executable)
+    /// <summary>
+    /// Faz 5: the hook file is the vault's own <c>.claude\settings.json</c> unless the user-level
+    /// file was asked for by name. Both are merged the same way — only the scope changes. The
+    /// shared file cannot be the default: <see cref="SetHook"/> drops every entry naming
+    /// <c>oom.exe</c> before adding its own, so installing a second vault deleted the first
+    /// vault's four hooks and replaced them with the second vault's exe.
+    /// </summary>
+    private void InstallHooks(string vault, string executable, InstallScope scope)
     {
-        var settingsPath = userSettingsPath();
+        var settingsPath = scope == InstallScope.User ? userSettingsPath() : ProjectSettingsPath(vault);
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
         var root = File.Exists(settingsPath) ? JsonNode.Parse(File.ReadAllText(settingsPath, Utf8)) as JsonObject : new JsonObject();
         root ??= new JsonObject();
@@ -461,10 +545,20 @@ public sealed class Install
         kept.Add(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = command, ["timeout"] = timeout }) });
         hooks[name] = kept;
     }
-    private void RegisterMcp(string executable)
+    /// <summary>
+    /// Faz 5: <c>&lt;vault&gt;\.mcp.json</c> by default. The Claude Desktop config is one file per
+    /// machine keyed on the single name <c>oom</c>, so the second vault's install overwrote the
+    /// first vault's server entry and only the last install could be reached over MCP.
+    /// </summary>
+    private void RegisterMcp(string executable, string vault, InstallScope scope)
     {
-        var candidates = mcpCandidates();
-        var path = candidates.FirstOrDefault(File.Exists) ?? candidates[0];
+        string path;
+        if (scope == InstallScope.User)
+        {
+            var candidates = mcpCandidates();
+            path = candidates.FirstOrDefault(File.Exists) ?? candidates[0];
+        }
+        else path = ProjectMcpPath(vault);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var root = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject : new JsonObject();
         root ??= new JsonObject();
@@ -473,29 +567,40 @@ public sealed class Install
         servers["oom"] = new JsonObject { ["command"] = executable, ["args"] = new JsonArray("mcp") };
         File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
     }
-    private void RemoveMcp()
+    /// <summary>
+    /// Uninstall reverses both scopes, whichever one installed: an installation made before the
+    /// default moved into the project still has to be removable, and a project package left
+    /// behind by a user-scope uninstall would keep firing hooks at a deleted exe.
+    /// </summary>
+    private void RemoveMcp(string vault)
     {
-        foreach (var path in mcpCandidates().Where(File.Exists))
+        foreach (var path in mcpCandidates().Prepend(ProjectMcpPath(vault)).Where(File.Exists))
         {
             var root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject;
             if (root?["mcpServers"] is not JsonObject servers || !servers.Remove("oom")) continue;
             File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
         }
     }
-    private void RemoveHooks()
+    private void RemoveHooks(string vault)
     {
-        var path = userSettingsPath();
-        if (!File.Exists(path)) return;
+        foreach (var path in new[] { ProjectSettingsPath(vault), userSettingsPath() }.Where(File.Exists))
+            RemoveHooksFrom(path);
+    }
+    private static void RemoveHooksFrom(string path)
+    {
         var root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject;
         if (root?["hooks"] is not JsonObject hooks) return;
+        // Only rewrite when an entry of ours was actually found. The user-level file belongs to
+        // every project on the machine; rewriting it to change nothing is still a shared write.
+        var removed = false;
         foreach (var name in new[] { "SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact" })
         {
             if (hooks[name] is not JsonArray entries) continue;
             for (var index = entries.Count - 1; index >= 0; index--)
-                if (entries[index]?.ToJsonString().Contains("oom.exe", StringComparison.OrdinalIgnoreCase) == true) entries.RemoveAt(index);
-            if (entries.Count == 0) hooks.Remove(name);
+                if (entries[index]?.ToJsonString().Contains("oom.exe", StringComparison.OrdinalIgnoreCase) == true) { entries.RemoveAt(index); removed = true; }
+            if (entries.Count == 0) { hooks.Remove(name); removed = true; }
         }
-        File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
+        if (removed) File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
     }
     private static void SecurePath(string path)
     {

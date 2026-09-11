@@ -139,10 +139,15 @@ internal static class Program
                 var target = Value(args, "--vault") ?? vault;
                 var install = new Install();
                 var uninstalling = args.Contains("--uninstall");
+                var scope = InstallScopeFor(args);
                 var result = uninstalling
                     ? install.Uninstall(target)
-                    : install.Run(target, args.Contains("--from-v0"), args.Contains("--dry-run"));
+                    : install.Run(target, args.Contains("--from-v0"), args.Contains("--dry-run"), scope);
                 if (install.MigrationReport.Length > 0) Console.Write(install.MigrationReport);
+                if (!uninstalling)
+                    Console.WriteLine(scope == InstallScope.User
+                        ? "kapsam: kullanıcı — makine geneli tekil kayıtlar dahil (ortak settings.json, Claude Desktop MCP, zamanlanmış görev, kısayol/AUMID, Event Log)"
+                        : "kapsam: proje — yalnız vault'un kendi dosyaları; makine geneli kayıt için --user-scope");
                 // K7/Y-105: run from the installed copy, the exe cannot delete itself — the
                 // leftover path is reported so the user knows to remove it by hand.
                 var leftoverExe = result.Registrations.FirstOrDefault(r => r.StartsWith("exe-elle-sil:", StringComparison.Ordinal));
@@ -180,6 +185,17 @@ internal static class Program
                 return 1;
         }
     }
+
+    /// <summary>
+    /// Y-180/Y-182 (Faz 5): <c>install</c> writes the project package by default and reaches the
+    /// machine's shared registrations only when <c>--user-scope</c> is spelled out. The flag has
+    /// no short form and no default-on partner on purpose — the user-level write is the one that
+    /// takes the shared <c>~/.claude/settings.json</c> hooks, the single Claude Desktop MCP entry,
+    /// the single scheduled task and the single AUMID shortcut away from whichever vault held
+    /// them, so it must never be reachable by accident.
+    /// </summary>
+    internal static InstallScope InstallScopeFor(string[] args) =>
+        args.Contains("--user-scope") ? InstallScope.User : InstallScope.Project;
 
     /// <summary>
     /// The SessionStart block (spec 6.2, 7). Called from the hook it answers in the hook's own
@@ -861,7 +877,13 @@ internal static class Program
               doctor [--fix] [--json] [--quiet] Sağlık ve onarım
               save "<metin>" | --session-json   Daily'ye doğrudan kayıt
               mcp                               Salt okunur MCP sunucusu (stdio JSON-RPC)
-              install [--uninstall] [--from-v0] [--dry-run] [--adopt]  Kurulum, göç, zaten derlenmiş vault'u benimseme
+              install [--uninstall] [--from-v0] [--dry-run] [--adopt] [--user-scope]
+                                                Kurulum, göç, zaten derlenmiş vault'u benimseme.
+                                                Varsayılan kapsam PROJE: yalnız vault'un içine yazar.
+                                                --user-scope makine geneli tekil kayıtları da yazar
+                                                (ortak settings.json, Claude Desktop MCP, zamanlanmış
+                                                görev, kısayol/AUMID, Event Log) — ikinci bir vault
+                                                kurulunca bunlar birbirini ezer.
               bench [--backend claude|local] [--transcripts N] [--dailies N]
                     [--transcript-dir <yol>] [--daily-dir <yol>] [--out <dosya>] [--judge] [--dry-run]
                                                 Spec 6.12 ölçümü; sonuç bench/results/<tarih>.json
