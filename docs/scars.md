@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 150, Geçti: 150, Başarısız: 0. Kapı testleriyle birlikte toplam 191 test, 191 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 178, Geçti: 178, Başarısız: 0. Kapı testleriyle birlikte toplam 222 test, 222 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -150,9 +150,37 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-181 | kurulum | `SetHook` kendi girdisini eklemeden önce `oom.exe` adı geçen **her** girdiyi siliyordu: ikinci bir kasa kurmak **birinci kasanın dört kancasını siliyor**, görevi, kısayolu ve MCP girdisini ikinciye çeviriyordu. İki kasa artık yan yana duruyor — kurulu exe ile kanıtlandı, ortak dosyaların sha256'sı iki kurulumdan sonra değişmedi | AyrismaTests.Y181_* | yeşil |
 | Y-182 | kurulum | Makine geneli kayıt artık en az dirençli yol değil: yalnız `--user-scope` bayrağı seçiyor, kısa biçimi ve ortam değişkeni yok, `install` her koşumda kapsamını basıyor. Bayrağın dispatcher'a gerçekten ulaştığı ayrıca doğrulanıyor | AyrismaTests.Y182_* | yeşil |
 | Y-183 | kurulum | Kaldırma iki kapsamı da geri alıyor ve yalnız kendi girdilerini söküyor: aynı proje dosyasındaki yabancı bir kanca yerinde kalıyor, komşu kasa bayt bayt aynı kalıyor, ve bizim hiçbir şeyimiz bulunmayan ortak dosya artık yeniden yazılmıyor | AyrismaTests.Y183_* | yeşil |
+| Y-184 | kurulum | Kaldırma, sahiplik kanıtı olarak JSON içindeki `oom.exe` **alt dizesini** kullanıyordu ve sildiği şey kayıt değil **gruptu** — karma bir grupta yabancı aracın kancası da gidiyordu. A kaldırılırken B'nin ve yabancı bir `oom.exe`'nin kayıtları artık bozulmuyor | UninstallOwnershipTests.Y184_* | yeşil |
+| Y-185 | kurulum | Karma hook grubunda yalnız sahip olunan alt kayıt kalkıyor, grup ayakta kalıyor | UninstallOwnershipTests.Y185_* | yeşil |
+| Y-186 | kurulum | Eksik, bozuk ve uyuşmayan künye artık durum kökünü ve paketi yerinde bırakıyor; belirsiz hedef korunuyor | UninstallOwnershipTests.Y186_* | yeşil |
+| Y-187 | kurulum | Reddedilen kimlik yolunda doğrulanmış bağımsız kayıtlar yine de temizleniyor — korunan sözleşme buydu, sabit görev adının koşulsuz silinmesi değil | UninstallOwnershipTests.Y187_* | yeşil |
+| Y-188 | kurulum | Görev çıkış kodu okunmadan siliniyor ve sonuç koşulsuz `task:kaldırıldı` yazılıyordu. Başarısız veya yapılmamış işlem artık `kaldırıldı` diye bildirilmiyor | UninstallOwnershipTests.Y188_* | yeşil |
+| Y-189 | kurulum | Sahiplik kararı kayıt satırından ayrı, hedef hedef bildiriliyor; münhasır sahipliği kanıtlanamayan paylaşılan kayıt korunuyor | UninstallOwnershipTests.Y189_* | yeşil |
+| Y-190 | kurulum | MCP sahipliği anahtarın adının `oom` olmasıydı; komut hiç okunmuyordu. Sahiplik kanıtı artık yol ve komut düzeyinde okunuyor, ad benzerliğiyle değil | UninstallOwnershipTests.Y190_* | yeşil |
+| Y-191 | durum-deposu | Yeni veritabanı merdivenin tamamıyla 5'e kuruluyor; getirim dizini `BaseTables`'ın kuyruğu değil, kendi numaralı basamağı | SchemaV5MigrationTests.Y191_* | yeşil |
+| Y-192 | durum-deposu | Sürüm 2 ve 3 dosyaları 5'e göç ediyor; eski satırların **içeriği** (sayısı değil) ve doğrulanmış yedek yerinde kalıyor | SchemaV5MigrationTests.Y192_* | yeşil |
+| Y-193 | durum-deposu | İndeksi hiç eklenmemiş sürüm 4 dosyası tek numaralı basamakla 5'e çıkıyor ve bunu bildiriyor — eskiden aynı DDL koşuyor, `Applied` raporu boş kalıyordu | SchemaV5MigrationTests.Y193_* | yeşil |
+| Y-194 | durum-deposu | `021cc83` biçimindeki genişletilmiş sürüm 4 dosyası satırlarına dokunulmadan 5'e damgalanıyor; basamak yıkıcı değil, birim etkili | SchemaV5MigrationTests.Y194_* | yeşil |
+| Y-195 | durum-deposu | Merdivenin bütün basamakları her açılışta koşuyordu: iki açılış arasında elle düşürülen `ix_notes_updated` kendiliğinden geri geliyordu (ölçüldü, 0→1). Başarılı tekrar açılış artık hiçbir basamağı tekrar koşmuyor, ikinci yedek üretmiyor | SchemaV5MigrationTests.Y195_* | yeşil |
+| Y-196 | durum-deposu | Sürüm kararı `journal_mode` dahil kalıcı değişikliklerden **sonra** veriliyordu: reddedilen dosya yine de WAL'a çevriliyordu. Artık her kalıcı değişiklikten önce reddediliyor, dosya `delete` kipinde kalıyor | SchemaV5MigrationTests.Y196_* | yeşil |
+| Y-197 | durum-deposu | `retrieve_served` içinde koşulsuz bir dedupe `DELETE` vardı; gerekçesi "tablo sahada boş" idi. Bir şeyin yazılmamış olması boş olduğunun kanıtı değildir. Çakışan satır varsa göç açık hatayla duruyor ve satırlar kalıyor | SchemaV5MigrationTests.Y197_* | yeşil |
+| Y-198 | durum-deposu | Göç ve sürüm damgası tek transaction: yarıda kesilen göç geri alınıyor, dosya geldiği sürümde **ve** o sürümün şeklinde kalıyor | SchemaV5MigrationTests.Y198_* | yeşil |
+| Y-199 | durum-deposu | Yedek koşulu `calls` tablosunun varlığına bağlıydı: ledger satırı olmayan ama oturum/served/dizin taşıyan dosya yedeksiz göç ediyordu. Artık içerik taşıyan her dosya göçten önce kopyalanıyor | SchemaV5MigrationTests.Y199_* | yeşil |
+| Y-200 | durum-deposu | Basamaklar birbirinin tablosuna yaslanıyordu, çünkü `BaseTables` her açılışta koşuyordu. Basamak 5 ihtiyacı olan `retrieve_served`'i kendisi kuruyor | SchemaV5MigrationTests.Y200_* | yeşil |
+| Y-210 | durum-deposu | `Doctor`'ın satır sayacı 20 tablonun yalnız 6'sını okuyordu: `daily_ingest`, `retrieve_served`, `quarantine` ve diğerleri görünmüyordu — "sıfır satırlı" bir kök veri tutuyor olabilirdi. Sayaç artık `sqlite_master`'ı okuyor | DoctorStateContentTests.Y210_* | yeşil |
+| Y-211 | durum-deposu | Naif bir "her tabloyu say" düzeltmesi `artık` sınıfını yok ederdi: hiç yazılmamış bir `state.db` FTS5 gölge tablolarında zaten 3 satır taşıyor (ölçüldü). Gölge ve SQLite iç tabloları sayacı şişirmiyor | DoctorStateContentTests.Y211_* | yeşil |
+| Y-212 | durum-deposu | Boşluk kanıtlanamayan kök artık `belirsiz`; `artık` hükmü ancak boşluk gerçekten kanıtlandığında veriliyor | DoctorStateContentTests.Y212_* | yeşil |
+| Y-213 | durum-deposu | Bozuk veritabanı `okunamıyor` kalıyor — ne `artık`'a ne `belirsiz`'e kayıyor; hem `integrity_check` hem okuma istisnası bu kapıya bağlı | DoctorStateContentTests.Y213_* | yeşil |
+| Y-214 | durum-deposu | Tarama hiçbir kök, veritabanı veya şema oluşturmuyor. WAL veritabanına salt-okunur bağlanmanın bıraktığı `-wal`/`-shm` çifti belgelenmiş tek istisna olarak çivilendi | DoctorStateContentTests.Y214_* | yeşil |
+| Y-220 | test-disiplini | `Y-042` kendi taban çizgisini `recall-2026-09-09-r2-gate.json`'dan okuyordu — `PROVENANCE.md`'nin "kanıt değildir" dediği dosyanın ta kendisi — ve güncel kodun recall'ını hiç ölçmüyordu. Kanıt dosyası artık dört parçalı demeti taşımak zorunda | RecallEvidenceTests.Y220_* | yeşil |
+| Y-221 | test-disiplini | `run_status` `ok` değilken hiçbir dosya kapıyı geçti diyemiyor | RecallEvidenceTests.Y221_* | yeşil |
+| Y-222 | test-disiplini | Yanlış exe hash'i ölçümden **önce** reddediliyor; kimlik doğrulanmadan sayı üretilmiyor | RecallEvidenceTests.Y222_* | yeşil |
+| Y-223 | test-disiplini | Korpusta-var-mı kontrolü olmadan, uydurma not adlarıyla cevap veren bir backend `recall 0.000` **ve** `run_status: ok` üretebiliyordu — yayımlanabilir, kusursuz biçimli, yanlış bir sayı. Bozuk getirme çıktısı artık skorsuzluğa düşüyor | RecallEvidenceTests.Y223_* | yeşil |
+| Y-224 | test-disiplini | Kapı 125 puanlanan soruyu sayıyor; kanca yolu ve negatif kontroller ayrı raporlanıyor ve kapısız recall onların yerine geçmiyor | RecallEvidenceTests.Y224_* | yeşil |
+| Y-225 | test-disiplini | Sınıf etiketleri yeniden adlandırılmıyor: `tek-not`/`çok-not`, `episodik`/`kavram` diye sunulmuyor; episodik eksen `measured: false` ile yapısal olarak açık kalıyor | RecallEvidenceTests.Y225_* | yeşil |
 | Y-170 | durum-deposu | Üçüncü DDL yeri: `Retrieve.Build()` kendi bağlantısını açıp `oom_index_meta`, `notes` ve `notes_fts`'i aynı `state.db` içinde yaratıyordu — şemanın tek sahibi olmasına rağmen. İndeks şeması artık `StateStore`'un merdiveninde; `Build()` sıfır DDL koşuyor | IndeksScars.Y170_* | yeşil |
 | Y-171 | durum-deposu | `Retrieve.Build()` kendi `Directory.CreateDirectory` çağrısını yapıyordu: test paketi her koşumda bir durum kökü sızdırıyordu (ölçüldü, sızan kökte yalnız indeks tabloları ve `user_version=0` vardı). Artık var olan dizin yazmanın koşulu; sızıntı bitti | IndeksScars.Y171_* | yeşil |
-| Y-172 | durum-deposu | Yeniden kurulum `DROP TABLE notes` ile şema sahibinin altından tabloyu alıyordu. Yerine aynı işlem içinde `DELETE` geldi: indeks indeks olarak yenileniyor, `ix_notes_updated` ve `user_version=4` yerinde kalıyor | IndeksScars.Y172_* | yeşil |
+| Y-172 | durum-deposu | Yeniden kurulum `DROP TABLE notes` ile şema sahibinin altından tabloyu alıyordu. Yerine aynı işlem içinde `DELETE` geldi: indeks indeks olarak yenileniyor, `ix_notes_updated` ve sürüm damgası yerinde kalıyor | IndeksScars.Y172_* | yeşil |
 | Y-173 | getirme | `retrieve_served` tablosu şemada vardı ve **hiçbir kod ona yazmıyordu**; dedupe süreçle ölen bir sözlükteydi, yani üretimde hiç çalışmıyordu. Onaylanmış teslimat artık ikinci bir açılışta susturuyor | GetirmeScars.Y173_* | yeşil |
 | Y-174 | getirme | Teslim edildiği doğrulanmamış bir blok teslim sayılıyordu. `prepared` yazan süreç ölürse satır bir sonraki açılışta `uncertain`e düşüyor ve **hiçbir şeyi susturmuyor** — hafıza tekrar eder, sessizce esirgenmez | GetirmeScars.Y174_* | yeşil |
 | Y-175 | getirme | Yedi günlük sessizlik bütün oturumlara yayılabilirdi: kapsam anahtarına `session_id` ve `query_sig` girdi. Yeni bir oturum kasanın tamamıyla başlıyor, aynı oturumda farklı bir soru aynı notu yeniden görebiliyor (Y-039) | GetirmeScars.Y175_* | yeşil |
@@ -168,8 +196,8 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | getirme | 16 | 0 |
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
-| durum-deposu | 24 | 0 |
-| kurulum | 26 | 0 |
-| test-disiplini | 11 | 0 |
+| durum-deposu | 41 | 0 |
+| kurulum | 33 | 0 |
+| test-disiplini | 17 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **150** | **0** |
+| **Toplam** | **178** | **0** |

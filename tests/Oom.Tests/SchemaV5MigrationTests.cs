@@ -22,8 +22,8 @@ public sealed class SchemaV5MigrationTests
 {
     private const string Stamp = "2026-01-01T00:00:00.0000000+00:00";
 
-    [Fact(DisplayName = "Y-184 · Yeni veritabanı merdivenin tamamıyla 5'e kurulur, getirim dizini kendi basamağıdır")]
-    public void Y184_FreshDatabaseIsProvisionedToFiveAndTheRetrievalIndexIsItsOwnStep()
+    [Fact(DisplayName = "Y-191 · Yeni veritabanı merdivenin tamamıyla 5'e kurulur, getirim dizini kendi basamağıdır")]
+    public void Y191_FreshDatabaseIsProvisionedToFiveAndTheRetrievalIndexIsItsOwnStep()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -62,10 +62,10 @@ public sealed class SchemaV5MigrationTests
     /// those builds had not invented yet. The assertion is on content, not on counts: a row that
     /// survives with the wrong values has not survived.
     /// </summary>
-    [Theory(DisplayName = "Y-185 · Sürüm 2 ve 3 dosyaları 5'e göç eder; eski satırların içeriği ve doğrulanmış yedek yerinde kalır")]
+    [Theory(DisplayName = "Y-192 · Sürüm 2 ve 3 dosyaları 5'e göç eder; eski satırların içeriği ve doğrulanmış yedek yerinde kalır")]
     [InlineData(2)]
     [InlineData(3)]
-    public void Y185_OlderVersionsMigrateAndKeepTheContentOfTheirRows(int seeded)
+    public void Y192_OlderVersionsMigrateAndKeepTheContentOfTheirRows(int seeded)
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -125,8 +125,8 @@ public sealed class SchemaV5MigrationTests
     /// the file says so afterwards — which is the whole difference from the old behaviour, where
     /// the same tables appeared and <c>Applied</c> stayed empty.
     /// </summary>
-    [Fact(DisplayName = "Y-186 · İndeksi hiç eklenmemiş sürüm 4 dosyası tek numaralı basamakla 5'e çıkar ve bunu bildirir")]
-    public void Y186_VersionFourWithoutTheIndexGainsItAsOneNumberedStep()
+    [Fact(DisplayName = "Y-193 · İndeksi hiç eklenmemiş sürüm 4 dosyası tek numaralı basamakla 5'e çıkar ve bunu bildirir")]
+    public void Y193_VersionFourWithoutTheIndexGainsItAsOneNumberedStep()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -169,8 +169,8 @@ public sealed class SchemaV5MigrationTests
     /// must recognise it, stamp it, and touch none of its rows — the index it already has is not
     /// rebuilt and the notes row it already holds is not dropped and recreated.
     /// </summary>
-    [Fact(DisplayName = "Y-187 · 021cc83 biçimindeki genişletilmiş sürüm 4 dosyası satırlarına dokunulmadan 5'e damgalanır")]
-    public void Y187_TheExtendedVersionFourFileIsStampedWithoutTouchingItsRows()
+    [Fact(DisplayName = "Y-194 · 021cc83 biçimindeki genişletilmiş sürüm 4 dosyası satırlarına dokunulmadan 5'e damgalanır")]
+    public void Y194_TheExtendedVersionFourFileIsStampedWithoutTouchingItsRows()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -212,8 +212,8 @@ public sealed class SchemaV5MigrationTests
     /// Under the old code step 1 ran every time and would have put it back, silently, in the
     /// owner's live database.
     /// </summary>
-    [Fact(DisplayName = "Y-188 · Başarılı tekrar açılış hiçbir basamağı tekrar koşmaz, ikinci yedek üretmez")]
-    public void Y188_ASuccessfulReopenReplaysNoStepAndTakesNoSecondBackup()
+    [Fact(DisplayName = "Y-195 · Başarılı tekrar açılış hiçbir basamağı tekrar koşmaz, ikinci yedek üretmez")]
+    public void Y195_ASuccessfulReopenReplaysNoStepAndTakesNoSecondBackup()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -258,8 +258,8 @@ public sealed class SchemaV5MigrationTests
     /// it could not read. The evidence is the journal mode of the refused file: still the mode it
     /// arrived in.
     /// </summary>
-    [Fact(DisplayName = "Y-189 · Daha yeni sürüm, journal_mode dahil hiçbir kalıcı değişiklik yapılmadan reddedilir")]
-    public void Y189_ANewerVersionIsRefusedBeforeJournalModeTouchesTheFile()
+    [Fact(DisplayName = "Y-196 · Daha yeni sürüm, journal_mode dahil hiçbir kalıcı değişiklik yapılmadan reddedilir")]
+    public void Y196_ANewerVersionIsRefusedBeforeJournalModeTouchesTheFile()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -293,8 +293,8 @@ public sealed class SchemaV5MigrationTests
     /// wrote to it". That nothing wrote to it is not evidence that it is empty. Here the rows are
     /// there, and the migration stops and says so instead of making its own DDL succeed.
     /// </summary>
-    [Fact(DisplayName = "Y-190 · Çakışan served satırları sessizce silinmez; göç açık hatayla durur ve satırlar kalır")]
-    public void Y190_ConflictingServedRowsStopTheMigrationInsteadOfBeingDeleted()
+    [Fact(DisplayName = "Y-197 · Çakışan served satırları sessizce silinmez; göç açık hatayla durur ve satırlar kalır")]
+    public void Y197_ConflictingServedRowsStopTheMigrationInsteadOfBeingDeleted()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -330,8 +330,8 @@ public sealed class SchemaV5MigrationTests
     /// collision and the same file migrates cleanly, which is what "the step is idempotent and may
     /// be re-run" has to mean in practice.
     /// </summary>
-    [Fact(DisplayName = "Y-191 · Yarıda kesilen göç geri alınır; dosya geldiği sürüm ve şekilde kalır, çözülünce göç tamamlanır")]
-    public void Y191_AnInterruptedMigrationRollsBackAndResumesFromTheVersionTheFileCarries()
+    [Fact(DisplayName = "Y-198 · Yarıda kesilen göç geri alınır; dosya geldiği sürüm ve şekilde kalır, çözülünce göç tamamlanır")]
+    public void Y198_AnInterruptedMigrationRollsBackAndResumesFromTheVersionTheFileCarries()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -381,8 +381,8 @@ public sealed class SchemaV5MigrationTests
     /// ledger". Keying it on the <c>calls</c> table meant a database carrying sessions, a served
     /// ledger or a built index, and no ledger row, was migrated with no way back at all.
     /// </summary>
-    [Fact(DisplayName = "Y-192 · Yedek koşulu calls tablosuna bağlı değildir: içerik taşıyan her dosya göçten önce kopyalanır")]
-    public void Y192_TheBackupConditionIsNotKeyedOnTheCallsTable()
+    [Fact(DisplayName = "Y-199 · Yedek koşulu calls tablosuna bağlı değildir: içerik taşıyan her dosya göçten önce kopyalanır")]
+    public void Y199_TheBackupConditionIsNotKeyedOnTheCallsTable()
     {
         var root = ScarFixture.TempDirectory();
         try
@@ -416,8 +416,8 @@ public sealed class SchemaV5MigrationTests
     /// step that assumes a table another step created crashes the migration outright — which is
     /// how this was found, on two existing fixtures, and not by reasoning about it.
     /// </summary>
-    [Fact(DisplayName = "Y-193 · Basamak başka basamağın tablosunu varsaymaz: retrieve_served eksikse göç çakmaz, tabloyu kurar")]
-    public void Y193_AStepDoesNotAssumeATableAnotherStepCreated()
+    [Fact(DisplayName = "Y-200 · Basamak başka basamağın tablosunu varsaymaz: retrieve_served eksikse göç çakmaz, tabloyu kurar")]
+    public void Y200_AStepDoesNotAssumeATableAnotherStepCreated()
     {
         var root = ScarFixture.TempDirectory();
         try

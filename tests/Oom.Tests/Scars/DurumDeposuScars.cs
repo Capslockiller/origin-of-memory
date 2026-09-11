@@ -134,16 +134,16 @@ public sealed class DurumDeposuScars
             {
                 var report = migrated.SchemaReport;
                 Assert.Equal(2, report.FoundVersion);
-                Assert.Equal(4, report.Version);
+                Assert.Equal(5, report.Version);
                 Assert.Equal(
-                    ["2→3: önbelleksiz girdi sayacı (uncached_in_tok)", "2→4: bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)"],
+                    ["2→3: önbelleksiz girdi sayacı (uncached_in_tok)", "2→4: bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)", "2→5: getirim dizini ve served defteri kapsamı (notes, notes_fts, oom_index_meta, retrieve_served kapsam sütunları)"],
                     report.Applied);
 
                 // Nothing was dropped and recreated: the pre-migration rows are still the same rows.
                 Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM calls"));
                 Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM flush_log"));
                 Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM calls WHERE purpose = 'eski satır'"));
-                Assert.Equal(4, migrated.Scalar("PRAGMA user_version"));
+                Assert.Equal(5, migrated.Scalar("PRAGMA user_version"));
 
                 // A proven way back exists before a single ALTER runs, and it is kept, not cleaned up.
                 Assert.NotNull(report.BackupPath);
@@ -155,7 +155,7 @@ public sealed class DurumDeposuScars
 
             SqliteConnection.ClearAllPools();
             using var reopened = new State(null, null, database);
-            Assert.Equal(4, reopened.SchemaReport.FoundVersion);
+            Assert.Equal(5, reopened.SchemaReport.FoundVersion);
             Assert.Empty(reopened.SchemaReport.Applied);
             Assert.Null(reopened.SchemaReport.BackupPath);
             Assert.Equal(1, reopened.Scalar("SELECT COUNT(*) FROM calls"));
@@ -175,7 +175,7 @@ public sealed class DurumDeposuScars
         {
             var database = Path.Combine(root, "state.db");
             using (var provisioned = new State(null, null, database))
-                Assert.Equal(4, provisioned.Scalar("PRAGMA user_version"));
+                Assert.Equal(5, provisioned.Scalar("PRAGMA user_version"));
             SqliteConnection.ClearAllPools();
 
             Execute(database, "PRAGMA user_version=99;");
@@ -421,7 +421,7 @@ public sealed class DurumDeposuScars
                         $"retrieve_served sütunu eksik: {column}");
 
                 // İndeks şeması var olan merdiven basamağına indi, dosyayı sessizce yeniden etiketlemedi.
-                Assert.Equal(4, state.Scalar("PRAGMA user_version"));
+                Assert.Equal(5, state.Scalar("PRAGMA user_version"));
             }
 
             // (b) A file left by an older build gains the same shape on its next open, without
@@ -446,7 +446,7 @@ public sealed class DurumDeposuScars
                 Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM calls"));
                 Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM flush_log"));
 
-                Assert.Equal(4, migrated.SchemaReport.Version);
+                Assert.Equal(5, migrated.SchemaReport.Version);
                 Assert.Equal(2, migrated.SchemaReport.FoundVersion);
             }
         }

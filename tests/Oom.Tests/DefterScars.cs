@@ -138,8 +138,12 @@ public sealed class DefterScars
             using (var command = connection.CreateCommand())
             {
                 command.CommandText =
-                    "CREATE TABLE calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT);" +
-                    "INSERT INTO calls VALUES('t','claude','Flush','Fast','m',10,5,15,3,4,1,20,'ok','actual','summary');" +
+                    // Fixture düzeltmesi: damga 3 diyordu, tablo ise sürüm 1 biçimindeydi. Her basamak
+                    // her açılışta koştuğu sürece fark görünmüyordu; damga artık inanıldığı için fixture
+                    // gerçekten sürüm 3 biçiminde olmalı. Damga (3) ve bütün beklentiler aynen korunuyor.
+                    "CREATE TABLE calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT, operation_id TEXT, attempt_id TEXT, attempt_no INTEGER, uncached_in_tok INTEGER);" +
+                    "CREATE UNIQUE INDEX ix_calls_attempt_id ON calls(attempt_id) WHERE attempt_id IS NOT NULL;" +
+                    "INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose) VALUES('t','claude','Flush','Fast','m',10,5,15,3,4,1,20,'ok','actual','summary');" +
                     "PRAGMA user_version=3;";
                 command.ExecuteNonQuery();
             }
@@ -161,7 +165,7 @@ public sealed class DefterScars
             Assert.True(row.IsDBNull(6));
             Assert.Equal(0L, row.GetInt64(7));
             Assert.Equal("legacy-total-input-v0", row.GetString(8));
-            Assert.Equal(4L, Scalar(migrated, "PRAGMA user_version"));
+            Assert.Equal(5L, Scalar(migrated, "PRAGMA user_version"));
         }
         finally
         {
