@@ -506,7 +506,7 @@ internal static class Program
     /// The one extension point of spec 2.2-4: a package may add a single context line. The
     /// lines go in front of the closing sentence, which stays the last line of the block (spec 7).
     /// </summary>
-    private static string WithExtensions(string text, OomSettings settings, string vault)
+    internal static string WithExtensions(string text, OomSettings settings, string vault)
     {
         if (settings.Extensions.Count == 0)
             return text;
@@ -544,6 +544,25 @@ internal static class Program
 
             var line = result.StandardOutput.Replace("\r", string.Empty, StringComparison.Ordinal)
                 .Split('\n').FirstOrDefault(candidate => candidate.Trim().Length > 0)?.Trim();
+            if (string.IsNullOrEmpty(line))
+                return string.Empty;
+
+            // The owner configures WHICH command runs; he does not configure what it prints.
+            // Whatever comes back is injected into every session's prompt, immediately before
+            // the closing sentence - the most instruction-weighted position in the block - so
+            // it crosses the same egress gate as anything else this machine hands to a model.
+            //
+            // A directive-shaped line drops the extension entirely instead of being masked.
+            // Masking a credential still leaves a usable status line; an extension trying to
+            // instruct the model has nothing left worth keeping, and this method already drops
+            // an extension that is missing, fails, times out or prints nothing. The drop is
+            // announced in the block itself: this surface has no health row of its own, and a
+            // redaction nobody can see is indistinguishable from no guard at all (Y-160).
+            var gated = new Guards().Gate(line, Direction.Egress, ComponentKind.Context);
+            if (gated.Findings.Contains("directive"))
+                return $"[{extension.Name}] (uzanti satiri gonderim kapisinda dusuruldu: directive)\n";
+
+            line = gated.Text.Trim();
             return string.IsNullOrEmpty(line)
                 ? string.Empty
                 : $"[{extension.Name}] {(line.Length > ExtensionLineChars ? line[..ExtensionLineChars] : line)}\n";
