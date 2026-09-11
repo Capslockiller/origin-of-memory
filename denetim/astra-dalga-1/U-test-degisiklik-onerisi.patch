@@ -1,0 +1,92 @@
+diff --git a/tests/Oom.Tests/UninstallSafetyOrderTests.cs b/tests/Oom.Tests/UninstallSafetyOrderTests.cs
+index 5cfefab..4cc0ba3 100644
+--- a/tests/Oom.Tests/UninstallSafetyOrderTests.cs
++++ b/tests/Oom.Tests/UninstallSafetyOrderTests.cs
+@@ -29,17 +29,43 @@ public sealed class UninstallSafetyOrderTests
+             byte[] canary = [0x00, 0xFF, 0x4F, 0x4F, 0x4D, 0x0A];
+             File.WriteAllBytes(canaryPath, canary);
+ 
++            // Şerit U: the registrations have to be THIS vault's before the uninstall may touch
++            // them. `fixture\oom.exe` named nothing on this machine, so under ownership
++            // verification it is a stranger's command and correctly survives — which would have
++            // made the assertions below assert the opposite of what this test is here to protect.
++            var executable = Path.Combine(vault, ".oom", "oom.exe");
++            Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
++            File.WriteAllText(executable, "fixture binary");
++
+             var settingsPath = Path.Combine(profile, ".claude", "settings.json");
+             Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+-            File.WriteAllText(settingsPath,
+-                """{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"fixture\\oom.exe hook"}]}]}}""");
++            File.WriteAllText(settingsPath, new JsonObject
++            {
++                ["hooks"] = new JsonObject
++                {
++                    ["SessionStart"] = new JsonArray(new JsonObject
++                    {
++                        ["hooks"] = new JsonArray(new JsonObject
++                        {
++                            ["type"] = "command",
++                            ["command"] = $"\"{executable}\" hook"
++                        })
++                    })
++                }
++            }.ToJsonString());
+ 
+             var mcpPath = Path.Combine(profile, "mcp", "claude_desktop_config.json");
+             Directory.CreateDirectory(Path.GetDirectoryName(mcpPath)!);
+-            File.WriteAllText(mcpPath,
+-                """{"mcpServers":{"oom":{"command":"fixture\\oom.exe"},"other":{"command":"other.exe"}}}""");
++            File.WriteAllText(mcpPath, new JsonObject
++            {
++                ["mcpServers"] = new JsonObject
++                {
++                    ["oom"] = new JsonObject { ["command"] = executable },
++                    ["other"] = new JsonObject { ["command"] = "other.exe" }
++                }
++            }.ToJsonString());
+ 
+-            var processes = new RecordingProcessRunner();
++            var processes = new RecordingProcessRunner(executable);
+             var install = new Install(
+                 processRunner: processes,
+                 userSettingsPath: () => settingsPath,
+@@ -58,9 +84,13 @@ public sealed class UninstallSafetyOrderTests
+             Assert.Contains("hooks:kaldırıldı", result.Registrations);
+             Assert.Contains("task:kaldırıldı", result.Registrations);
+             Assert.Contains("mcp:kaldırıldı", result.Registrations);
+-            var task = Assert.Single(processes.Requests);
+-            Assert.Equal("schtasks.exe", task.FileName);
+-            Assert.Equal(["/Delete", "/TN", "OdenaOS Memory Sweep", "/F"], task.Arguments);
++            // The protected contract is that the safe, identity-independent cleanup happens before
++            // the identity path can be refused — not that a fixed task name is deleted on sight.
++            // Deleting is now preceded by asking the machine which binary the task actually runs.
++            Assert.Equal(2, processes.Requests.Count);
++            Assert.All(processes.Requests, request => Assert.Equal("schtasks.exe", request.FileName));
++            Assert.Equal(["/Query", "/TN", "OdenaOS Memory Sweep", "/XML"], processes.Requests[0].Arguments);
++            Assert.Equal(["/Delete", "/TN", "OdenaOS Memory Sweep", "/F"], processes.Requests[1].Arguments);
+ 
+             var settings = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject;
+             Assert.False(settings?["hooks"]?.AsObject().ContainsKey("SessionStart"));
+@@ -73,14 +103,19 @@ public sealed class UninstallSafetyOrderTests
+         finally { ScarFixture.Remove(root); }
+     }
+ 
+-    private sealed class RecordingProcessRunner : IProcessRunner
++    private sealed class RecordingProcessRunner(string registeredCommand) : IProcessRunner
+     {
+         internal List<ProcessRequest> Requests { get; } = [];
+ 
+         public ProcessResult Run(ProcessRequest request, TimeSpan timeout)
+         {
+             Requests.Add(request);
+-            return new ProcessResult(0, string.Empty, string.Empty, true);
++            // The machine's answer to "which binary does this task run?"; without it the task is
++            // unattributable and, correctly, would be left registered.
++            var output = request.Arguments.Contains("/Query")
++                ? $"<Task><Actions><Exec><Command>{registeredCommand}</Command></Exec></Actions></Task>"
++                : string.Empty;
++            return new ProcessResult(0, output, string.Empty, true);
+         }
+     }
+ }

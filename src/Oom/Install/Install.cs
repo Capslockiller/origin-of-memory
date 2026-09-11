@@ -35,6 +35,118 @@ public enum InstallScope
     User
 }
 
+/// <summary>
+/// One uninstall target and what verifying its ownership decided. Reported separately from
+/// <see cref="InstallResult.Registrations"/>: a registration line says what happened, this says
+/// on what evidence — and a target left alone for want of evidence is a result, not a silence.
+/// </summary>
+/// <param name="Target">The registration or path that was examined.</param>
+/// <param name="Owned">True only when this vault's ownership was positively established.</param>
+/// <param name="Detail">The evidence, or the reason there was none.</param>
+public sealed record OwnershipVerdict(string Target, bool Owned, string Detail);
+
+/// <summary>
+/// What makes a registration <em>this vault's</em> rather than merely oom-shaped (Faz 5, şerit U).
+/// </summary>
+/// <remarks>
+/// <para>Every machine-shared registration oom writes is keyed by a constant with no vault in it:
+/// one task name, one shortcut path, one AUMID, one Event Log source, one MCP server key
+/// <c>oom</c>. Uninstall used to treat those constants as proof of ownership — the substring
+/// <c>oom.exe</c> anywhere in a hook command, the key <c>oom</c> in an MCP file, the task name
+/// <c>OdenaOS Memory Sweep</c>. None of them is proof. A second vault, a second product, or a
+/// hand-made registration matching the same constant was removed by any vault's
+/// <c>--uninstall</c>.</para>
+/// <para>The evidence that does settle it is the executable a registration actually runs, compared
+/// against the one path this vault's install writes: <c>&lt;vault&gt;\.oom\oom.exe</c>. Anything
+/// that cannot be resolved to a fully qualified path is not evidence and the target is kept.</para>
+/// </remarks>
+internal static class InstallOwnership
+{
+    /// <summary>The single executable an install of <paramref name="vault"/> owns.</summary>
+    internal static string OwnedExecutable(string vault) => Path.Combine(vault, ".oom", "oom.exe");
+
+    /// <summary>
+    /// Whether two spellings name the same file. Both must be fully qualified: a relative
+    /// registration resolves against whatever directory the uninstall happens to run in, which is
+    /// a coincidence and not an identity, so it never counts as a match.
+    /// </summary>
+    internal static bool PathsEqual(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first) || string.IsNullOrWhiteSpace(second)) return false;
+        try
+        {
+            var left = first.Trim();
+            var right = second.Trim();
+            if (!Path.IsPathFullyQualified(left) || !Path.IsPathFullyQualified(right)) return false;
+            return string.Equals(Normalise(left), Normalise(right), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Whether a hook command line runs <paramref name="ownedExecutable"/>. Only the leading token
+    /// counts: an exe path that merely appears among the arguments is an argument, not the thing
+    /// the machine executes. A bare path carrying unquoted spaces cannot be split unambiguously,
+    /// so it reads as not ours and the hook is kept — the safe direction of an unreadable command.
+    /// </summary>
+    internal static bool CommandRuns(string? commandLine, string ownedExecutable)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) return false;
+        var text = commandLine.Trim();
+        string candidate;
+        if (text[0] == '"')
+        {
+            var close = text.IndexOf('"', 1);
+            if (close < 0) return false;
+            candidate = text[1..close];
+        }
+        else
+        {
+            var space = text.IndexOf(' ');
+            candidate = space < 0 ? text : text[..space];
+        }
+        return PathsEqual(candidate, ownedExecutable);
+    }
+
+    /// <summary>The <c>command</c> string of a hook entry or MCP server object; null when absent or not a string.</summary>
+    internal static string? CommandOf(JsonNode? node) =>
+        node?["command"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    /// <summary>
+    /// Whether <paramref name="child"/> really sits under <paramref name="parent"/> once links are
+    /// followed. The vault package's path is derived from the vault argument, so the only way it
+    /// can name a file outside that vault is a junction or symlink planted on the way down.
+    /// </summary>
+    internal static bool IsInside(string child, string parent)
+    {
+        try
+        {
+            var relative = Path.GetRelativePath(Resolve(parent), Resolve(child));
+            return relative == "." || (!Path.IsPathRooted(relative) && relative != ".." &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string Normalise(string path) =>
+        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static string Resolve(string path)
+    {
+        var full = Path.GetFullPath(path);
+        if (!Directory.Exists(full) && !File.Exists(full)) return full.TrimEnd(Path.DirectorySeparatorChar);
+        var info = Directory.Exists(full) ? (FileSystemInfo)new DirectoryInfo(full) : new FileInfo(full);
+        var target = info.ResolveLinkTarget(returnFinalTarget: true);
+        return Path.GetFullPath(target?.FullName ?? full).TrimEnd(Path.DirectorySeparatorChar);
+    }
+}
+
 public sealed class Install
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
@@ -65,14 +177,23 @@ public sealed class Install
     private readonly Func<string> localAppDataPath;
     private readonly Func<string> claudeUserConfigPath;
     private readonly Func<string[]> knownSyncRoots;
-    private readonly Func<bool> shortcutRemover;
+    private readonly Func<string, bool> shortcutRemover;
     private readonly Action eventLogRemover;
+    private readonly Func<string?> eventLogTarget;
     private readonly Func<string, string> stateRootPath;
     private readonly Action doctorAction;
     private const string TaskName = "OdenaOS Memory Sweep";
 
     /// <summary>Findings the last <see cref="Run"/> produced; the D3 fallback is reported here.</summary>
     public IReadOnlyList<HealthItem> Health { get; private set; } = [];
+
+    /// <summary>
+    /// What the last <see cref="Uninstall"/> proved about each target it examined, whether or not
+    /// it touched it. <see cref="InstallResult.Registrations"/> says what was done; this says on
+    /// what evidence, so a registration left standing for want of proof is visible rather than
+    /// merely absent.
+    /// </summary>
+    public IReadOnlyList<OwnershipVerdict> Ownership { get; private set; } = [];
 
     /// <summary>False when the AUMID/shortcut registration failed: notifications lose the toast (D3).</summary>
     public bool ToastRegistered { get; private set; }
@@ -86,7 +207,7 @@ public sealed class Install
         Func<string>? userSettingsPath = null, Func<string[]>? mcpCandidates = null, Func<string?>? processPath = null,
         Func<string>? localAppDataPath = null, Func<string>? claudeUserConfigPath = null, Func<string[]>? knownSyncRoots = null,
         Func<bool>? shortcutRemover = null, Action? eventLogRemover = null, Func<string, string>? stateRootPath = null,
-        Action? doctorAction = null)
+        Action? doctorAction = null, Func<string?>? eventLogTarget = null, Func<string, bool>? ownedShortcutRemover = null)
     {
         this.clock = clock ?? SystemClock.Instance;
         this.processRunner = processRunner ?? new WindowsProcessRunner();
@@ -107,8 +228,16 @@ public sealed class Install
             (() => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
         this.claudeUserConfigPath = claudeUserConfigPath ?? ClaudeIsolation.UserConfigDirectory;
         this.knownSyncRoots = knownSyncRoots ?? (() => [.. ClaudeIsolation.KnownSyncRoots()]);
-        this.shortcutRemover = shortcutRemover ?? ShortcutRegistration.TryRemove;
+        // The injected remover is a fixture's "what would you have deleted"; the production default
+        // is the only one that reaches a real Start-menu folder, so it is the one that has to check
+        // the link's target before deleting it. The seam's signature stays Func<bool> so that every
+        // existing fixture keeps meaning exactly what it meant.
+        // A fixture that wants to see WHICH executable the removal was asked to match supplies
+        // ownedShortcutRemover; the older Func<bool> seam stays exactly what it always was.
+        this.shortcutRemover = ownedShortcutRemover ??
+            (shortcutRemover is null ? ShortcutRegistration.TryRemoveOwned : _ => shortcutRemover());
         this.eventLogRemover = eventLogRemover ?? (() => { ShortcutRegistration.TryRemoveEventLogSource(); });
+        this.eventLogTarget = eventLogTarget ?? ShortcutRegistration.EventLogSourceTarget;
         this.stateRootPath = stateRootPath ?? StateRoot;
         this.doctorAction = doctorAction ?? RunDoctor;
     }
@@ -285,29 +414,39 @@ public sealed class Install
     /// move and not the record of every session ever summarised. <c>daily\</c> and
     /// <c>knowledge\</c> are not touched at all.
     /// </summary>
+    /// <remarks>
+    /// Şerit U: nothing here acts on a name. Every target is first resolved to the executable it
+    /// runs (or the vault it names) and compared against
+    /// <see cref="InstallOwnership.OwnedExecutable"/>; a target that cannot be attributed is left
+    /// exactly as it is and said so in <see cref="Ownership"/>. The corollary matters as much: a
+    /// step that was skipped, refused or failed is never reported as <c>kaldırıldı</c>.
+    /// </remarks>
     public InstallResult Uninstall(string vaultPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(vaultPath);
+        Ownership = [];
         if (!Path.IsPathFullyQualified(vaultPath))
-            return new InstallResult(true, [], ["hooks:kaldırıldı", "task:kaldırıldı", "aumid:kaldırıldı", "mcp:kaldırıldı"]);
+            // A fixture path names no machine. Nothing is examined, so nothing may be claimed.
+            return new InstallResult(true, [], ["kaldırma:atlandı:göreli-yol"]);
         var vault = Path.GetFullPath(vaultPath);
         var oom = Path.Combine(vault, ".oom");
+        var owned = InstallOwnership.OwnedExecutable(vault);
         var stateRoot = stateRootPath(vault);
         var removed = new List<string>();
         var registrations = new List<string>();
+        var verdicts = new List<OwnershipVerdict>();
         try
         {
             // These registrations are independent of the identity directory. Run them before
             // deriving that path so a safety rejection cannot leave live entry points behind.
-            RemoveHooks(vault);
-            registrations.Add("hooks:kaldırıldı");
-            if (scheduler is InstallRuntime.SchtasksScheduler schtasks) schtasks.Unregister(TaskName);
-            registrations.Add("task:kaldırıldı");
-            RemoveMcp(vault);
-            registrations.Add("mcp:kaldırıldı");
+            var hooks = RemoveHooks(vault, owned, verdicts);
+            registrations.Add(hooks > 0 ? "hooks:kaldırıldı" : "hooks:kaldırılmadı");
+            registrations.Add(RemoveScheduledTask(owned, verdicts));
+            var servers = RemoveMcp(vault, owned, verdicts);
+            registrations.Add(servers > 0 ? "mcp:kaldırıldı" : "mcp:kaldırılmadı");
 
             var claudeConfig = ClaudeIsolation.ConfigurationDirectory(vault, localAppDataPath(), knownSyncRoots());
-            UninstallCore(vault, oom, stateRoot, claudeConfig, removed, registrations);
+            UninstallCore(vault, oom, owned, stateRoot, claudeConfig, removed, registrations, verdicts);
             return new InstallResult(true, removed, registrations);
         }
         catch (Exception error)
@@ -315,22 +454,96 @@ public sealed class Install
             registrations.Add($"kaldırma-hata:{error.Message}");
             return new InstallResult(false, removed, registrations, $"Kaldırma tamamlanamadı: {error.Message}");
         }
+        finally { Ownership = verdicts; }
     }
 
-    private void UninstallCore(string vault, string oom, string stateRoot, string claudeConfig, List<string> removed, List<string> registrations)
+    /// <summary>
+    /// The scheduled task, verified before it is deleted. The task name is a machine constant with
+    /// no vault in it, so it names a registration and never proves who made it.
+    /// </summary>
+    private string RemoveScheduledTask(string ownedExecutable, ICollection<OwnershipVerdict> verdicts)
     {
-        if (shortcutRemover()) removed.Add(ShortcutRegistration.ShortcutPath());
-        eventLogRemover();
-        registrations.Add("aumid:kaldırıldı");
-        if (ClaudeIsolation.RemoveOwned(claudeConfig, vault, localAppDataPath(), knownSyncRoots())) removed.Add(claudeConfig);
+        if (scheduler is not InstallRuntime.SchtasksScheduler schtasks)
+        {
+            // No schtasks registrar in this run: nothing was asked of the machine, so nothing may
+            // be reported as removed either.
+            verdicts.Add(new OwnershipVerdict($"task:{TaskName}", false, "görev kaydedicisi yok, makineye sorulmadı"));
+            return "task:atlandı:kaydedici-yok";
+        }
+        var outcome = schtasks.UnregisterOwned(TaskName, ownedExecutable);
+        var (owned, detail, registration) = outcome switch
+        {
+            InstallRuntime.TaskRemoval.Absent => (false, "kayıtlı görev yok", "task:yok"),
+            InstallRuntime.TaskRemoval.Unreadable => (false, "görevin çalıştırdığı hedef okunamadı", "task:korundu:hedef-okunamadı"),
+            InstallRuntime.TaskRemoval.ForeignTarget => (false, "görev yabancı bir çalıştırılabiliri koşuyor", "task:korundu:yabancı-hedef"),
+            InstallRuntime.TaskRemoval.Removed => (true, $"görev {ownedExecutable} koşuyordu", "task:kaldırıldı"),
+            _ => (true, $"görev {ownedExecutable} koşuyordu, silme başarısız", "task:kaldırılamadı")
+        };
+        verdicts.Add(new OwnershipVerdict($"task:{TaskName}", owned, detail));
+        return registration;
+    }
+
+    private void UninstallCore(string vault, string oom, string ownedExecutable, string stateRoot, string claudeConfig,
+        List<string> removed, List<string> registrations, ICollection<OwnershipVerdict> verdicts)
+    {
+        // The shortcut path and the AUMID on it are one per machine: "a shortcut exists" was never
+        // evidence that this vault wrote it. Only the link's own target is.
+        if (shortcutRemover(ownedExecutable))
+        {
+            removed.Add(ShortcutRegistration.ShortcutPath());
+            registrations.Add("shortcut:kaldırıldı");
+            registrations.Add("aumid:kaldırıldı");
+            verdicts.Add(new OwnershipVerdict("shortcut", true, $"kısayol {ownedExecutable} hedefliyordu"));
+        }
+        else
+        {
+            registrations.Add("shortcut:korundu");
+            verdicts.Add(new OwnershipVerdict("shortcut", false, "kısayol yok ya da hedefi bu kasanın exe'si değil"));
+        }
+        registrations.Add(RemoveEventLogSource(ownedExecutable, verdicts));
+        if (ClaudeIsolation.RemoveOwned(claudeConfig, vault, localAppDataPath(), knownSyncRoots()))
+        {
+            removed.Add(claudeConfig);
+            registrations.Add("kimlik:kaldırıldı");
+            verdicts.Add(new OwnershipVerdict("claude-config", true, "sahiplik işareti bu kasayı ve bu dizini adlandırıyordu"));
+        }
+        else
+        {
+            registrations.Add("kimlik:korundu");
+            verdicts.Add(new OwnershipVerdict("claude-config", false, "dizin yok, bağlantı taşıyor ya da sahiplik işareti doğrulanmadı"));
+        }
         // Beside the state root, not inside it (the root itself is what gets moved), but named
         // for the vault: a shared backup\uninstall-<ts> made two vaults uninstalled in the same
         // second overwrite each other's evidence (D3 evidence run).
         var archive = Path.Combine(Path.GetDirectoryName(stateRoot) ?? stateRoot, "backup",
             $"{Path.GetFileName(stateRoot)}-uninstall-{clock.Now:yyyyMMdd-HHmmss}");
-        removed.AddRange(Archive(Path.Combine(oom, "quarantine"), Path.Combine(archive, "quarantine")));
-        removed.AddRange(Archive(stateRoot, Path.Combine(archive, "state")));
-        registrations.Add($"kanıt:{archive}");
+        var archived = false;
+        // The vault package's own targets. Their paths are derived from the vault argument, so the
+        // only ways they can name something else are a link planted on the way down and a
+        // descriptor that says the package serves a different vault. Both keep the package.
+        var packageVerdict = PackageOwnership(vault, oom);
+        verdicts.Add(packageVerdict);
+        if (packageVerdict.Owned)
+        {
+            var quarantine = Archive(Path.Combine(oom, "quarantine"), Path.Combine(archive, "quarantine")).ToList();
+            removed.AddRange(quarantine);
+            archived |= quarantine.Count > 0;
+        }
+        else registrations.Add($"paket:korundu:{packageVerdict.Detail}");
+        // One vault, one state root — but the root is named by a hash, and a hash is not a claim.
+        // The descriptor 8436f94 added is: without it a root is sixteen hex digits nobody can
+        // attribute, and archiving an unattributable root moves somebody else's evidence.
+        var stateVerdict = StateRootOwnership(stateRoot, vault);
+        verdicts.Add(stateVerdict);
+        if (stateVerdict.Owned)
+        {
+            var state = Archive(stateRoot, Path.Combine(archive, "state")).ToList();
+            removed.AddRange(state);
+            archived |= state.Count > 0;
+        }
+        else registrations.Add($"durum-kökü:korundu:{stateVerdict.Detail}");
+        registrations.Add(archived ? $"kanıt:{archive}" : "kanıt:yok");
+        if (!packageVerdict.Owned) return;
         // Files last. K7/Y-105: run from the installed copy, deleting our own running exe throws
         // UnauthorizedAccessException and used to abort the whole uninstall — never let that
         // exception escape here, and never call File.Delete on the file that is currently us.
@@ -353,6 +566,69 @@ public sealed class Install
         try { if (Directory.Exists(oom) && !Directory.EnumerateFileSystemEntries(oom).Any()) Directory.Delete(oom); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         if (leftover is not null) registrations.Add($"exe-elle-sil:{leftover}");
+    }
+
+    /// <summary>
+    /// The Event Log source, which is why the order's phrase "exclusive ownership" is not rhetoric.
+    /// The key is one per machine under the bare source name <c>oom</c>, and what the installer
+    /// writes into it is Windows' own <c>EventCreate.exe</c> — nothing in it names a vault. So the
+    /// honest answer is almost always to keep it: a leftover key is harmless, a deleted one
+    /// silences whichever install is still writing through it.
+    /// </summary>
+    private string RemoveEventLogSource(string ownedExecutable, ICollection<OwnershipVerdict> verdicts)
+    {
+        var target = eventLogTarget();
+        if (target is null)
+        {
+            verdicts.Add(new OwnershipVerdict("event-log:oom", false, "kaynak yok ya da okunamıyor"));
+            return "event-log:yok";
+        }
+        if (!InstallOwnership.PathsEqual(target, ownedExecutable))
+        {
+            verdicts.Add(new OwnershipVerdict("event-log:oom", false,
+                "paylaşılan kaynak hiçbir kasayı adlandırmıyor: münhasır sahiplik kanıtlanamaz"));
+            return "event-log:korundu:paylaşılan-kaynak";
+        }
+        eventLogRemover();
+        verdicts.Add(new OwnershipVerdict("event-log:oom", true, $"kaynak {ownedExecutable} adını taşıyordu"));
+        return "event-log:kaldırıldı";
+    }
+
+    private static OwnershipVerdict PackageOwnership(string vault, string oom)
+    {
+        if (!Directory.Exists(oom))
+            return new OwnershipVerdict("paket", false, "paket-yok");
+        if (!InstallOwnership.IsInside(oom, vault))
+            return new OwnershipVerdict("paket", false, "paket-kasa-dışına-çıkıyor");
+        var descriptor = Path.Combine(oom, "vault.json");
+        if (!File.Exists(descriptor))
+            return new OwnershipVerdict("paket", true, "paket kasanın içinde, künye yok");
+        string? recorded;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(descriptor, Utf8).TrimStart('﻿'));
+            recorded = document.RootElement.TryGetProperty("vault", out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return new OwnershipVerdict("paket", false, "künye-bozuk");
+        }
+        if (recorded is null) return new OwnershipVerdict("paket", true, "paket kasanın içinde, künye kasa adı taşımıyor");
+        return InstallOwnership.PathsEqual(recorded, vault)
+            ? new OwnershipVerdict("paket", true, "künye bu kasayı adlandırıyor")
+            : new OwnershipVerdict("paket", false, "künye-başka-kasa");
+    }
+
+    private static OwnershipVerdict StateRootOwnership(string stateRoot, string vault)
+    {
+        if (!Directory.Exists(stateRoot)) return new OwnershipVerdict("durum-kökü", false, "kök-yok");
+        var recorded = VaultIdentity.ReadDescriptor(stateRoot);
+        if (recorded is null) return new OwnershipVerdict("durum-kökü", false, "künye-yok");
+        return InstallOwnership.PathsEqual(recorded, vault)
+            ? new OwnershipVerdict("durum-kökü", true, "künye bu kasayı adlandırıyor")
+            : new OwnershipVerdict("durum-kökü", false, "künye-başka-kasa");
     }
 
     /// <summary>Moves a directory under the uninstall archive; falls back to a copy across volumes.</summary>
@@ -572,35 +848,117 @@ public sealed class Install
     /// default moved into the project still has to be removable, and a project package left
     /// behind by a user-scope uninstall would keep firing hooks at a deleted exe.
     /// </summary>
-    private void RemoveMcp(string vault)
+    /// <remarks>
+    /// Şerit U: the key <c>oom</c> is the name a server was registered under, not a claim about
+    /// whose binary it starts. One config file per machine keyed on one name means any vault's
+    /// uninstall used to delete whatever sat under that key — another vault's server, or another
+    /// product that had taken the name. The <c>command</c> is the only evidence that settles it.
+    /// </remarks>
+    private int RemoveMcp(string vault, string ownedExecutable, ICollection<OwnershipVerdict> verdicts)
     {
+        var removed = 0;
         foreach (var path in mcpCandidates().Prepend(ProjectMcpPath(vault)).Where(File.Exists))
         {
-            var root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject;
-            if (root?["mcpServers"] is not JsonObject servers || !servers.Remove("oom")) continue;
+            JsonObject? root;
+            try { root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject; }
+            catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
+            {
+                verdicts.Add(new OwnershipVerdict($"mcp:{path}", false, "yapılandırma okunamadı"));
+                continue;
+            }
+            if (root?["mcpServers"] is not JsonObject servers || servers["oom"] is not { } entry)
+            {
+                verdicts.Add(new OwnershipVerdict($"mcp:{path}", false, "oom anahtarı yok"));
+                continue;
+            }
+            var command = InstallOwnership.CommandOf(entry);
+            if (!InstallOwnership.PathsEqual(command, ownedExecutable))
+            {
+                verdicts.Add(new OwnershipVerdict($"mcp:{path}", false,
+                    $"oom anahtarı yabancı bir çalıştırılabiliri gösteriyor: {command ?? "komut yok"}"));
+                continue;
+            }
+            servers.Remove("oom");
             File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
+            verdicts.Add(new OwnershipVerdict($"mcp:{path}", true, $"oom anahtarı {ownedExecutable} koşuyordu"));
+            removed++;
         }
+        return removed;
     }
-    private void RemoveHooks(string vault)
+    private int RemoveHooks(string vault, string ownedExecutable, ICollection<OwnershipVerdict> verdicts)
     {
+        var removed = 0;
         foreach (var path in new[] { ProjectSettingsPath(vault), userSettingsPath() }.Where(File.Exists))
-            RemoveHooksFrom(path);
+            removed += RemoveHooksFrom(path, ownedExecutable, verdicts);
+        return removed;
     }
-    private static void RemoveHooksFrom(string path)
+    /// <summary>Removes this vault's hook entries and nothing else.</summary>
+    /// <remarks>
+    /// <para>Şerit U, two defects at once. The substring <c>oom.exe</c> anywhere in an entry's JSON
+    /// used to be the test, which took a neighbouring vault's hooks and any foreign command that
+    /// merely mentioned the name — including one that only passed such a path as an argument.</para>
+    /// <para>And the loop deleted whole <em>groups</em>. A settings.json group is a
+    /// <c>{ "hooks": [ … ] }</c> container that may hold several commands, so one oom entry beside
+    /// another tool's entry in the same group took the other tool's hook down with it. Entries are
+    /// now examined one at a time and a group survives as long as anything of somebody else's is
+    /// left in it.</para>
+    /// </remarks>
+    private static int RemoveHooksFrom(string path, string ownedExecutable, ICollection<OwnershipVerdict> verdicts)
     {
-        var root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject;
-        if (root?["hooks"] is not JsonObject hooks) return;
+        JsonObject? root;
+        try { root = JsonNode.Parse(File.ReadAllText(path, Utf8)) as JsonObject; }
+        catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
+        {
+            // An unreadable hook file is not an empty one: rewriting it would be the deletion.
+            verdicts.Add(new OwnershipVerdict($"hooks:{path}", false, "ayar dosyası okunamadı"));
+            return 0;
+        }
+        if (root?["hooks"] is not JsonObject hooks)
+        {
+            verdicts.Add(new OwnershipVerdict($"hooks:{path}", false, "hooks bölümü yok"));
+            return 0;
+        }
         // Only rewrite when an entry of ours was actually found. The user-level file belongs to
         // every project on the machine; rewriting it to change nothing is still a shared write.
-        var removed = false;
+        var removed = 0;
+        var kept = 0;
         foreach (var name in new[] { "SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact" })
         {
-            if (hooks[name] is not JsonArray entries) continue;
-            for (var index = entries.Count - 1; index >= 0; index--)
-                if (entries[index]?.ToJsonString().Contains("oom.exe", StringComparison.OrdinalIgnoreCase) == true) { entries.RemoveAt(index); removed = true; }
-            if (entries.Count == 0) { hooks.Remove(name); removed = true; }
+            if (hooks[name] is not JsonArray groups) continue;
+            var takenHere = 0;
+            for (var index = groups.Count - 1; index >= 0; index--)
+            {
+                var group = groups[index];
+                if (group?["hooks"] is JsonArray entries)
+                {
+                    var before = entries.Count;
+                    for (var inner = entries.Count - 1; inner >= 0; inner--)
+                        if (InstallOwnership.CommandRuns(InstallOwnership.CommandOf(entries[inner]), ownedExecutable))
+                            entries.RemoveAt(inner);
+                    var taken = before - entries.Count;
+                    removed += taken;
+                    takenHere += taken;
+                    kept += entries.Count;
+                    // A mixed group survives on whatever is left of somebody else's; only a group
+                    // this pass emptied is removed, and one that arrived empty is not ours to take.
+                    if (entries.Count == 0 && taken > 0) groups.RemoveAt(index);
+                    continue;
+                }
+                // A bare entry, written without the group wrapper: judged the same way.
+                if (InstallOwnership.CommandRuns(InstallOwnership.CommandOf(group), ownedExecutable))
+                {
+                    groups.RemoveAt(index);
+                    removed++;
+                    takenHere++;
+                }
+                else kept++;
+            }
+            if (groups.Count == 0 && takenHere > 0) hooks.Remove(name);
         }
-        if (removed) File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
+        if (removed > 0) File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), Utf8);
+        verdicts.Add(new OwnershipVerdict($"hooks:{path}", removed > 0,
+            $"{removed} kayıt {ownedExecutable} koşuyordu, {kept} yabancı kayıt korundu"));
+        return removed;
     }
     private static void SecurePath(string path)
     {

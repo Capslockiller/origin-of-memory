@@ -63,6 +63,72 @@ public static class ShortcutRegistration
     }
 
     /// <summary>
+    /// The executable the Start-menu shortcut launches, or <c>null</c> when there is no shortcut or
+    /// its target cannot be read. Both the path and the AUMID on it are machine constants, so the
+    /// only thing that can tell this vault's registration apart from another product's is what the
+    /// link actually points at.
+    /// </summary>
+    public static string? Target()
+    {
+        try
+        {
+            var path = ShortcutPath();
+            if (!File.Exists(path)) return null;
+            var link = (IShellLinkW)(object)new ShellLink();
+            try
+            {
+                ((IPersistFile)link).Load(path, 0);
+                const int capacity = 1024;
+                var buffer = Marshal.AllocHGlobal(capacity * sizeof(char));
+                try
+                {
+                    link.GetPath(buffer, capacity, IntPtr.Zero, 0);
+                    var target = Marshal.PtrToStringUni(buffer);
+                    return string.IsNullOrWhiteSpace(target) ? null : target;
+                }
+                finally { Marshal.FreeHGlobal(buffer); }
+            }
+            finally { Marshal.FinalReleaseComObject(link); }
+        }
+        catch (Exception error) when (error is COMException or IOException or UnauthorizedAccessException
+            or InvalidCastException or NotSupportedException or PlatformNotSupportedException or OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the shortcut only when it launches <paramref name="ownedExecutable"/>. The shortcut
+    /// path and the AUMID are one per machine and carry no vault, so "a shortcut exists" was never
+    /// evidence that this uninstall put it there — an unreadable or foreign target is kept.
+    /// </summary>
+    public static bool TryRemoveOwned(string ownedExecutable)
+    {
+        if (string.IsNullOrWhiteSpace(ownedExecutable)) return false;
+        return Target() is { } target && InstallOwnership.PathsEqual(target, ownedExecutable) && TryRemove();
+    }
+
+    /// <summary>
+    /// The binary the <c>oom</c> Event Log source names, or <c>null</c> when the source is absent
+    /// or unreadable. See <see cref="TryRemoveEventLogSource"/> for why this is read at all.
+    /// </summary>
+    public static string? EventLogSourceTarget()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(EventLogKey);
+            return key?.GetValue("EventMessageFile") as string is { Length: > 0 } value
+                ? Environment.ExpandEnvironmentVariables(value)
+                : null;
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The Event Log source lives under HKLM and its creation needs elevation. Reading the key
     /// does not, so an installer that is already elevated (or a machine where a previous elevated
     /// run created it) registers it; every other run skips it and <c>logs\</c> suffices — spec
@@ -88,7 +154,17 @@ public static class ShortcutRegistration
         }
     }
 
-    /// <summary>Removes the Event Log source when this process may; a leftover key is harmless.</summary>
+    /// <summary>
+    /// Removes the Event Log source when this process may; a leftover key is harmless.
+    /// </summary>
+    /// <remarks>
+    /// Callers must establish ownership first — see <see cref="EventLogSourceTarget"/>. The key is
+    /// one per machine, keyed on the bare source name <c>oom</c>, and what
+    /// <see cref="TryRegisterEventLogSource"/> writes into it is Windows' own
+    /// <c>EventCreate.exe</c>, not this vault's executable. Nothing in the key therefore attributes
+    /// it to any one install, and deleting an unattributable shared registration would silence
+    /// whichever install is still using it. A leftover key really is harmless; a deleted one is not.
+    /// </remarks>
     public static bool TryRemoveEventLogSource()
     {
         if (!OperatingSystem.IsWindows()) return false;
