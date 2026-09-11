@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 139, Geçti: 139, Başarısız: 0. Kapı testleriyle birlikte toplam 180 test, 180 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 143, Geçti: 143, Başarısız: 0. Kapı testleriyle birlikte toplam 184 test, 184 geçti. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -146,6 +146,10 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-161 | durum-deposu | Salt-okunur komutlar durum kökü yaratıyordu: `VaultPaths.StateDatabase()` sadece yolu sorana bile `Directory.CreateDirectory` çağırıyor, `OpenState()` ise koşulsuz yazma modunda açıyordu — her `--vault <geçici>` koşumu bir kök bırakıyordu. Kurulu exe ile kanıtlandı: `context`/`retrieve`/`mcp`/`doctor` artık kök yaratmıyor, `compile --dry-run` yaratıyor | DurumDeposuScars.Y161_* | yeşil |
 | Y-162 | durum-deposu | Başıboş kök taraması yazılmış ama `oom doctor`'ın bastığı tabloya hiç bağlanmamıştı; üretim `Program.Snapshot` kullanıyor, `Doctor.DefaultSnapshot` değil. Bağlandı — ve tarama `Doctor`'ın kendi varsayılanında kapalı kaldığı için test paketi sahibin gerçek veritabanlarını açmıyor | DurumDeposuScars.Y162_* | yeşil |
 | Y-163 | durum-deposu | Tarama `%LOCALAPPDATA%\oom` altındaki her dizini durum kökü sayıyordu; `backup`, `claude-config` ve `workspace` de başıboş kök diye listelenirdi. Yalnız kök biçimli adlar taranıyor | DurumDeposuScars.Y163_* | yeşil |
+| Y-180 | kurulum | Kurulum varsayılan olarak makine geneline yazıyordu: ortak `~/.claude/settings.json`, Claude Desktop MCP anahtarı, sabit adlı zamanlanmış görev, sabit adlı başlat menüsü kısayolu, AUMID ve HKLM Event Log kaynağı — altısı da kasa adı içermeyen sabitlerle. Varsayılan artık proje kapsamı: kancalar `<kasa>\.claude\settings.json`, MCP `<kasa>\.mcp.json`; makine geneli kayıtlar hiç denenmiyor ve atlandıkları rapor ediliyor | AyrismaTests.Y180_* | yeşil |
+| Y-181 | kurulum | `SetHook` kendi girdisini eklemeden önce `oom.exe` adı geçen **her** girdiyi siliyordu: ikinci bir kasa kurmak **birinci kasanın dört kancasını siliyor**, görevi, kısayolu ve MCP girdisini ikinciye çeviriyordu. İki kasa artık yan yana duruyor — kurulu exe ile kanıtlandı, ortak dosyaların sha256'sı iki kurulumdan sonra değişmedi | AyrismaTests.Y181_* | yeşil |
+| Y-182 | kurulum | Makine geneli kayıt artık en az dirençli yol değil: yalnız `--user-scope` bayrağı seçiyor, kısa biçimi ve ortam değişkeni yok, `install` her koşumda kapsamını basıyor. Bayrağın dispatcher'a gerçekten ulaştığı ayrıca doğrulanıyor | AyrismaTests.Y182_* | yeşil |
+| Y-183 | kurulum | Kaldırma iki kapsamı da geri alıyor ve yalnız kendi girdilerini söküyor: aynı proje dosyasındaki yabancı bir kanca yerinde kalıyor, komşu kasa bayt bayt aynı kalıyor, ve bizim hiçbir şeyimiz bulunmayan ortak dosya artık yeniden yazılmıyor | AyrismaTests.Y183_* | yeşil |
 
 ## Sınıf başına durum
 
@@ -158,7 +162,7 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
 | durum-deposu | 20 | 0 |
-| kurulum | 22 | 0 |
+| kurulum | 26 | 0 |
 | test-disiplini | 11 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **139** | **0** |
+| **Toplam** | **143** | **0** |
