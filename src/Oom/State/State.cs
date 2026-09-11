@@ -74,6 +74,19 @@ public sealed partial class State : IDisposable, IIngestStateStore
         return path is not null && File.Exists(path) ? new State(null, null, path, StateAccess.ReadOnly) : null;
     }
 
+    /// <summary>
+    /// The version–shape verdict on a state database, without opening it for writing and without
+    /// throwing. This is what <c>doctor</c> asks when the writing open is the thing that failed:
+    /// it creates no state root, no database and no schema, and it answers for a file that
+    /// <see cref="State(IClock?, IFileOperations?, string?, StateAccess)"/> refuses.
+    /// </summary>
+    /// <param name="databasePath">
+    /// The file to judge; <c>null</c> asks about this vault's existing database and creates nothing
+    /// when there is none.
+    /// </param>
+    public static StateSchemaDiagnosis Diagnose(string? databasePath = null) =>
+        StateDiagnostics.Diagnose(databasePath ?? VaultIdentity.ExistingDatabase());
+
     /// <summary>Where atomic writes land when the caller passes a relative name.</summary>
     public string WorkDirectory => _workDirectory;
 
@@ -519,7 +532,15 @@ public enum StateAccess
 }
 
 /// <summary>What one open did to the schema. <c>Applied</c> is empty when nothing had to change.</summary>
-public sealed record StateSchemaReport(int FoundVersion, int Version, IReadOnlyList<string> Applied, string? BackupPath);
+public sealed record StateSchemaReport(int FoundVersion, int Version, IReadOnlyList<string> Applied, string? BackupPath)
+{
+    /// <summary>
+    /// Structures the file's own version promises and the file does not have. Always empty on a
+    /// writing open, which refuses such a file outright; a read-only open reports them instead of
+    /// throwing, because a reader that only wants to look at a damaged database must be able to.
+    /// </summary>
+    public IReadOnlyList<StateSchemaFinding> Missing { get; init; } = [];
+}
 
 /// <summary>The file on disk carries a schema this executable cannot read, or cannot migrate without losing rows.</summary>
 public sealed class StateSchemaException(string message, Exception? inner = null) : Exception(message, inner);
@@ -596,7 +617,10 @@ internal static class StateStore
             reader.Open();
             var found = ReadVersion(reader);
             Guard(found, path);
-            return (reader, new StateSchemaReport(found, found, [], null));
+            // A reader is told what is missing and is not stopped by it. Refusing here would take
+            // away the one handle that can still look at a damaged file, which is the opposite of
+            // what a diagnosis needs.
+            return (reader, new StateSchemaReport(found, found, [], null) { Missing = StateShape.Audit(reader, found) });
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -631,9 +655,49 @@ internal static class StateStore
 
         // The version is read and judged before the first persistent change, journal_mode
         // included: WAL is written into the file header, so the old order rewrote a database from
-        // a newer build and only then admitted that this executable cannot read it.
-        var found = ReadVersion(connection);
-        Guard(found, path);
+        // a newer build and only then admitted that this executable cannot read it. The shape is
+        // judged in the same breath and for the same reason — a file whose claim and contents
+        // disagree is refused here, where refusing still costs the owner nothing.
+        int found;
+        IReadOnlyList<StateSchemaFinding> missing;
+        IReadOnlyList<StateSchemaFinding> unreachable;
+        try
+        {
+            found = ReadVersion(connection);
+            Guard(found, path);
+            missing = StateShape.Audit(connection, found);
+            unreachable = missing.Count == 0 ? StateShape.AuditUpgradePath(connection, found) : [];
+        }
+        catch (SqliteException e)
+        {
+            // Not a schema question at all: SQLite cannot read the file. Said plainly and
+            // separately, because "damaged" and "incomplete" call for different answers and the
+            // owner is the one who has to choose between them.
+            throw new StateSchemaException(
+                $"durum veritabanı okunamıyor: {path ?? ":memory:"} — {e.Message}. " +
+                "Dosyaya yazılmadı. Teşhis: oom doctor", e);
+        }
+
+        if (missing.Count > 0)
+        {
+            throw new StateSchemaException(
+                $"durum veritabanı sürüm {found} olduğunu söylüyor, ama o sürümün taşıması gereken " +
+                $"{missing.Count} yapı dosyada yok ve göç merdiveni bunları kurmaz: {StateShape.Describe(missing)}. " +
+                $"Dosya: {path ?? ":memory:"}. İş verisine dokunulmadı, şema sürümü değiştirilmedi ve eksik yapıyı " +
+                "yalnız raporlamak için hiçbir DDL çalıştırılmadı — boş tablo yaratmak kaybolmuş kaydı geri " +
+                "getirmez. Teşhis: oom doctor");
+        }
+
+        if (unreachable.Count > 0)
+        {
+            // The file is a valid member of the version it claims, and the ladder still cannot
+            // finish it. Said before anything is copied or written, because a refusal that costs
+            // the owner nothing is worth more than a rollback that already took a backup.
+            throw new StateSchemaException(
+                $"durum veritabanı sürüm {found} geçerli, ama göç merdiveni onu sürüm {SchemaVersion} biçimine " +
+                $"tamamlayamıyor: {StateShape.Describe(unreachable)}. Dosya: {path ?? ":memory:"}. " +
+                "Göç başlatılmadı; iş verisine dokunulmadı ve şema sürümü değiştirilmedi. Teşhis: oom doctor");
+        }
 
         if (found == SchemaVersion)
         {
@@ -662,13 +726,34 @@ internal static class StateStore
         Execute(connection, "BEGIN IMMEDIATE;");
         try
         {
-            foreach (var (version, name, apply) in Ladder.Where(step => step.Version > found))
+            // Gated on what the file's version really had, not on the step's own number. Those two
+            // are not the same: steps 2, 3 and 4 hand out the six call-accounting columns that all
+            // arrived together at stamp 4, so a file stamped 3 — tag v2.1.0, a shipped release —
+            // skipped every one of them and reached "version 5" with a calls table missing exactly
+            // the columns RecordCall inserts by name. A step whose whole contribution the file
+            // already has still does not run.
+            foreach (var (version, name, apply) in Ladder.Where(step => StateShape.StepApplies(step.Version, found)))
             {
                 apply(connection);
-                applied.Add($"{found}→{version}: {name}");
+                applied.Add(version > found
+                    ? $"{found}→{version}: {name}"
+                    : $"{found}→{SchemaVersion}: {version}. basamağın eksik kalan kısmı tamamlandı: {name}");
             }
 
             Views(connection);
+
+            // The closing guarantee. The steps ran and reported success; that is a claim, and this
+            // is the measurement. A migration that finished and still did not produce a whole file
+            // must not stamp one — the rollback puts the file back at the version it arrived with.
+            var residue = StateShape.AuditMigrated(connection);
+            if (residue.Count > 0)
+            {
+                throw new StateSchemaException(
+                    $"göç durduruldu: basamaklar koştu ama sürüm {SchemaVersion} için gereken {residue.Count} yapı " +
+                    $"hâlâ yok: {StateShape.Describe(residue)}. Değişiklikler geri alındı, dosya sürüm {found} " +
+                    "biçiminde bırakıldı. Teşhis: oom doctor");
+            }
+
             Execute(connection, $"PRAGMA user_version={SchemaVersion};");
             Execute(connection, "COMMIT;");
         }
@@ -699,12 +784,7 @@ internal static class StateStore
     /// not SQLite's own bookkeeping. A brand new file has none and needs no copy; everything else
     /// gets one, whether or not it happens to carry a <c>calls</c> row.
     /// </summary>
-    private static bool HasContent(SqliteConnection connection)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1";
-        return command.ExecuteScalar() is not null;
-    }
+    private static bool HasContent(SqliteConnection connection) => StateShape.HasOwnerContent(connection);
 
     /// <summary>
     /// A database written by a newer build is not opened. The old code ran its CREATEs and then
