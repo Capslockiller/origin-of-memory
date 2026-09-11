@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 200, Geçti: 200, Başarısız: 0. Kapı testleriyle birlikte toplam 244 test, 238 geçti, 6 karar bekliyor. Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 215, Geçti: 215, Başarısız: 0. Kapı testleriyle birlikte toplam 259 test, 259 geçti (paralellik kapalı; açıkken aralıklı Y-170 kırmızısı — KAR-1 açık). Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -200,6 +200,21 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-254 | test-disiplini | Ölçüm öncesi ve sonrası kimlikler karşılaştırılıyor; değişen girdi geçerli sonuç üretmiyor — ve bu kontrol bütünlük reddinden **önce** koşuyor | RecallCandidateBindingTests.Y254_* | yeşil |
 | Y-255 | test-disiplini | Tam tarama ve indeksli yol ayrı ölçülüyor. `CandidateSource` `internal` ve `src/` içinde onu okuyan yok; "indeksli koşum" süreç çıktısından okunamaz, **gösterilmesi** gerekir | RecallCandidateBindingTests.Y255_* | yeşil |
 | Y-256 | test-disiplini | Tanık sondası gerçek üründe kanıtlanıyor: `notes_fts` satırı silinen not indeksli yolda erişilemez olmalı; gelirse daraltma olmamıştır ve indeksli hüküm reddedilir | RecallCandidateBindingTests.Y256_* | yeşil |
+| Y-270 | durum-deposu | Bir kökün boş olduğu doğrulanamadığında sahibine kararlaştırılan metin birebir söyleniyor: dosyaları koru, temizleme kararı vermeden önce kökün bağlı olduğu kasayı ve içeriğini incele | DoctorHonestDiagnosisTests.Y270_* | yeşil |
+| Y-271 | durum-deposu | Bir kökteki satır toplamı, kullanıcıya "şu kadar hafızan var" gibi okunacak biçimde sunulmuyor | DoctorHonestDiagnosisTests.Y271_* | yeşil |
+| Y-272 | durum-deposu | `sahipsiz`, `belirsiz`, `okunamıyor` ve şema uyuşmazlığı tek bir "sorunlu" kutusuna toplanmıyor; her biri kendi gerekçesini taşıyor | DoctorHonestDiagnosisTests.Y272_* | yeşil |
+| Y-273 | durum-deposu | Aynı kök hem `stray-state-root` ("kayıt yok") hem "bu kök boş ya da artık değildir" diyen bir şema kalemi alabiliyordu — aynı raporda iki zıt cümle. Şema uyuşmazlığı artık kendi gerekçesiyle ve eksik yapının adıyla raporlanıyor | DoctorHonestDiagnosisTests.Y273_* | yeşil |
+| Y-274 | durum-deposu | Çalıştığı kanıtlanmamış `doctor --fix`, kök sorunlarına genel çözüm diye önerilmiyor | DoctorHonestDiagnosisTests.Y274_* | yeşil |
+| Y-275 | durum-deposu | `Y-214` "salt-okunur taramanın bıraktığı `-wal`/`-shm` belgelenmiş tek istisnadır" diyordu. Ölçüldü: istisna değil **kural** — `journal_mode=WAL` dosya başlığında kalıcı, yani ürünün yazdığı her kök o durumda. Taban ikilisi dört izole kökte yedi dosya bırakıyordu; şimdi sıfır dosya yaratılıyor, sıfır bayt değişiyor | DoctorHonestDiagnosisTests.Y275_* | yeşil |
+| Y-276 | durum-deposu | Güvenle okunamayan kök hüküm almıyor, gerekçesiyle `ölçülemedi` olarak raporlanıyor | DoctorHonestDiagnosisTests.Y276_* | yeşil |
+| Y-277 | durum-deposu | `immutable=1` dosya yaratmıyor ama WAL'ı hiç okumuyor: kayıtları checkpoint'lenmemiş `-wal`'da duran kökü 7 satır yerine 0 görüp `artık` — silme adayı — diye sınıflardı. Kısayol kullanılmıyor, WAL'daki kayıtlar görülüyor | DoctorHonestDiagnosisTests.Y277_* | yeşil |
+| Y-278 | durum-deposu | Özet satırı her sınıfı ayrı sayıyor, `ölçülemedi` dahil | DoctorHonestDiagnosisTests.Y278_* | yeşil |
+| Y-279 | durum-deposu | Bozuk kök `okunamıyor` kalıyor, gerekçesini taşıyor ve baytına dokunulmuyor — teşhis sırasında yanına dosya bırakmak REC-1'in kanıtını kirletirdi | DoctorHonestDiagnosisTests.Y279_* | yeşil |
+| Y-280 | durum-deposu | Anlık kopya `state.db` ile `state.db-wal`'ı ayrı ayrı alıyor ve yalnız kaynağın önce/sonra parmak izine bakıyordu: kopyalama **sırasındaki** yazma/checkpoint yarışı sınanmıyordu. Sürekli yazılan 3,3 MB'lık kökte 60 tarama ölçüldü — 29 `ölçülemedi`, 31 tutarlı, **0 yanlış `artık`**, kökte 0 yeni dosya | DoctorHonestDiagnosisTests.Y280_* | yeşil |
+| Y-281 | durum-deposu | Yerinde okunan kök, okuma boyunca hiçbir yazıcıyı kabul etmiyor: tutamaklar başlık okunmadan **önce** alınıyor. Ölçülen geri çevirme oranı 0,826; tutamak başlıktan sonra bırakılırsa 0,018'e düşüyor | DoctorHonestDiagnosisTests.Y281_* | yeşil |
+| Y-282 | durum-deposu | WAL'sız yolda başlık kontrolünden **sonra** özgün dosya açılıyordu; arada kip değişirse karışık içerik okunabilirdi. Yazıcı bağlıyken o kök yerinde okunmuyor, kopyaya düşüyor | DoctorHonestDiagnosisTests.Y282_* | yeşil |
+| Y-283 | durum-deposu | Açık bir işlemin geri alma günlüğü varken kök `ölçülemedi` sayılıyor — hareket eden dosyaya kefil olunmuyor | DoctorHonestDiagnosisTests.Y283_* | yeşil |
+| Y-284 | durum-deposu | Sahibi gitmiş bir kökün `-wal`'ı kopyaya dahil ediliyor; yoksa o kökün kayıtları görünmez olurdu | DoctorHonestDiagnosisTests.Y284_* | yeşil |
 | Y-170 | durum-deposu | Üçüncü DDL yeri: `Retrieve.Build()` kendi bağlantısını açıp `oom_index_meta`, `notes` ve `notes_fts`'i aynı `state.db` içinde yaratıyordu — şemanın tek sahibi olmasına rağmen. İndeks şeması artık `StateStore`'un merdiveninde; `Build()` sıfır DDL koşuyor | IndeksScars.Y170_* | yeşil |
 | Y-171 | durum-deposu | `Retrieve.Build()` kendi `Directory.CreateDirectory` çağrısını yapıyordu: test paketi her koşumda bir durum kökü sızdırıyordu (ölçüldü, sızan kökte yalnız indeks tabloları ve `user_version=0` vardı). Artık var olan dizin yazmanın koşulu; sızıntı bitti | IndeksScars.Y171_* | yeşil |
 | Y-172 | durum-deposu | Yeniden kurulum `DROP TABLE notes` ile şema sahibinin altından tabloyu alıyordu. Yerine aynı işlem içinde `DELETE` geldi: indeks indeks olarak yenileniyor, `ix_notes_updated` ve sürüm damgası yerinde kalıyor | IndeksScars.Y172_* | yeşil |
@@ -218,8 +233,8 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | getirme | 16 | 0 |
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
-| durum-deposu | 56 | 0 |
+| durum-deposu | 71 | 0 |
 | kurulum | 33 | 0 |
 | test-disiplini | 24 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **200** | **0** |
+| **Toplam** | **215** | **0** |
