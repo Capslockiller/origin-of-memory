@@ -1,0 +1,112 @@
+{
+  "binary_sha256": "de8fb8af0cc8cd12cca400591773a18f04d68bb0a6e267deada9603f7bc3a43e",
+  "command": "python bench/verify_recall.py selftest --exe publish/win-x64/oom.exe --measured-by claude",
+  "decision": {
+    "recall_gate": null,
+    "selftest": true,
+    "why_recall_gate_is_null": "measured against a fixture corpus, not the gold set; a fixture number is not a product verdict"
+  },
+  "does_not_measure": "the product's recall on the owner's gold set; that run happens against the final unified candidate's published exe",
+  "fixture": {
+    "corpus_files": 160,
+    "corpus_sha256": "10b030783ecf6d555729b298830db81667ac342c52c015d3dc83e7b2f7a7b4a2",
+    "gold_rows": 130,
+    "gold_sha256": "ec7b12c1e507c5febe3e1e974b25d390adf2659f7a3366799dd1aa44548909e4",
+    "seed": 20260911
+  },
+  "gate": "recall-evidence-selftest",
+  "measured": "2026-09-11",
+  "measured_by": "claude",
+  "measures": "that verify_recall.py issues a verdict when identity holds and output is intact, and refuses one when either fails",
+  "pass": {
+    "every_scenario_behaved_as_specified": true
+  },
+  "raw_artifact": "bench/results/astra-dalga-1/raw/honest.stdout.txt",
+  "run_status": "ok",
+  "run_status_reasons": [],
+  "scenarios": [
+    {
+      "decision": {
+        "computed_from": "the scored questions only; controls are reported separately and cannot substitute for this verdict",
+        "controls_gate": null,
+        "recall_gate": true
+      },
+      "evidence": "selftest-1-honest.json",
+      "exit_code": 0,
+      "expectation": "identity verified, output intact -> a verdict is issued",
+      "overall": {
+        "mrr@5": 0.8611,
+        "n": 125,
+        "recall@3": 0.856,
+        "recall@5": 0.92
+      },
+      "pass": {
+        "recall@3": true,
+        "recall@5": true,
+        "scored_minimum": true
+      },
+      "reasons": [],
+      "refused_before_measuring": false,
+      "run_status": "ok",
+      "scenario": "selftest-1-honest"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-2-wrong-exe-hash.json",
+      "exit_code": 2,
+      "expectation": "expected executable hash does not match -> refuse BEFORE measuring, no verdict",
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "executable identity mismatch: measured 'de8fb8af0cc8cd12cca400591773a18f04d68bb0a6e267deada9603f7bc3a43e', expected '0000000000000000000000000000000000000000000000000000000000000000'"
+      ],
+      "refused_before_measuring": true,
+      "run_status": "invalid",
+      "scenario": "selftest-2-wrong-exe-hash"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-3-corrupt-output.json",
+      "exit_code": 3,
+      "expectation": "backend returns notes that are not in the corpus -> invalid, no verdict",
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "q001: returned 'hayali-0-0.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-1.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-2.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-3.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-4.md', which is not in the measured corpus",
+        "q002: returned 'hayali-1-0.md', which is not in the measured corpus"
+      ],
+      "refused_before_measuring": false,
+      "run_status": "invalid",
+      "scenario": "selftest-3-corrupt-output"
+    },
+    {
+      "decision": null,
+      "evidence": "selftest-4-misaligned-output.json",
+      "exit_code": 3,
+      "expectation": "backend echoes the wrong query -> invalid, no verdict",
+      "overall": null,
+      "pass": null,
+      "reasons": [
+        "q001: echoed query does not match the query sent",
+        "q001: returned 'hayali-0-0.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-1.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-2.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-3.md', which is not in the measured corpus",
+        "q001: returned 'hayali-0-4.md', which is not in the measured corpus"
+      ],
+      "refused_before_measuring": false,
+      "run_status": "invalid",
+      "scenario": "selftest-4-misaligned-output"
+    }
+  ],
+  "source_commit": "021cc83f6acd4e481d42b6d5327981590e05457c",
+  "substitute": {
+    "active": true,
+    "for": ".brief/gold-sorular.jsonl and the owner's concept vault",
+    "reason": "This is the lane's own synthetic fixture corpus and gold set, not the owner's. It proves the gate's wiring and its refusal paths; it is NOT a measurement of the product's recall and no number here describes it."
+  }
+}
