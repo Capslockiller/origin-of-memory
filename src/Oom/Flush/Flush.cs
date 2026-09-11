@@ -77,7 +77,19 @@ public sealed class Flush
             return new FlushResult(FlushOutcome.NoTurns, cursor, null, null);
 
         StoreRawTranscript(RenderRange(range));
-        var run = _runner.Run(BuildPrompt(range), ModelTier.Fast, ComponentKind.Flush, "summary");
+
+        // Y-126: the send boundary. Everything BuildPrompt renders leaves this machine for an
+        // external model, so the guard chain runs on the outbound text BEFORE the runner sees
+        // it — the gate below, on the model's reply, only ever protected the vault. The raw
+        // transcript is already kept unmasked in the local raw channel (Y-005), so masking
+        // here costs the owner nothing: only the copy that crosses the boundary is redacted.
+        // Direction: neither `In` nor `Out` honestly means "leaving this machine toward a
+        // model" — at every other call site `In` is text a caller hands oom and `Out` is text
+        // a model hands back. `Out` is used here for the one thing it does say, that the text
+        // is moving outward; `Direction` needs an explicit egress member (see the report).
+        var outbound = _guards.Gate(BuildPrompt(range), Direction.Out, ComponentKind.Flush);
+        RecordBoundary(sessionId, outbound.Findings);
+        var run = _runner.Run(outbound.Text, ModelTier.Fast, ComponentKind.Flush, "summary");
         if (run.Error?.Contains("yapılandırma yok", StringComparison.Ordinal) == true)
             run = new RunResult(ExtractiveSummary(range), null, "extractive", "in-process", "none");
         if (!string.IsNullOrEmpty(run.Error))
@@ -348,6 +360,28 @@ public sealed class Flush
         state.LastError = null;
         _store.Save(state);
         return new FlushResult(outcome, state.Cursor + 1, dailyPath, summary);
+    }
+
+    /// <summary>
+    /// Y-126: what the send boundary masked is written down. Redaction, not refusal, is the
+    /// verdict here — refusing would park the session after five identical retries and lose
+    /// the owner's memory of it for good, while the model never needed the secret to write a
+    /// summary — but a redaction nobody can see afterwards is indistinguishable from no guard
+    /// at all. So every masked class reaches the health ledger, where <c>oom doctor</c> reads
+    /// it, and a masked credential also raises the one-shot notification the park path uses.
+    /// </summary>
+    private void RecordBoundary(string sessionId, IReadOnlyList<string> findings)
+    {
+        var masked = findings.Where(finding => finding is "secret" or "pii").ToArray();
+        if (masked.Length == 0)
+            return;
+
+        var classes = string.Join(", ", masked);
+        HealthLedger.Record(new HealthItem("flush", HealthLevel.Warning, "gonderim-siniri", sessionId,
+            $"Modele giden özet isteminde maskelendi: {classes} — ham transkript makinede kaldı."), _clock.Now);
+
+        if (masked.Contains("secret"))
+            _notifier?.Notify($"Oturum {sessionId}: modele giden istemde sır maskelendi ({classes}) — oom doctor");
     }
 
     private FlushResult Queue(SessionState state, string error, int cursor)
