@@ -67,6 +67,14 @@ The companion directory itself is `context.companionDir` in `oom.json` (default 
 
 `backend.local.numCtx` in `oom.json` (default `8192`) is the token context window `Runner.CallLocal` asks Ollama's native `/api/chat` route for — the one route that actually honours it (`/v1/chat/completions` drops the option silently, `Y-115`). Raise it when a daily or a transcript regularly runs into an HTTP 400 "context length" rejection; the prompt itself is also capped to roughly three characters per token of this same window before it is sent, so one oversized daily cannot exceed it. There is no separate `backend.local.fast`/`smart` context split — one window serves both tiers.
 
+## Local backend network confinement
+
+`backend.local.url` is validated wherever it can be set or reached, by the same `OomSettings.ValidateLocalUrl` (`src/Oom/Infrastructure/Configuration.cs`): the value must parse as an absolute URL with scheme `http`, carry no user info, and its host must parse as a numeric `IPAddress` that `IPAddress.IsLoopback` accepts — a bracketed IPv6 loopback literal is unwrapped before that check. A host name, including a non-loopback IP, is rejected with a `FormatException`; nothing is resolved through DNS to decide this. `Runner`'s own constructor default is validated the same way, so there is no unchecked default hiding behind the checked configuration path.
+
+The HTTP client that actually reaches the local backend, `HttpTransport` (`src/Oom/Infrastructure/Boundaries.cs`), is built with `AllowAutoRedirect = false` and `UseProxy = false` on its `HttpClientHandler`, and calls `ValidateLocalUrl` again on every request URL before sending — so a 3xx response pointing off-loopback is never followed, and no system or environment proxy ever sees the request.
+
+A config file written before this confinement existed may still carry the pre-2.0 `http://localhost:<port>` spelling. `TranslateLegacyLocalhostUrl` (`Configuration.cs`, applied inside `ReadLocal` at the `oom.json` read boundary) rewrites only a value whose scheme is `http`, whose host is exactly `localhost` (case-insensitive), and which carries no user info, into the same URL with `127.0.0.1` substituted for the host — by string slicing, never by resolving `localhost` through DNS. Any other value passes through unchanged into `ValidateLocalUrl`.
+
 ## Scheduled task
 
 Install and `Sweep` now share a single XML builder, `Sweep.BuildScheduledTaskXml` (D4: an XML file passed to `schtasks /Create /XML`; no Task Scheduler COM interop). The XML has an eight-hour repetition with **no** `Duration` element (`Y-009`), `StartWhenAvailable` for a missed run, an `InteractiveToken` logon type so the task only runs while the user is signed in, a 30-minute `ExecutionTimeLimit`, and no battery restriction. The second, thinner XML that used to live inside `Install` (and carried `WakeToRun`) is gone.

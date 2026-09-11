@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Oom.Contracts;
+using Oom.Tests.Scars.Fixtures;
 
 namespace Oom.Tests;
 
@@ -11,6 +12,24 @@ public sealed class LoopbackScars
     [Fact]
     public void Runner_DirectNonLoopbackUrl_IsRejected() =>
         Assert.Throws<FormatException>(() => new Runner(null, localUrl: "http://192.0.2.10:11434/v1"));
+
+    [Fact(DisplayName = "Y-124 · install.md geri döngü sözleşmesinin dört maddesini de taşır")]
+    public void Y124_InstallDocStatesTheLoopbackContract()
+    {
+        var text = File.ReadAllText(Path.Combine(ScarFixture.RepositoryRoot(), "docs", "install.md"));
+
+        // Sayısal geri döngü zorunluluğu: IPAddress.IsLoopback'e karşı doğrulandığı belirtilmeli.
+        Assert.Contains("IsLoopback", text, StringComparison.Ordinal);
+        // Yönlendirmeler izlenmiyor.
+        Assert.Contains("AllowAutoRedirect = false", text, StringComparison.Ordinal);
+        Assert.Contains("redirect", text, StringComparison.OrdinalIgnoreCase);
+        // Proxy kullanılmıyor.
+        Assert.Contains("UseProxy = false", text, StringComparison.Ordinal);
+        Assert.Contains("proxy", text, StringComparison.OrdinalIgnoreCase);
+        // Eski "localhost" yazımı DNS'e gitmeden okuma sınırında çevriliyor.
+        Assert.Contains("TranslateLegacyLocalhostUrl", text, StringComparison.Ordinal);
+        Assert.Contains("DNS", text, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void HttpTransport_NonLoopbackDestination_IsRejected() =>

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
 
@@ -105,5 +106,32 @@ public sealed class TestDisipliniScars
         Assert.Single(records);
         Assert.Equal("real.jsonl", records[0].Source);
         ScarFixture.Remove(root);
+    }
+
+    [Fact(DisplayName = "Y-125 · Test gövdesindeki her Y-numarası scars.md'de bir satıra karşılık gelir")]
+    public void Y125_EveryDisplayedScarNumberHasAScarsMdRow()
+    {
+        var root = ScarFixture.RepositoryRoot();
+        var testsDir = Path.Combine(root, "tests");
+        var scarsDoc = File.ReadAllText(Path.Combine(root, "docs", "scars.md"));
+
+        var displayNamePattern = new Regex(@"\[(?:Fact|Theory)\(DisplayName\s*=\s*""([^""]*)""", RegexOptions.Compiled);
+        var scarNumberPattern = new Regex(@"Y-\d+", RegexOptions.Compiled);
+
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var file in Directory.EnumerateFiles(testsDir, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
+                file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var content = File.ReadAllText(file);
+            foreach (Match attribute in displayNamePattern.Matches(content))
+                foreach (Match number in scarNumberPattern.Matches(attribute.Groups[1].Value))
+                    found.Add(number.Value);
+        }
+
+        var missing = found.Where(number => !scarsDoc.Contains($"| {number} |", StringComparison.Ordinal)).ToArray();
+        Assert.True(missing.Length == 0, $"scars.md'de satırı olmayan yaralar: {string.Join(", ", missing)}");
     }
 }

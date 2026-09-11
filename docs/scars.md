@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 118, Geçti: 118, Başarısız: 0. Kapı testleriyle birlikte toplam 135 test, 135 geçti. Tarih: 2026-09-10, şerit CI, `b8b2103` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 125, Geçti: 125, Başarısız: 0. Kapı testleriyle birlikte toplam 166 test, 166 geçti. Tarih: 2026-09-11, şerit SOZ, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -125,6 +125,13 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-116 | test-disiplini | `Bench` 30 keşfedilen `.jsonl`'in 17'sini (alt-ajan izi + tur yok) modele hiç göndermeden ölçüme "başarısız" yazıyordu: ham 0,400/0,95 iken gerçek 13 transkript 0,923 ölçüyordu, n dürüst değildi | TestDisipliniScars.Y116_BenchExcludesSubagentAndNoTurnFilesButKeepsRealTranscript | yeşil |
 | Y-117 | kurulum | Eski kasadan kopyalanan 182 daily `knowledge/concepts` içinde (554 not) zaten derlenmişti ama taze `state.db`'nin `daily_ingest`'i boştu; her `sweep` bunları yeniden derleme kuyruğuna alıyordu — canlı kasada `install --adopt` sonrası bekleyen 182'den 0'a düştü | KurulumScars.Y117_AdoptionMarksAlreadyCompiledDailiesWithoutRequeuing | yeşil |
 | Y-118 | süreç-işletme | Kapsama sorgusu makinedeki HER transkripti (canlı kasada 2019 dosya, vault'tan aylar önce) sayıyordu; taze vault'ta "tüm zamanlar 18/2019" ve "son 7 gün %5,7" doctor'un tek `hata` satırıydı — doğru popülasyon vault'un kendi kurulum penceresi | SurecIsletmeScars.Y118_CoverageMeasuresTheVaultsOwnWindow | yeşil |
+| Y-119 | durum-deposu | `Runner` ölçülen kullanımı `LastUsage` adlı, çağrılar arası paylaşılan tek bir alanda tutuyordu; alan yalnız başarılı bir Claude ayrıştırmasında güncelleniyor, başarısızlıkta sıfırlanmıyordu — ardından gelen bir çağrı yanıtı ayrıştıramayıp başarısız olsa bile ledger satırına önceki çağrının token sayıları yazılabiliyordu | DefterScars.Y119_LaterExhaustedCallDoesNotInheritEarlierUsage | yeşil |
+| Y-120 | durum-deposu | Aynı paylaşılan `LastUsage` alanı zincirdeki hangi backend'in gerçekten yanıtladığından bağımsızdı: `Record` döngü bitince tek sefer çağrılıyor, `local` çağrısı ise hiç kullanım okumuyordu — claude→local fallback satırı gerçekte local'in ürettiği jetonlar yerine önceki bir çağrıdan kalma sayıları `claude` adına taşıyabiliyordu | DefterScars.Y120_FallbackUsageBelongsToTheBackendThatReportedIt | yeşil |
+| Y-121 | durum-deposu | `calls` satırlarının kendi kimliği yoktu; aynı jeton sayılarına sahip iki ayrı deneme toplama görünümünde tek çağrıya indirgenebilirdi — her deneme artık kendi `operation_id`/`attempt_id`'siyle ayrı satır ve `v_call_usage`'ta ayrı `attempt_count`/`operation_count` olarak sayılıyor | DefterScars.Y121_IdenticalUsageDoesNotCollapseDistinctCalls | yeşil |
+| Y-122 | durum-deposu | Eski `RecordCall` imzası jeton parametrelerini `0` varsayılanıyla alıyordu, "hiç ölçülmedi" ile "gerçekten sıfır jeton" ayırt edilemiyordu; artık ölçülmeyen kullanım NULL sütunlar ve `usage_source='unknown'`/`usage_rank=0` ile, gerçek sıfır ise `0` değerleri ve `usage_source='measured'`/`usage_rank=2` ile ayrı kaydediliyor | DefterScars.Y122_UnknownUsageIsDistinctFromMeasuredZero | yeşil |
+| Y-123 | durum-deposu | Şema 3'ten göçte eski `in_tok` (cache dahil toplam girdi) yeni `uncached_in_tok` (yalnız cache-dışı girdi) sanılıp tahminle doldurulabilirdi; göç eski satırları OLDUĞU GİBİ bırakıyor — `uncached_in_tok`/`operation_id`/`attempt_id` NULL, `usage_rank=0`, `usage_semantics='legacy-total-input-v0'` — ve yalnız `user_version`'ı 4'e yükseltiyor | DefterScars.Y123_MigrationPreservesLegacyRowsWithoutGuessingUncachedInput | yeşil |
+| Y-124 | test-disiplini | Geri döngü sözleşmesi (sayısal loopback zorunluluğu, yönlendirmenin izlenmemesi, proxy kullanılmaması, eski `localhost` yazımının DNS'siz çevirisi) yalnız kodda vardı, hiçbir belgede yazılı değildi | LoopbackScars.Y124_InstallDocStatesTheLoopbackContract | yeşil |
+| Y-125 | test-disiplini | Test paketi Y-119…Y-123'ü DisplayName'e ekledi ama `docs/scars.md` hiç güncellenmedi — defter test paketinin gerisinde sessizce kalabiliyordu; artık her `[Fact]`/`[Theory]` DisplayName'indeki her Y-numarası `scars.md`'de bir satıra bağlı olmak zorunda | TestDisipliniScars.Y125_EveryDisplayedScarNumberHasAScarsMdRow | yeşil |
 
 ## Sınıf başına durum
 
@@ -136,8 +143,8 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | getirme | 11 | 0 |
 | kanca | 9 | 0 |
 | kota | 6 | 0 |
-| durum-deposu | 8 | 0 |
+| durum-deposu | 13 | 0 |
 | kurulum | 20 | 0 |
-| test-disiplini | 9 | 0 |
+| test-disiplini | 11 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **118** | **0** |
+| **Toplam** | **125** | **0** |
