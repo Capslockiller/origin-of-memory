@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -61,7 +62,7 @@ public sealed class Bench
             output.WriteLine($"kuru koşum: model çağrılmadı, dosya yazılmadı (yazılacaktı: {results})");
             foreach (var name in transcripts.Select(Path.GetFileName).Concat(dailies.Select(daily => daily.Name)))
                 output.WriteLine($"  girdi {name}");
-            Table(output, model, 0, null, 0, transcripts.Count, dailies.Count, dry: true);
+            Table(output, model, 0, null, 0, transcripts.Count, dailies.Count, dry: true, verdictSuppressed: false);
             return 0;
         }
 
@@ -83,13 +84,31 @@ public sealed class Bench
         var flushDecision = judge.Score is not { } score ? "undecided — leg (b) not run"
             : shape >= ShapeThreshold && score >= JudgeThreshold ? "keep" : "drop";
         var compileDecision = conformance >= CompileThreshold ? "keep" : "drop";
-        Write(results, options, model, settings, flush, compile, shape, conformance, judge, flushDecision, compileDecision, excludedSubagent, excludedNoTurns);
-        Table(output, model, shape, judge.Score, conformance, flush.Count, compile.Count, dry: false);
-        output.WriteLine($"\nkarar: backend.flush = {flushDecision} · backend.compile = {compileDecision} · dışlanan: {excludedSubagent} subagent, {excludedNoTurns} turnsuz");
+        // PROVENANCE.md §3: a rate over zero graded inputs (or a skipped stage --judge asked for)
+        // is not a measurement, so a verdict computed from it is a claim, not evidence. Write can
+        // still upgrade "ok" to "invalid" itself (the raw log it must keep failed to write), so the
+        // status actually printed below is the one Write returns, not the one computed here.
+        var (status, reasons) = ComputeRunStatus(flush, compile, options, judge);
+        var (finalStatus, finalReasons) = Write(results, options, model, settings, flush, compile, shape, conformance, judge,
+            flushDecision, compileDecision, excludedSubagent, excludedNoTurns, status, reasons);
+        Table(output, model, shape, judge.Score, conformance, flush.Count, compile.Count, dry: false, verdictSuppressed: finalStatus != "ok");
+        if (finalStatus == "ok")
+            output.WriteLine($"\nkarar: backend.flush = {flushDecision} · backend.compile = {compileDecision} · dışlanan: {excludedSubagent} subagent, {excludedNoTurns} turnsuz");
+        else
+        {
+            output.WriteLine();
+            output.WriteLine("==================== ÖLÇÜM REDDEDİLDİ ====================");
+            output.WriteLine($"run_status: {finalStatus}");
+            foreach (var reason in finalReasons)
+                output.WriteLine($"  - {reason}");
+            output.WriteLine("hiçbir karar hesaplanmadı — yukarıdaki nedenler yüzünden bu koşu ölçüm sayılmıyor.");
+            output.WriteLine($"sonuç dosyası yine de yazıldı (kanıt olarak): {results}");
+            output.WriteLine("===========================================================");
+        }
         foreach (var record in flush.Concat(compile).Where(record => !record.Ok))
             output.WriteLine($"  ıska {record.Source}: {record.Reason}");
         output.WriteLine($"sonuç dosyası: {results}");
-        return 0;
+        return finalStatus == "ok" ? 0 : 2;
     }
     /// <summary>Leg (a): the shipped write function grades the model; <c>Empty</c> is a correct
     /// <c>FLUSH_BOS</c>, so it counts as shape. Y-116: a sub-agent trace (<see cref="Ingest.IsSubagentTranscript"/>,
@@ -211,36 +230,141 @@ public sealed class Bench
         Files(Path.Combine(vault, "knowledge", "concepts"), "*.md", SearchOption.TopDirectoryOnly)
             .Select(Path.GetFileNameWithoutExtension).Order(StringComparer.Ordinal).Take(RegistryCap));
 
-    /// <summary>The results file of spec 6.12. Every record is reduced to name, verdict, reason and
-    /// duration: <c>Answer</c> holds the model's own text and stays in memory for leg (b), because a
-    /// measurement artefact must never become a second copy of the material it measured.</summary>
-    private void Write(string path, BenchOptions options, string model, OomSettings settings, List<BenchRecord> flush,
-        List<BenchRecord> compile, double shape, double conformance, JudgeReport judge, string flushDecision, string compileDecision,
-        int excludedSubagent, int excludedNoTurns)
+    /// <summary>PROVENANCE.md §3: a rate over zero graded inputs, or a stage --judge asked for that
+    /// never ran, must not read as a completed measurement. English reasons — this lands in the
+    /// machine-read <c>run_status_reasons</c> JSON field, not this command's Turkish user output.
+    /// "invalid" wins over "degraded" when both apply, by returning before "degraded" is ever
+    /// checked.</summary>
+    private static (string Status, IReadOnlyList<string> Reasons) ComputeRunStatus(
+        List<BenchRecord> flush, List<BenchRecord> compile, BenchOptions options, JudgeReport judge)
+    {
+        List<string> invalid = [];
+        if (flush.Count == 0)
+            invalid.Add("flush_shape: conformance rate would be computed over zero graded inputs (flush.Count == 0)");
+        if (compile.Count == 0)
+            invalid.Add("compile_conformance: conformance rate would be computed over zero graded inputs (compile.Count == 0)");
+        if (invalid.Count > 0)
+            return ("invalid", invalid);
+
+        if (options.Judge && judge.Status == "not run")
+        {
+            List<string> degraded = ["judge: --judge was requested but the judge stage did not run"];
+            return ("degraded", degraded);
+        }
+        List<string> none = [];
+        return ("ok", none);
+    }
+
+    /// <summary>PROVENANCE.md §2: at least one of <c>source_commit</c> or <c>binary_sha256</c> is
+    /// required. A published single-file exe knows its own hash but not the git commit it was built
+    /// from, so this is the field this command satisfies the requirement with; <c>source_commit</c>
+    /// stays null. Null (never a throw) when the process has no path to hash — a bench run must not
+    /// crash over its own provenance field.</summary>
+    private static string? BinarySha256()
+    {
+        if (Environment.ProcessPath is not { } path) return null;
+        try
+        {
+            // Streamed, not ReadAllBytes: a self-contained single-file publish is tens of megabytes
+            // and a provenance field may not cost the measurement a copy of the binary in memory.
+            using var file = File.OpenRead(path);
+            return Convert.ToHexString(SHA256.HashData(file));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>
+    /// PROVENANCE.md §2's reproducible invocation, with the executable reduced to its file name.
+    /// <see cref="Environment.CommandLine"/> carries the full path the process was launched from,
+    /// and these files are committed to the repository: the reader needs the arguments, not the
+    /// owner's home directory.
+    /// </summary>
+    private static string Invocation() =>
+        string.Join(' ', ["oom", .. Environment.GetCommandLineArgs().Skip(1)]);
+
+    /// <summary>The results file of spec 6.12, under PROVENANCE.md's contract. Every record is
+    /// reduced to name, verdict, reason and duration: <c>Answer</c> holds the model's own text and
+    /// stays in memory for leg (b), because a measurement artefact — the results file, and the raw
+    /// log this method also writes — must never become a second copy of the material it measured.
+    /// Returns the run status actually recorded: if the raw log fails to write, an "ok" status is
+    /// itself downgraded to "invalid" here, after the caller already decided on "ok" — so the caller
+    /// must print whatever status this method hands back, not the one it passed in.</summary>
+    private (string Status, IReadOnlyList<string> Reasons) Write(string path, BenchOptions options, string model, OomSettings settings,
+        List<BenchRecord> flush, List<BenchRecord> compile, double shape, double conformance, JudgeReport judge,
+        string flushDecision, string compileDecision, int excludedSubagent, int excludedNoTurns,
+        string status, IReadOnlyList<string> reasons)
     {
         object[] Public(List<BenchRecord> records) => records
             .Select(object (x) => new { source = x.Source, ok = x.Ok, reason = x.Reason, ms = x.Ms }).ToArray();
+
+        var directory = Path.GetDirectoryName(path);
+        if (directory is { Length: > 0 })
+            Directory.CreateDirectory(directory);
+
+        // PROVENANCE.md §2 requires a raw artifact distinct from the results file. This log carries
+        // names, verdicts, reasons and durations only — never Answer, the model's own text — for the
+        // same reason the class comment above gives: a measurement artefact must never become a
+        // second copy of the material it measured. Written before the results JSON, as PROVENANCE.md
+        // implies a summary is derived from its raw artifact rather than the other way round.
+        var logName = Path.GetFileNameWithoutExtension(path) + ".log";
+        var finalStatus = status;
+        List<string> finalReasons = [.. reasons];
+        string rawArtifact;
+        try
+        {
+            var logPath = string.IsNullOrEmpty(directory) ? logName : Path.Combine(directory, logName);
+            var lines = flush.Select(r => $"flush {r.Source} {r.Ok} {r.Reason} {r.Ms}")
+                .Concat(compile.Select(r => $"compile {r.Source} {r.Ok} {r.Reason} {r.Ms}"));
+            File.WriteAllLines(logPath, lines, Utf8);
+            rawArtifact = logName;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            rawArtifact = "none-kept";
+            finalStatus = "invalid";
+            finalReasons.Add($"raw_artifact: raw log could not be written: {error.Message}");
+        }
+
+        // PROVENANCE.md §3 (binding): if run_status is not "ok", every "pass" field and the whole
+        // "decision" object MUST be null — never false, which would itself read as a verdict.
+        bool? flushPass = finalStatus == "ok" ? shape >= ShapeThreshold : null;
+        bool? compilePass = finalStatus == "ok" ? conformance >= CompileThreshold : null;
+        object? decision = finalStatus == "ok" ? new { flush = flushDecision, compile = compileDecision } : null;
+
         var payload = new
         {
-            gate = 10, command = "oom bench", backend = options.Backend,
+            measured_by = "oom bench",
+            command = Invocation(),
+            run_status = finalStatus,
+            run_status_reasons = finalReasons,
+            raw_artifact = rawArtifact,
+            source_commit = (string?)null,
+            binary_sha256 = BinarySha256(),
+            // §4: structural even when nothing was substituted — a Dictionary so the JSON key is
+            // literally "for" (a C# member would need the @for escape and an emit guarantee this
+            // file cannot verify without a build).
+            substitute = new Dictionary<string, object?> { ["active"] = false, ["for"] = null, ["reason"] = null },
+            gate = 10, backend = options.Backend,
             measured = Today(),
             model = new { name = model, url = settings.Backend.Local.Url },
             thresholds = new { flush_shape = ShapeThreshold, judge = JudgeThreshold, compile_conformance = CompileThreshold },
-            flush_shape = new { n = flush.Count, excluded_subagent = excludedSubagent, excluded_noturns = excludedNoTurns, conformance = shape, threshold = ShapeThreshold, pass = shape >= ShapeThreshold, records = Public(flush) },
+            flush_shape = new { n = flush.Count, excluded_subagent = excludedSubagent, excluded_noturns = excludedNoTurns, conformance = shape, threshold = ShapeThreshold, pass = flushPass, records = Public(flush) },
             judge = new { status = judge.Status, score = judge.Score, why = judge.Why, threshold = JudgeThreshold },
-            compile_conformance = new { n = compile.Count, conformance, threshold = CompileThreshold, pass = conformance >= CompileThreshold, records = Public(compile) },
-            decision = new { flush = flushDecision, compile = compileDecision }
+            compile_conformance = new { n = compile.Count, conformance, threshold = CompileThreshold, pass = compilePass, records = Public(compile) },
+            decision
         };
-        if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
-            Directory.CreateDirectory(directory);
         File.WriteAllText(path, JsonSerializer.Serialize(payload, Json) + "\n", Utf8);
+        return (finalStatus, finalReasons);
     }
 
-    /// <summary>The one table spec 6.12 asks the command to print; the same numbers as the JSON.</summary>
-    private static void Table(TextWriter output, string model, double shape, double? judge, double conformance, int flushCount, int compileCount, bool dry)
+    /// <summary>The one table spec 6.12 asks the command to print; the same numbers as the JSON.
+    /// <paramref name="verdictSuppressed"/> renders the same "—" a dry run does: PROVENANCE.md §3
+    /// forbids asserting a verdict once <c>run_status</c> is not "ok", so nothing here may show one
+    /// either.</summary>
+    private static void Table(TextWriter output, string model, double shape, double? judge, double conformance, int flushCount, int compileCount, bool dry, bool verdictSuppressed)
     {
         var pending = dry ? "kuru koşum" : null;
-        string Mark(bool passed) => dry ? "—" : passed ? "evet" : "hayır";
+        string Mark(bool passed) => dry || verdictSuppressed ? "—" : passed ? "evet" : "hayır";
         void Row(string leg, int n, string value, double threshold, string mark) =>
             output.WriteLine($"| {leg} | {n} | {value} | {Fixed(threshold, 2)} | {mark} |");
         output.WriteLine($"\n# Kapı 10 — {model}\n\n| ayak | n | sonuç | eşik | geçti |\n| --- | ---: | ---: | ---: | --- |");

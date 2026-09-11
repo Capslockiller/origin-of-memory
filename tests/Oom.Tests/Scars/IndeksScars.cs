@@ -187,6 +187,52 @@ public sealed class IndeksScars
         }
     }
 
+    // yazan: claude · opus-5
+    [Fact(DisplayName = "Y-140 · FTS aday kümesi, sıralayıcının puanladığı hiçbir notu düşürmez")]
+    public void Y140_FtsCandidatesCoverEveryNoteTheInProcessRankerScores()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            // One decisive Turkish word per note over a shared filler phrase, so a probe that reaches
+            // the right note through the ranker but not through the index shows up as a set
+            // difference and not as a ranking nuance.
+            WriteNote(vault, "a.md", "zümrütlü sıradan gövde", "A başlık");
+            WriteNote(vault, "b.md", "kapısı sıradan gövde", "B başlık");
+            WriteNote(vault, "c.md", "çalışıyor sıradan gövde", "C başlık");
+            WriteNote(vault, "d.md", "güvenliktenmiş sıradan gövde", "D başlık");
+            WriteNote(vault, "e.md", "ISTANBUL sıradan gövde", "E başlık");
+
+            var indexed = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            indexed.Build();
+            // The ranker's own answer has to come from an instance with no index, or the comparison
+            // is the FTS candidate set against itself and can never fail.
+            var scanner = new Retrieve(new RetrieveOptions(VaultPath: vault));
+
+            using var connection = new SqliteConnection($"Data Source={index}");
+            connection.Open();
+
+            foreach (var probe in new[] { "zümrütlü", "kapısı", "çalışıyor", "güvenlikten", "istanbul", "ıstanbul" })
+            {
+                var ranked = scanner.Query(probe, Guid.NewGuid().ToString(), 50).Hits.Select(hit => hit.Name).ToArray();
+                var candidates = indexed.Candidates(connection, probe, 50);
+                Assert.Equal("corpus-scan:no-index", scanner.CandidateSource);
+                Assert.NotEmpty(ranked);
+                // Measured before the index was built out of folded tokens: `kapısı`, `çalışıyor` and
+                // `güvenlikten` each reached their note through the ranker and returned an EMPTY FTS
+                // candidate set. unicode61 strips the diacritic and keeps the dotless i; TurkishFold
+                // keeps the diacritic and folds ı onto i (Y-044), and the five-character suffix
+                // prefixes it emits were never in the index at all.
+                Assert.Empty(ranked.Except(candidates, StringComparer.Ordinal));
+            }
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
+
     private static string WriteNote(string vault, string name, string body, string title = "İndeks notu", string aliases = "", string tags = "")
     {
         var concepts = Path.Combine(vault, "knowledge", "concepts");

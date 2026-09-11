@@ -26,12 +26,15 @@ import argparse
 import json
 import os
 import platform
+import shlex
 import subprocess
 import sys
 import time
 from datetime import date
 from pathlib import Path
 from typing import Any
+
+import provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXE = ROOT / "publish" / "win-x64" / "Oom.exe"
@@ -95,8 +98,18 @@ def parse_hits(line: str) -> list[dict[str, Any]]:
     return hits
 
 
-def run_batch(exe: Path, vault: str, rows: list[dict[str, Any]], top: int, work: Path) -> tuple[list[list[dict[str, Any]]], float]:
-    """One process, one query per line; returns rankings in input order."""
+def run_batch(
+    exe: Path, vault: str, rows: list[dict[str, Any]], top: int, work: Path, raw_path: Path
+) -> tuple[list[list[dict[str, Any]]], float, Path | None]:
+    """One process, one query per line; returns rankings in input order.
+
+    Also persists the executable's raw stdout to `raw_path` under bench/.out/ --
+    PROVENANCE.md SS2 requires every results file to name a `raw_artifact`
+    distinct from the summary itself, and this is that artifact for a batch
+    pass. Returns the path actually written, or None if persisting failed for
+    any reason (disk full, permissions, ...); callers must not treat that as
+    fatal to the measurement itself, only to its provenance completeness.
+    """
     work.mkdir(parents=True, exist_ok=True)
     batch = work / "gold-batch.jsonl"
     with batch.open("w", encoding="utf-8", newline="\n") as handle:
@@ -110,10 +123,18 @@ def run_batch(exe: Path, vault: str, rows: list[dict[str, Any]], top: int, work:
     if completed.returncode != 0:
         raise SystemExit(f"retrieve --batch failed ({completed.returncode}): {completed.stderr.strip()[:400]}")
 
+    raw_written: Path | None = None
+    try:
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        raw_path.write_text(completed.stdout, encoding="utf-8", newline="\n")
+        raw_written = raw_path
+    except OSError:
+        raw_written = None
+
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     if len(lines) != len(rows):
         raise SystemExit(f"batch returned {len(lines)} lines for {len(rows)} queries; alignment is not safe")
-    return [parse_hits(line) for line in lines], elapsed_ms
+    return [parse_hits(line) for line in lines], elapsed_ms, raw_written
 
 
 def single_call_latency(exe: Path, vault: str, rows: list[dict[str, Any]], top: int, sample: int) -> list[float]:
@@ -354,6 +375,12 @@ def main() -> int:
     parser.add_argument("--out")
     parser.add_argument("--run-file", default=str(ROOT / "bench" / ".out" / "oom-2.0.run"))
     parser.add_argument("--work-dir", default=str(ROOT / "bench" / ".data"))
+    parser.add_argument(
+        "--measured-by",
+        required=True,
+        help="who or what ran this measurement (a name, or an agent identity such as 'claude' or 'codex'); "
+             "PROVENANCE.md SS2 -- a run that cannot say who measured it must not run at all",
+    )
     arguments = parser.parse_args()
 
     exe = Path(arguments.exe)
@@ -363,8 +390,16 @@ def main() -> int:
     if not gold_path.is_file():
         raise SystemExit(f"gold set not found: {gold_path}")
 
+    # Computed up front (not after the numbers) so the raw-artifact filenames below
+    # can be tied to the same stem as the results file they document.
+    out = Path(arguments.out) if arguments.out else ROOT / "bench" / "results" / f"recall-{date.today().isoformat()}.json"
+    raw_dir = ROOT / "bench" / ".out"
+
     rows = load_gold(gold_path, arguments.max_queries)
-    rankings, batch_ms = run_batch(exe, arguments.vault, rows, arguments.top, Path(arguments.work_dir))
+    rankings, batch_ms, raw_written = run_batch(
+        exe, arguments.vault, rows, arguments.top, Path(arguments.work_dir),
+        raw_dir / f"{out.stem}.batch.stdout.jsonl",
+    )
     singles = single_call_latency(exe, arguments.vault, rows, arguments.top, max(0, arguments.latency_sample))
 
     hook = (hook_probe(exe, arguments.vault, rows, arguments.hook_sample) if arguments.hook_sample
@@ -380,7 +415,10 @@ def main() -> int:
     curve: dict[str, Any] | None = None
     if arguments.curve_top and arguments.curve_top > arguments.top:
         depths = [depth for depth in (1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50, 100) if depth <= arguments.curve_top]
-        deep, _ = run_batch(exe, arguments.vault, rows, arguments.curve_top, Path(arguments.work_dir))
+        deep, _, _ = run_batch(
+            exe, arguments.vault, rows, arguments.curve_top, Path(arguments.work_dir),
+            raw_dir / f"{out.stem}.curve.stdout.jsonl",
+        )
         curve = recall_curve(rows, deep, depths)
 
     records = []
@@ -412,9 +450,59 @@ def main() -> int:
         key=lambda record: (record["first_gold_rank"] or 10**6, record["id"]),
     )
 
+    index = index_counts(arguments.vault)
+
+    # PROVENANCE.md SS3: classify before a single verdict is printed or written.
+    run_status, reasons = provenance.assess(index, len(scored))
+
+    # PROVENANCE.md SS2: raw_artifact MUST be a real, distinct file, or the literal
+    # "none-kept" -- and the latter forces run_status to "invalid", silent omission
+    # is not permitted.
+    if raw_written is not None:
+        raw_artifact = str(raw_written.relative_to(ROOT)).replace(os.sep, "/")
+    else:
+        raw_artifact = "none-kept"
+        run_status = "invalid"
+        reasons = reasons + ["no raw artifact was persisted for this run (raw_artifact=none-kept)"]
+
+    # PROVENANCE.md SS4: the substitute declaration MUST be a top-level structural
+    # field, always present, not a prose note buried in hook_gate_probe. hook_probe
+    # is the substitute instrument only when it was the *only* hook measurement taken
+    # -- i.e. a hook sample was requested but the spec's own probe-30 set was not run.
+    if arguments.hook_sample and not arguments.probe:
+        substitute = {
+            "active": True,
+            "for": "bench/probe-30.jsonl (spec 10.1 #17)",
+            "reason": "the spec's 30-prompt probe set was not run this pass (--probe not given); "
+                      "hook_probe substitutes the gold set's own kanarya/gold rows for the hook "
+                      "injection measurement instead",
+        }
+    else:
+        substitute = {"active": False, "for": None, "reason": None}
+
+    # PROVENANCE.md SS2: the literal, reproducible invocation -- built from sys.argv,
+    # not reconstructed from parsed arguments, so it reflects exactly what was typed.
+    script = Path(sys.argv[0]).resolve()
+    try:
+        script = script.relative_to(ROOT)
+    except ValueError:
+        pass
+    command = " ".join(
+        ["python", shlex.quote(str(script).replace(os.sep, "/"))]
+        + [shlex.quote(argument) for argument in sys.argv[1:]]
+    )
+
     payload = {
         "gate": 5,
         "measured": date.today().isoformat(),
+        "measured_by": arguments.measured_by,
+        "command": command,
+        "run_status": run_status,
+        "run_status_reasons": reasons,
+        "raw_artifact": raw_artifact,
+        "source_commit": provenance.git_commit(ROOT),
+        "binary_sha256": provenance.sha256_file(exe),
+        "substitute": substitute,
         "run_tag": RUN_TAG,
         "backend": {
             "executable": str(exe),
@@ -437,7 +525,7 @@ def main() -> int:
             "recall@5": overall["recall@5"] >= 0.88,
         },
         "diagnostic_recall_curve": curve,
-        "index": index_counts(arguments.vault),
+        "index": index,
         "latency_ms": {
             "batch_total": round(batch_ms, 1),
             "batch_per_query": round(batch_ms / len(rows), 2),
@@ -469,7 +557,17 @@ def main() -> int:
         "records": records,
     }
 
-    out = Path(arguments.out) if arguments.out else ROOT / "bench" / "results" / f"recall-{date.today().isoformat()}.json"
+    # PROVENANCE.md SS3, binding: once run_status != "ok", no `pass` or `decision`
+    # field anywhere in the file may read true (or anything but null). probe_30's
+    # within_cap / all_real_questions_inject are gate verdicts too, just not named
+    # `pass`/`decision`, so they are nulled explicitly rather than structurally.
+    redacted: list[str] = []
+    if run_status != "ok":
+        redacted = provenance.redact_verdicts(payload)
+        if payload.get("probe_30"):
+            payload["probe_30"]["within_cap"] = None
+            payload["probe_30"]["all_real_questions_inject"] = None
+
     write_json(out, payload)
     write_trec(Path(arguments.run_file), rows, rankings)
 
@@ -477,17 +575,24 @@ def main() -> int:
           f"({len(canaries)} {CANARY} rows excluded, no gold by construction)\n")
     print(markdown_table(overall, per_class))
     print()
-    print(f"thresholds: recall@3 >= 0.80 ({'PASS' if payload['pass']['recall@3'] else 'FAIL'}), "
-          f"recall@5 >= 0.88 ({'PASS' if payload['pass']['recall@5'] else 'FAIL'})")
+    if run_status == "ok":
+        print(f"thresholds: recall@3 >= 0.80 ({'PASS' if payload['pass']['recall@3'] else 'FAIL'}), "
+              f"recall@5 >= 0.88 ({'PASS' if payload['pass']['recall@5'] else 'FAIL'})")
     if curve:
         print("\nrecall@k (diagnostic, depth %d): %s" % (
             curve["depth"], "  ".join(f"@{k}={v:.3f}" for k, v in curve["recall_at"].items())))
         print(f"gold outside the top {curve['depth']}: {len(curve['beyond_depth'])} of {curve['n']} -> {curve['beyond_depth']}")
     if probe:
-        print(f"\nprobe-30 (spec 10.1 #17): {probe['injected']}/30 injected, cap 8 "
-              f"({'PASS' if probe['within_cap'] else 'FAIL'}); "
-              f"real questions {probe['true_positives']['injected']}/{probe['true_positives']['n']}, "
-              f"false positives {probe['false_positives']['injected']}/{probe['false_positives']['n']}")
+        if run_status == "ok":
+            print(f"\nprobe-30 (spec 10.1 #17): {probe['injected']}/30 injected, cap 8 "
+                  f"({'PASS' if probe['within_cap'] else 'FAIL'}); "
+                  f"real questions {probe['true_positives']['injected']}/{probe['true_positives']['n']}, "
+                  f"false positives {probe['false_positives']['injected']}/{probe['false_positives']['n']}")
+        else:
+            print(f"\nprobe-30 (spec 10.1 #17), raw only -- no verdict issued: {probe['injected']}/30 injected "
+                  f"(cap {probe['cap']}); "
+                  f"real questions {probe['true_positives']['injected']}/{probe['true_positives']['n']}, "
+                  f"false positives {probe['false_positives']['injected']}/{probe['false_positives']['n']}")
         disagree = [d["id"] for d in probe["detail"] if not d["agrees"]]
         print(f"probe disagreements: {disagree or 'none'}")
     if hook.get("counts"):
@@ -503,6 +608,26 @@ def main() -> int:
         top = ", ".join(f"{hit['slug']}({hit['score']:.1f})" for hit in record["top"])
         print(f"  {record['id']} [{record['sinif']}] gold={record['gold']} top5={top or '(none)'}")
     print(f"\nresults: {out}\nrun file: {arguments.run_file}")
+
+    if run_status != "ok":
+        banner = "\n".join(
+            [
+                "",
+                "=" * 78,
+                f"GATE 5 REFUSED TO ISSUE A VERDICT -- run_status={run_status}",
+                "reasons:",
+                *(f"  - {reason}" for reason in reasons),
+                "",
+                "No pass/fail verdict was computed for this run (PROVENANCE.md SS3);",
+                f"all `pass`/`decision` fields in the written file were nulled ({len(redacted)} field(s): "
+                f"{', '.join(redacted) if redacted else 'none'}).",
+                f"Results file (this refusal is recorded in it) : {out}",
+                "=" * 78,
+            ]
+        )
+        print(banner, file=sys.stderr)
+        return 2
+
     return 0
 
 

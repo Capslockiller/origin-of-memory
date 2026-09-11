@@ -40,6 +40,70 @@ public sealed class GetirmeScars
             .Hook(prompt, Guid.NewGuid().ToString()).Hits);
     }
 
+    // yazan: claude · opus-5
+    [Fact(DisplayName = "Y-141 · Sorgu ve kanca yolu FTS indeksinden geçer, indeks cevabı değiştirmez")]
+    public void Y141_QueryAndHookGenerateCandidatesThroughTheIndex()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            Concepts(vault);
+            const string prompt = "Panel güvenlik kapısı nasıl çalışıyor?";
+
+            // `Retrieve.Candidates` shipped with a full-text statement, documented bm25 weights and
+            // no caller anywhere in src/: connected in the scar suite, dead in production. These two
+            // instances differ in exactly one option — whether an index path exists — so the pair
+            // measures what the index changed rather than asserting that it changed nothing.
+            var scanner = new Retrieve(new RetrieveOptions(VaultPath: vault));
+            var indexed = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            indexed.Build();
+
+            var scanned = scanner.Query(prompt, Guid.NewGuid().ToString(), 5);
+            var served = indexed.Query(prompt, Guid.NewGuid().ToString(), 5);
+
+            Assert.Equal("corpus-scan:no-index", scanner.CandidateSource);
+            Assert.Equal("fts", indexed.CandidateSource);
+            Assert.NotEmpty(served.Hits);
+            // Candidate generation moved; scoring did not. The statistics stay whole-corpus, so a
+            // narrowed run has to reproduce the scanned run name for name and score for score — the
+            // one assertion that keeps "wired to the index" from silently meaning "ranked differently".
+            Assert.Equal(scanned.Hits.Select(hit => hit.Name), served.Hits.Select(hit => hit.Name));
+            Assert.Equal(scanned.Hits.Select(hit => hit.Score), served.Hits.Select(hit => hit.Score));
+
+            var hooked = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            Assert.NotEmpty(hooked.Hook(prompt, Guid.NewGuid().ToString()).Hits);
+            Assert.Equal("fts", hooked.CandidateSource);
+
+            // An index that no longer describes the corpus is a fall-back, never a stale answer: the
+            // note added after the build is ranked, and the path says out loud that it scanned.
+            File.WriteAllText(Path.Combine(vault, "knowledge", "concepts", "panel-guvenlik-kapisi-eki.md"),
+                Frontmatter("Panel güvenlik kapısı eki") + "Panel güvenlik kapısı ek bilgisi");
+            var stale = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            var late = stale.Query(prompt, Guid.NewGuid().ToString(), 5);
+            Assert.Equal("corpus-scan:stale-index", stale.CandidateSource);
+            Assert.Contains(late.Hits, hit => hit.Name == "panel-guvenlik-kapisi-eki.md");
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    private static void Concepts(string vault)
+    {
+        var concepts = Path.Combine(vault, "knowledge", "concepts");
+        Directory.CreateDirectory(concepts);
+        File.WriteAllText(Path.Combine(concepts, "panel-guvenlik-kapisi.md"),
+            Frontmatter("Panel güvenlik kapısı") + "Panel güvenlik kapısı böyle çalışıyor");
+        for (var i = 0; i < 8; i++)
+            File.WriteAllText(Path.Combine(concepts, $"kavram-{i}.md"),
+                Frontmatter($"Kavram {i}") + $"Panel güvenlik bilgisi {i}");
+    }
+
+    private static string Frontmatter(string title) =>
+        $"---\nyazan: claude\nmodel: opus-5\ntitle: {title}\naliases: []\ntags: []\nsources: [2026-09-11.md]\ncreated: 2026-09-11\nupdated: 2026-09-11\n---\n";
+
     [Fact(DisplayName = "Y-035 · Güncel düzeltme aranır ve eski kavram top üçe giremez")]
     public void Y035_CorrectionLayerOutranksStaleConcept()
     {

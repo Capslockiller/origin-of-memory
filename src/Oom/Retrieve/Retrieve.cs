@@ -81,6 +81,16 @@ public sealed class Retrieve
     private Dictionary<string, Dictionary<string, string[]>>? _fields;
     private Dictionary<string, HashSet<string>>? _surfaces;
     private HashSet<string>? _retired;
+    private bool? _indexUsable;
+
+    /// <summary>
+    /// Where the candidates of the last <see cref="Query"/> or <see cref="Hook"/> came from:
+    /// <c>fts</c> when the FTS5 index generated them, <c>corpus-scan:*</c> when it could not and the
+    /// file scan did, with the reason attached. A retrieval path may fall back silently — a broken
+    /// index must never stop answering — but it may not be *unobservable*, or the next measurement
+    /// reports "connected to the index" while it is really scoring a directory listing.
+    /// </summary>
+    internal string CandidateSource { get; private set; } = "not-run";
 
     public Retrieve(RetrieveOptions? options = null, TurkishFold? fold = null, Notes? notes = null, IClock? clock = null)
     {
@@ -122,8 +132,8 @@ public sealed class Retrieve
         Execute(connection, transaction, "CREATE VIRTUAL TABLE notes_fts USING fts5(name UNINDEXED, title, aliases, tags, body);");
         foreach (var item in indexed)
         {
-            Insert(connection, transaction, "INSERT INTO notes(name, title, aliases, tags, body, updated) VALUES($n,$t,$a,$g,$b,$u);", item.Note, item.Text);
-            Insert(connection, transaction, "INSERT INTO notes_fts(name, title, aliases, tags, body) VALUES($n,$t,$a,$g,$b);", item.Note, item.Text);
+            Insert(connection, transaction, "INSERT INTO notes(name, title, aliases, tags, body, updated) VALUES($n,$t,$a,$g,$b,$u);", item.Note, item.Text, folded: false);
+            Insert(connection, transaction, "INSERT INTO notes_fts(name, title, aliases, tags, body) VALUES($n,$t,$a,$g,$b);", item.Note, item.Text, folded: true);
         }
 
         WriteManifest(connection, transaction, new IndexManifest((previous?.Generation ?? 0) + 1, digest, _clock.Now));
@@ -134,12 +144,84 @@ public sealed class Retrieve
     /// <summary>Raw ranking entry point (CLI <c>--json</c>, MCP); the hook gate does not apply here.</summary>
     public RetrieveResult Query(string query, string sessionId, int top = 3)
     {
-        var corpus = LoadCorpus();
-        var hits = corpus.Count == 0
-            ? []
-            : Filter(Rank(query, corpus).Take(top).ToList(), "query", query, sessionId);
-
+        var hits = Filter(Search(query, top), "query", query, sessionId);
         return new RetrieveResult(hits, Render(hits), 0);
+    }
+
+    /// <summary>
+    /// The single search path. <see cref="Query"/> (CLI <c>--json</c> and MCP) and <see cref="Hook"/>
+    /// both come through here, so candidate generation cannot differ between the two entry points
+    /// the way the output contract once did (Y-038).
+    ///
+    /// Candidates come from the FTS5 index — <see cref="Candidates"/>, which until now had no caller
+    /// outside the scar suite — whenever the index is present and its manifest still describes the
+    /// corpus on disk. The scoring itself does not move: <see cref="Score"/> ranks the same
+    /// <see cref="Note"/> objects against the same whole-corpus statistics, so the index narrows
+    /// *which* notes are scored and changes no score of any note that survives the narrowing. That
+    /// is only safe while the index cannot drop a note the ranker would have scored, which is a
+    /// property of the tokens it is built from and is pinned by a scar test, not by this comment.
+    /// </summary>
+    private IReadOnlyList<SearchHit> Search(string query, int top)
+    {
+        var corpus = LoadCorpus();
+        if (corpus.Count == 0)
+        {
+            CandidateSource = "empty-corpus";
+            return [];
+        }
+
+        return RankCandidates(query, corpus, CandidateNames(query, corpus)).Take(top).ToList();
+    }
+
+    /// <summary>
+    /// The FTS5 candidate set for one query, or <c>null</c> when the index cannot be trusted to hold
+    /// the corpus that is about to be ranked. Null is a fall-back to the full scan, never an empty
+    /// result: an absent, stale or unreadable index must degrade retrieval's speed, not its answers.
+    /// The freshness test is the same manifest digest <see cref="Build"/> writes, computed once per
+    /// instance rather than once per query — the corpus is parsed once per instance for exactly the
+    /// same reason (see <see cref="LoadCorpus"/>).
+    /// </summary>
+    private IReadOnlySet<string>? CandidateNames(string query, IReadOnlyList<Note> corpus)
+    {
+        if (_indexUsable == false)
+            return null;
+
+        if (IndexFile() is not { } path || !File.Exists(path))
+        {
+            // A missing index must not be created here: `Data Source=` alone would create an empty
+            // database file, and a read path may not bring a write into being.
+            _indexUsable = false;
+            CandidateSource = "corpus-scan:no-index";
+            return null;
+        }
+
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            connection.Open();
+            if (_indexUsable is null)
+            {
+                var digest = ManifestDigest([.. corpus.Select(note => new IndexedNote(note, _notes.IndexableText(note)))]);
+                _indexUsable = ReadManifest(connection) is { } manifest
+                    && string.Equals(digest, manifest.Digest, StringComparison.Ordinal);
+            }
+
+            if (_indexUsable == false)
+            {
+                CandidateSource = "corpus-scan:stale-index";
+                return null;
+            }
+
+            var names = Candidates(connection, query, corpus.Count).ToHashSet(StringComparer.Ordinal);
+            CandidateSource = "fts";
+            return names;
+        }
+        catch (SqliteException error)
+        {
+            _indexUsable = false;
+            CandidateSource = $"corpus-scan:sqlite-{error.SqliteErrorCode}";
+            return null;
+        }
     }
 
     /// <summary>
@@ -155,9 +237,7 @@ public sealed class Retrieve
         if (!string.IsNullOrEmpty(invokedBy) || GateReason(prompt) is not null)
             return new RetrieveResult([], string.Empty, 0);
 
-        var corpus = LoadCorpus();
-        var candidates = corpus.Count == 0 ? [] : Rank(prompt, corpus).Take(_options.Top).ToList();
-        var kept = candidates.Where(hit => ShouldInject(prompt, hit)).ToList();
+        var kept = Search(prompt, _options.Top).Where(hit => ShouldInject(prompt, hit)).ToList();
         var hits = Filter(kept, "hook", prompt, sessionId);
         return new RetrieveResult(hits, Render(hits), 0);
     }
@@ -168,6 +248,19 @@ public sealed class Retrieve
         if (!string.Equals(mode, "bm25", StringComparison.Ordinal))
             throw new ArgumentException($"bilinmeyen getirme modu: {mode}", nameof(mode));
 
+        return RankCandidates(query, notes, null);
+    }
+
+    /// <summary>
+    /// <see cref="Rank"/> restricted to a candidate set. The statistics stay whole-corpus — document
+    /// count, average length and per-term document frequency all come from <paramref name="notes"/>
+    /// and not from the candidates — because BM25's idf is a property of the corpus, not of the
+    /// shortlist. Score a shortlist against the shortlist's own statistics and every number moves;
+    /// score it against the corpus's and a narrowed run is byte-identical to a full one for every
+    /// note the shortlist kept.
+    /// </summary>
+    private IReadOnlyList<SearchHit> RankCandidates(string query, IReadOnlyList<Note> notes, IReadOnlySet<string>? candidates)
+    {
         var terms = QueryTerms(query);
         if (terms.Length == 0 || notes.Count == 0)
             return [];
@@ -180,6 +273,9 @@ public sealed class Retrieve
         var hits = new List<SearchHit>();
         foreach (var note in notes)
         {
+            if (candidates is not null && !candidates.Contains(note.Name))
+                continue;
+
             var score = terms.Sum(term => Score(term, note.Name, fields[note.Name], stats));
             if (score <= 0)
                 continue;
@@ -345,6 +441,7 @@ public sealed class Retrieve
             _fields = null;
             _surfaces = null;
             _retired = null;
+            _indexUsable = null;
         }
 
         var directory = _options.VaultPath is null ? null : Path.Combine(_options.VaultPath, "knowledge", "concepts");
@@ -499,6 +596,13 @@ public sealed class Retrieve
     private static string ManifestDigest(IReadOnlyList<IndexedNote> corpus)
     {
         var manifest = new StringBuilder();
+
+        // The digest covers the index FORMAT as well as its content. Without this line a tree that
+        // changes how `notes_fts` is tokenized would hash an unchanged corpus to an unchanged digest,
+        // `Build` would skip the rebuild, and every existing installation would keep an index the new
+        // query path can no longer read — a silent, machine-local retrieval outage. Bump the tag
+        // whenever `Shape` changes what reaches the index.
+        AppendManifestField(manifest, "fts-format=fold-tokens-v2");
         foreach (var item in corpus.OrderBy(item => item.Note.Name, StringComparer.Ordinal))
         {
             // These are exactly the values inserted into `notes` and `notes_fts`, length-prefixed
@@ -566,28 +670,51 @@ public sealed class Retrieve
         command.ExecuteNonQuery();
     }
 
-    private static void Insert(SqliteConnection connection, SqliteTransaction transaction, string sql, Note note, string body)
+    private void Insert(SqliteConnection connection, SqliteTransaction transaction, string sql, Note note, string body, bool folded)
     {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = sql;
         command.Parameters.AddWithValue("$n", note.Name);
-        command.Parameters.AddWithValue("$t", note.Title);
-        command.Parameters.AddWithValue("$a", string.Join(' ', note.Aliases));
-        command.Parameters.AddWithValue("$g", string.Join(' ', note.Tags));
-        command.Parameters.AddWithValue("$b", body);
+        command.Parameters.AddWithValue("$t", Shape(note.Title, folded));
+        command.Parameters.AddWithValue("$a", Shape(string.Join(' ', note.Aliases), folded));
+        command.Parameters.AddWithValue("$g", Shape(string.Join(' ', note.Tags), folded));
+        command.Parameters.AddWithValue("$b", Shape(body, folded));
         if (sql.Contains("updated", StringComparison.Ordinal))
             command.Parameters.AddWithValue("$u", note.Updated.ToString("yyyy-MM-dd"));
 
         command.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// What a column receives. <c>notes</c> keeps the note's own text, because it is the readable
+    /// copy. <c>notes_fts</c> receives <see cref="TurkishFold.TokenizeAll"/>'s output instead of that
+    /// text, so the index is built out of exactly the tokens a query is tokenized into.
+    ///
+    /// FTS5's own <c>unicode61</c> tokenizer is not that tokenizer, and the gap was not academic: it
+    /// strips the diacritic from <c>güvenlik</c> and keeps the dotless <c>ı</c> of <c>kapısı</c>,
+    /// while <see cref="TurkishFold"/> keeps the diacritic and folds <c>ı</c> onto <c>i</c> (Y-044).
+    /// A search for <c>kapısı</c> therefore matched nothing in the index while the in-process ranker
+    /// found the note, and the five-character prefixes the fold emits for Turkish suffixes were not
+    /// in the index at all. That is precisely the mismatch <see cref="TurkishFold"/>'s own summary
+    /// forbids — "a note can never be written with one folding and searched with another" — and it
+    /// is why <see cref="Candidates"/> could not safely be given a caller before now.
+    /// </summary>
+    private string Shape(string value, bool folded) => folded ? string.Join(' ', _fold.TokenizeAll(value)) : value;
+
     /// <summary>Candidate selection over the FTS5 index with the documented bm25 weights.</summary>
     internal IReadOnlyList<string> Candidates(SqliteConnection connection, string query, int limit)
     {
+        // Every term is quoted, so a token that happens to spell an FTS5 operator is read as the word
+        // it is rather than as syntax, and a malformed query cannot become a SqliteException on the
+        // read path. An empty token list would make `MATCH ''` a syntax error, so it returns nothing.
+        var terms = Tokenize(query).Select(term => $"\"{term.Replace("\"", "\"\"", StringComparison.Ordinal)}\"").ToArray();
+        if (terms.Length == 0)
+            return [];
+
         using var command = connection.CreateCommand();
         command.CommandText = $"SELECT name FROM notes_fts WHERE notes_fts MATCH $q ORDER BY {Bm25Weights} LIMIT $l;";
-        command.Parameters.AddWithValue("$q", string.Join(" OR ", Tokenize(query)));
+        command.Parameters.AddWithValue("$q", string.Join(" OR ", terms));
         command.Parameters.AddWithValue("$l", limit);
         using var reader = command.ExecuteReader();
         var names = new List<string>();
