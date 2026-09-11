@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
@@ -16,9 +17,45 @@ public sealed record RetrieveOptions(
     string? VaultPath = null,
     string? IndexPath = null,
     string CompanionDir = "🔮 850-Companion",
-    double CorrectionBoost = 4.0);
+    double CorrectionBoost = 4.0,
+    string Client = "claude");
 
-internal sealed record ServedKey(string Entry, string SessionId, string Signature, string Note);
+/// <summary>
+/// The scope one served note is remembered under. Every component is a discriminator that must be
+/// able to let memory through again:
+/// <list type="bullet">
+/// <item><c>Vault</c> — two vaults on one machine share <c>%LOCALAPPDATA%</c>, never a silence.</item>
+/// <item><c>Client</c> and <c>Entry</c> — Claude having been shown a note is not Codex having been
+/// shown it, and the CLI's <c>--json</c> output is not the hook's injection.</item>
+/// <item><c>SessionId</c> — <b>this is what keeps a seven-day silence from spreading.</b> The window
+/// is seven days long, so without the session in the key one delivery on Monday would withhold that
+/// note from every new conversation until the following Monday. A new session has never been told
+/// anything; it starts with the whole vault available to it.</item>
+/// <item><c>Signature</c> — a different question in the same session sees the same note again
+/// (Y-039). The plan for this table named vault+client+session+note+hash and left this out; Y-039
+/// is a live scar over exactly that, so the signature stays in the key.</item>
+/// <item><c>ContentHash</c> — the hash of the text that was actually rendered. A note whose body has
+/// been rewritten is new memory, not a repeat, and is served again even to the same question.</item>
+/// </list>
+/// </summary>
+internal sealed record ServedKey(string Vault, string Client, string Entry, string SessionId, string Signature, string Note, string ContentHash);
+
+/// <summary>
+/// What is known about one served note's fate. The three are not decoration: a hook event is a whole
+/// process lifetime, and the process can die between rendering a block and the block reaching the
+/// model.
+/// </summary>
+public enum ServedStatus
+{
+    /// <summary>The block was built and handed to the caller. Nobody has said it left the process.</summary>
+    Prepared,
+
+    /// <summary>The caller acknowledged that the block actually left the process (<see cref="Retrieve.AcknowledgeDelivery"/>).</summary>
+    Emitted,
+
+    /// <summary>A <see cref="Prepared"/> row whose process is gone without ever acknowledging. Not a delivery.</summary>
+    Uncertain
+}
 
 /// <summary>
 /// Corpus statistics for one query, on the axis SQLite's <c>bm25()</c> uses: one row count, one
@@ -71,7 +108,19 @@ public sealed class Retrieve
     private static readonly (string Field, double Weight)[] Weights =
         [("title", TitleWeight), ("aliases", AliasWeight), ("tags", TagWeight), ("body", BodyWeight)];
 
-    private static readonly Dictionary<ServedKey, DateTimeOffset> Served = [];
+    /// <summary>
+    /// What this instance has already handed to its caller. Instance-scoped, not static, because in
+    /// production one process is one <see cref="Retrieve"/> and one hook event — a static dictionary
+    /// was a per-process cache pretending to be a seven-day ledger, and it died with the executable
+    /// after every single hook event, which is why nothing was ever actually de-duplicated.
+    /// Suppressing on this layer is honest: the block was returned to the caller, we watched it
+    /// happen. Across a process boundary nothing was watched, which is what
+    /// <see cref="ServedLedger"/> is careful about.
+    /// </summary>
+    private readonly Dictionary<ServedKey, DateTimeOffset> _served = [];
+
+    /// <summary>Keys this instance wrote as <see cref="ServedStatus.Prepared"/> and has not acknowledged.</summary>
+    private readonly List<ServedKey> _prepared = [];
     private static readonly UTF8Encoding Utf8 = new(false);
     private readonly RetrieveOptions _options;
     private readonly TurkishFold _fold;
@@ -102,44 +151,103 @@ public sealed class Retrieve
     }
 
     /// <summary>
-    /// Rebuilds the FTS5 index over <c>knowledge/concepts/*.md</c> (non-recursive). The rebuild is
-    /// skipped when the concept manifest digest is unchanged.
+    /// Rebuilds the FTS5 index over <c>knowledge/concepts/*.md</c> (non-recursive) and then checks
+    /// its own work. The rebuild is skipped when the concept manifest digest is unchanged; the
+    /// verification is never skipped, so a "skipped, nothing to do" answer is a measured answer and
+    /// not an assumption. The returned <see cref="VerifyResult.ExitCode"/> is the verifier's verdict:
+    /// 0 when the index matches the corpus entry for entry, 1 when it does not.
+    ///
+    /// Three things this method no longer does, all of them the same illness:
+    /// <list type="number">
+    /// <item>It does not create a directory. <c>Directory.CreateDirectory</c> here minted one state
+    /// root per test run and one per <c>compile</c> against an uninstalled workspace — a write path
+    /// that brings a root into existence as a side effect of asking to index (Y-171).</item>
+    /// <item>It does not issue DDL. <c>StateStore</c> owns <c>notes</c>, <c>notes_fts</c> and
+    /// <c>oom_index_meta</c>, so there is one schema owner of this file and not three.</item>
+    /// <item>It does not <c>DROP</c>. A rebuild empties and refills the index; it does not destroy
+    /// tables somebody else is responsible for, in a file that also carries the owner's ledger
+    /// (Y-172).</item>
+    /// </list>
     /// </summary>
     public VerifyResult Build()
     {
         var corpus = LoadCorpus(refresh: true);
-        if (IndexFile() is not { } indexPath)
+        if (OpenIndexForWrite() is not { } connection)
             return new VerifyResult([], [], 0);
 
-        Directory.CreateDirectory(Path.GetDirectoryName(indexPath)!);
-
-        // IndexableText is both what FTS receives and what the manifest covers. Prepare it once
-        // so content hashing does not add a second note-body pass to a rebuild.
-        var indexed = corpus.Select(note => new IndexedNote(note, _notes.IndexableText(note))).ToArray();
-        var digest = ManifestDigest(indexed);
-
-        using var connection = new SqliteConnection($"Data Source={indexPath}");
-        connection.Open();
-        Execute(connection, "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;");
-        Execute(connection, "CREATE TABLE IF NOT EXISTS oom_index_meta(generation INTEGER NOT NULL, manifest_digest TEXT NOT NULL, built_at TEXT NOT NULL);");
-        var previous = ReadManifest(connection);
-        if (previous is not null && string.Equals(digest, previous.Digest, StringComparison.Ordinal))
-            return new VerifyResult([], [], 0);
-
-        using var transaction = connection.BeginTransaction();
-        Execute(connection, transaction, "DROP TABLE IF EXISTS notes_fts; DROP TABLE IF EXISTS notes;");
-        Execute(connection, transaction, "CREATE TABLE notes(name TEXT PRIMARY KEY, title TEXT, aliases TEXT, tags TEXT, body TEXT, updated TEXT);");
-        Execute(connection, transaction, "CREATE VIRTUAL TABLE notes_fts USING fts5(name UNINDEXED, title, aliases, tags, body);");
-        foreach (var item in indexed)
+        using (connection)
         {
-            Insert(connection, transaction, "INSERT INTO notes(name, title, aliases, tags, body, updated) VALUES($n,$t,$a,$g,$b,$u);", item.Note, item.Text, folded: false);
-            Insert(connection, transaction, "INSERT INTO notes_fts(name, title, aliases, tags, body) VALUES($n,$t,$a,$g,$b);", item.Note, item.Text, folded: true);
-        }
+            // IndexableText is both what FTS receives and what the manifest covers. Prepare it once
+            // so content hashing does not add a second note-body pass to a rebuild.
+            var indexed = corpus.Select(note => new IndexedNote(note, _notes.IndexableText(note))).ToArray();
+            var digest = ManifestDigest(indexed);
+            var previous = ReadManifest(connection);
 
-        WriteManifest(connection, transaction, new IndexManifest((previous?.Generation ?? 0) + 1, digest, _clock.Now));
-        transaction.Commit();
-        return new VerifyResult([], [], 0);
+            if (previous is null || !string.Equals(digest, previous.Digest, StringComparison.Ordinal))
+            {
+                using var transaction = connection.BeginTransaction();
+                Execute(connection, transaction, "DELETE FROM notes_fts; DELETE FROM notes;");
+                foreach (var item in indexed)
+                {
+                    Insert(connection, transaction, "INSERT INTO notes(name, title, aliases, tags, body, updated) VALUES($n,$t,$a,$g,$b,$u);", item.Note, item.Text, folded: false);
+                    Insert(connection, transaction, "INSERT INTO notes_fts(name, title, aliases, tags, body) VALUES($n,$t,$a,$g,$b);", item.Note, item.Text, folded: true);
+                }
+
+                WriteManifest(connection, transaction, new IndexManifest((previous?.Generation ?? 0) + 1, digest, _clock.Now));
+                transaction.Commit();
+            }
+
+            return IndexVerifier.Verify(connection, indexed, digest);
+        }
     }
+
+    /// <summary>
+    /// The index as an independent question: does the file on disk still hold exactly this corpus?
+    /// Read-only, creates nothing, and is the same code <see cref="Build"/> grades itself with and
+    /// the same code <see cref="Doctor.VerifyIndex(Retrieve)"/> reports — one answer to "is the
+    /// index sound", never two opinions that can disagree.
+    /// </summary>
+    public VerifyResult VerifyIndex()
+    {
+        var corpus = LoadCorpus();
+        if (IndexFile() is not { } path || !File.Exists(path))
+            return new VerifyResult([], [], 0);
+
+        var indexed = corpus.Select(note => new IndexedNote(note, _notes.IndexableText(note))).ToArray();
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            connection.Open();
+            return IndexVerifier.Verify(connection, indexed, ManifestDigest(indexed));
+        }
+        catch (SqliteException)
+        {
+            // An index that cannot be opened holds none of the corpus; saying so is the honest answer.
+            return new VerifyResult([.. indexed.Select(item => item.Note.Name).Order(StringComparer.OrdinalIgnoreCase)], [], 1);
+        }
+    }
+
+    /// <summary>
+    /// The write handle on the index, or <c>null</c> when there is nowhere to write that already
+    /// exists. <see cref="StateStore"/> provisions the schema, so the index tables arrive on the
+    /// same versioned ladder as every other table in the file.
+    /// </summary>
+    private static SqliteConnection? OpenIndexForWriteAt(string? path)
+    {
+        if (path is null)
+            return null;
+
+        // Y-171: an existing directory is the condition, not a directory this call makes. A machine
+        // that has run `oom install` has its state root; a temporary workspace that never installed
+        // must not acquire one because something asked for an index.
+        var directory = Path.GetDirectoryName(path);
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            return null;
+
+        return StateStore.Open(path, StateAccess.ReadWrite).Connection;
+    }
+
+    private SqliteConnection? OpenIndexForWrite() => OpenIndexForWriteAt(IndexFile());
 
     /// <summary>Raw ranking entry point (CLI <c>--json</c>, MCP); the hook gate does not apply here.</summary>
     public RetrieveResult Query(string query, string sessionId, int top = 3)
@@ -369,45 +477,95 @@ public sealed class Retrieve
         return words.Length > 0 && pathy * 2 >= words.Length ? "skip:intent" : null;
     }
 
+    /// <summary>
+    /// The served-note gate. Two layers, and the difference between them is the whole point:
+    /// <list type="bullet">
+    /// <item><b>this process</b> — <see cref="_served"/>. The block was returned to the caller in
+    /// front of us, so a repeat inside one process is a repeat (Y-039, Y-110).</item>
+    /// <item><b>earlier processes</b> — <see cref="ServedLedger"/>, and only rows it can show were
+    /// <see cref="ServedStatus.Emitted"/>. A row left <see cref="ServedStatus.Prepared"/> by a
+    /// process that is gone becomes <see cref="ServedStatus.Uncertain"/> and suppresses nothing: an
+    /// unacknowledged delivery is not a delivery, and treating it as one withholds the owner's
+    /// memory on the strength of something nobody observed.</item>
+    /// </list>
+    /// </summary>
     private IReadOnlyList<SearchHit> Filter(IReadOnlyList<SearchHit> hits, string entry, string query, string sessionId)
     {
         if (hits.Count == 0)
             return hits;
 
         var signature = Signature(query);
+        var now = _clock.Now;
+        var cutoff = now.AddDays(-_options.DedupeDays);
         var kept = new List<SearchHit>();
         var total = 0;
-        lock (Served)
+
+        using var ledger = ServedLedger.Open(IndexFile());
+        ledger?.Prune(cutoff);
+        foreach (var stale in _served.Where(pair => pair.Value < cutoff).Select(pair => pair.Key).ToArray())
+            _served.Remove(stale);
+
+        foreach (var hit in hits)
         {
-            Prune();
-            foreach (var hit in hits)
-            {
-                if (hit.Superseded)
-                    continue;
+            if (hit.Superseded)
+                continue;
 
-                var key = new ServedKey(entry, sessionId, signature, hit.Name);
-                if (Served.ContainsKey(key))
-                    continue;
+            var text = Trim(hit.Text, Math.Min(_options.PerNoteChars, Math.Max(0, _options.TotalChars - total)));
+            if (text.Length == 0)
+                break;
 
-                var text = Trim(hit.Text, Math.Min(_options.PerNoteChars, Math.Max(0, _options.TotalChars - total)));
-                if (text.Length == 0)
-                    break;
+            var key = new ServedKey(VaultScope, ClientScope, entry, sessionId, signature, hit.Name, ContentHash(text));
+            if (_served.ContainsKey(key) || ledger?.WasEmitted(key, cutoff) == true)
+                continue;
 
-                total += text.Length;
-                Served[key] = _clock.Now;
-                kept.Add(hit with { Text = text });
-            }
+            total += text.Length;
+            _served[key] = now;
+            if (ledger?.Prepare(key, now) == true)
+                _prepared.Add(key);
+
+            kept.Add(hit with { Text = text });
         }
 
         return kept;
     }
 
-    private void Prune()
+    /// <summary>
+    /// Records that everything this instance prepared actually left the process, and returns how many
+    /// rows that was. Until this is called the rows say <see cref="ServedStatus.Prepared"/>, and the
+    /// next process reads them as <see cref="ServedStatus.Uncertain"/> — so a run that renders a
+    /// memory block and then dies, or is killed, or has its stdout discarded, withholds nothing from
+    /// the next one.
+    /// </summary>
+    /// <remarks>
+    /// This is the acknowledgement half of the contract and it currently has no caller in
+    /// <c>src/</c>: the one place that knows the block reached stdout is <c>Program.cs</c>, which
+    /// this lane may not edit. Until that single line exists, every persisted row ages into
+    /// <see cref="ServedStatus.Uncertain"/> and the cross-process dedupe deliberately suppresses
+    /// nothing — memory is repeated rather than silently withheld, which is the correct direction to
+    /// fail in.
+    /// </remarks>
+    public int AcknowledgeDelivery()
     {
-        var cutoff = _clock.Now.AddDays(-_options.DedupeDays);
-        foreach (var stale in Served.Where(pair => pair.Value < cutoff).Select(pair => pair.Key).ToArray())
-            Served.Remove(stale);
+        if (_prepared.Count == 0)
+            return 0;
+
+        using var ledger = ServedLedger.Open(IndexFile());
+        var acknowledged = ledger?.Acknowledge(_prepared, _clock.Now) ?? 0;
+        _prepared.Clear();
+        return acknowledged;
     }
+
+    /// <summary>Which vault a served note belongs to; two vaults on one machine never share a silence.</summary>
+    private string VaultScope => _options.VaultPath is { Length: > 0 } vault ? VaultIdentity.Hash(VaultIdentity.Canonical(vault)) : string.Empty;
+
+    /// <summary>Which assistant was served. <c>OOM_CLIENT</c> lets a second client say so without a rebuild.</summary>
+    private string ClientScope =>
+        Environment.GetEnvironmentVariable("OOM_CLIENT") is { Length: > 0 } client
+            ? client
+            : _options.Client is { Length: > 0 } configured ? configured : "claude";
+
+    /// <summary>The hash of the text that was actually rendered, not of the note it came from.</summary>
+    private static string ContentHash(string text) => Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(text)))[..16];
 
     private string Render(IReadOnlyList<SearchHit> hits)
     {
@@ -723,4 +881,259 @@ public sealed class Retrieve
 
         return names;
     }
+}
+
+/// <summary>
+/// The served-note ledger, on disk, in <c>retrieve_served</c>. It exists because production spawns a
+/// fresh <c>oom.exe</c> for every hook event: an in-memory dictionary is emptied between one prompt
+/// and the next, so the seven-day dedupe the spec describes had never de-duplicated anything.
+///
+/// It never creates a file. A vault that has not been installed has no state root, and a retrieval
+/// must not be the thing that mints one (Y-161..Y-163); with no ledger the dedupe simply falls back
+/// to the process-local layer, which is what the old code had everywhere.
+/// </summary>
+internal sealed class ServedLedger : IDisposable
+{
+    private readonly SqliteConnection _connection;
+    private readonly int _pid = Environment.ProcessId;
+
+    private ServedLedger(SqliteConnection connection) => _connection = connection;
+
+    internal static ServedLedger? Open(string? path)
+    {
+        if (path is null || !File.Exists(path))
+            return null;
+
+        SqliteConnection? connection = null;
+        try
+        {
+            connection = new SqliteConnection($"Data Source={path}");
+            connection.Open();
+
+            // A hook event can land while `oom sweep` holds the write handle. Wait rather than
+            // fail: the dedupe degrading to silence is a repeated note, which is recoverable; the
+            // dedupe throwing is a hook that returns nothing, which is not.
+            using (var busy = connection.CreateCommand())
+            {
+                busy.CommandText = "PRAGMA busy_timeout=5000;";
+                busy.ExecuteNonQuery();
+            }
+
+            if (!StateStore.TableExists(connection, "retrieve_served") || !ColumnExists(connection, "status"))
+            {
+                connection.Dispose();
+                return null;
+            }
+
+            var ledger = new ServedLedger(connection);
+            ledger.Reclassify();
+            return ledger;
+        }
+        catch (SqliteException)
+        {
+            // A locked or damaged state database must degrade the dedupe, never the answer.
+            connection?.Dispose();
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Every row another process left <see cref="ServedStatus.Prepared"/> becomes
+    /// <see cref="ServedStatus.Uncertain"/> the moment this process opens the ledger. Nobody
+    /// acknowledged those blocks and nobody ever will; the table says so out loud rather than
+    /// letting them read as deliveries.
+    /// </summary>
+    private void Reclassify() => Execute(
+        "UPDATE retrieve_served SET status = $uncertain WHERE status = $prepared AND pid <> $pid",
+        ("$uncertain", Name(ServedStatus.Uncertain)), ("$prepared", Name(ServedStatus.Prepared)), ("$pid", _pid));
+
+    /// <summary>Whether this exact scope was acknowledged as delivered inside the window.</summary>
+    internal bool WasEmitted(ServedKey key, DateTimeOffset cutoff)
+    {
+        using var command = Command(
+            "SELECT 1 FROM retrieve_served WHERE status = $emitted AND ts >= $cutoff AND " +
+            "vault = $vault AND client = $client AND entry = $entry AND session_id = $session AND " +
+            "query_sig = $sig AND note = $note AND content_hash = $hash",
+            [("$emitted", Name(ServedStatus.Emitted)), ("$cutoff", Stamp(cutoff)), .. Scope(key)]);
+        return command.ExecuteScalar() is not null;
+    }
+
+    /// <summary>Records the block as built but unacknowledged. Returns whether the row was written.</summary>
+    internal bool Prepare(ServedKey key, DateTimeOffset now)
+    {
+        try
+        {
+            using var command = Command(
+                "INSERT INTO retrieve_served(vault, client, entry, session_id, query_sig, note, content_hash, ts, status, pid, acked_ts) " +
+                "VALUES($vault, $client, $entry, $session, $sig, $note, $hash, $ts, $prepared, $pid, NULL) " +
+                "ON CONFLICT(vault, client, entry, session_id, query_sig, note, content_hash) DO UPDATE SET " +
+                "ts = $ts, status = $prepared, pid = $pid, acked_ts = NULL",
+                [("$ts", Stamp(now)), ("$prepared", Name(ServedStatus.Prepared)), ("$pid", _pid), .. Scope(key)]);
+            return command.ExecuteNonQuery() > 0;
+        }
+        catch (SqliteException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Turns this process's own prepared rows into acknowledged deliveries.</summary>
+    internal int Acknowledge(IReadOnlyList<ServedKey> keys, DateTimeOffset now)
+    {
+        var acknowledged = 0;
+        foreach (var key in keys)
+        {
+            using var command = Command(
+                "UPDATE retrieve_served SET status = $emitted, acked_ts = $ts WHERE pid = $pid AND status = $prepared AND " +
+                "vault = $vault AND client = $client AND entry = $entry AND session_id = $session AND " +
+                "query_sig = $sig AND note = $note AND content_hash = $hash",
+                [("$emitted", Name(ServedStatus.Emitted)), ("$prepared", Name(ServedStatus.Prepared)), ("$ts", Stamp(now)), ("$pid", _pid), .. Scope(key)]);
+            acknowledged += command.ExecuteNonQuery();
+        }
+
+        return acknowledged;
+    }
+
+    /// <summary>The seven-day window, applied where the rows are; <c>State.SweepRetention</c> prunes the same table.</summary>
+    internal void Prune(DateTimeOffset cutoff) =>
+        Execute("DELETE FROM retrieve_served WHERE ts < $cutoff", ("$cutoff", Stamp(cutoff)));
+
+    public void Dispose() => _connection.Dispose();
+
+    private static (string Name, object Value)[] Scope(ServedKey key) =>
+    [
+        ("$vault", key.Vault), ("$client", key.Client), ("$entry", key.Entry), ("$session", key.SessionId),
+        ("$sig", key.Signature), ("$note", key.Note), ("$hash", key.ContentHash)
+    ];
+
+    private static bool ColumnExists(SqliteConnection connection, string column)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM pragma_table_info('retrieve_served') WHERE name = $name";
+        command.Parameters.AddWithValue("$name", column);
+        return command.ExecuteScalar() is not null;
+    }
+
+    internal static string Name(ServedStatus status) => status.ToString().ToLowerInvariant();
+
+    private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
+
+    private void Execute(string sql, params (string Name, object Value)[] parameters)
+    {
+        using var command = Command(sql, parameters);
+        command.ExecuteNonQuery();
+    }
+
+    private SqliteCommand Command(string sql, (string Name, object Value)[] parameters)
+    {
+        var command = _connection.CreateCommand();
+        command.CommandText = sql;
+        foreach (var (name, value) in parameters)
+            command.Parameters.AddWithValue(name, value);
+        return command;
+    }
+}
+
+/// <summary>
+/// The one answer to "does the index still hold this corpus". <see cref="Retrieve.Build"/> grades
+/// itself with it, <see cref="Retrieve.VerifyIndex"/> asks it on its own, and
+/// <see cref="Doctor.VerifyIndex(Retrieve)"/> reports it — so there is no second opinion that can
+/// call an index sound while the first one calls it broken.
+/// </summary>
+internal static class IndexVerifier
+{
+    /// <summary>The name-set comparison, which is all a caller holding two lists of names can check.</summary>
+    internal static VerifyResult Compare(IReadOnlyList<string> corpus, IReadOnlyList<string> index)
+    {
+        ArgumentNullException.ThrowIfNull(corpus);
+        ArgumentNullException.ThrowIfNull(index);
+        var corpusSet = corpus.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var indexSet = index.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missing = corpusSet.Except(indexSet, StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var extra = indexSet.Except(corpusSet, StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new VerifyResult(missing, extra, missing.Length == 0 && extra.Length == 0 ? 0 : 1);
+    }
+
+    /// <summary>
+    /// The full check against an open index: every corpus note present in both <c>notes</c> and
+    /// <c>notes_fts</c>, no entry in either that the corpus does not have, every stored field equal
+    /// to the field that was indexed, and the manifest digest equal to the corpus's own digest.
+    ///
+    /// A note whose stored row no longer matches the corpus is reported as <c>Missing</c>: the index
+    /// does not contain the corpus's entry for it, whatever else it contains under that name. A
+    /// manifest digest that disagrees while every row matches leaves both lists empty and still
+    /// returns exit code 1 — the verdict is the exit code, and it never says "sound" on a guess.
+    /// </summary>
+    internal static VerifyResult Verify(SqliteConnection connection, IReadOnlyList<IndexedNote> corpus, string digest)
+    {
+        if (!StateStore.TableExists(connection, "notes") || !StateStore.TableExists(connection, "notes_fts"))
+            return new VerifyResult([.. corpus.Select(item => item.Note.Name).Order(StringComparer.OrdinalIgnoreCase)], [], 1);
+
+        var stored = ReadRows(connection);
+        var indexedNames = ReadFtsNames(connection);
+        var expected = corpus.ToDictionary(item => item.Note.Name, Fields, StringComparer.Ordinal);
+
+        var missing = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var extra = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, fields) in expected)
+        {
+            if (!indexedNames.Contains(name) || !stored.TryGetValue(name, out var row) || !string.Equals(row, fields, StringComparison.Ordinal))
+                missing.Add(name);
+        }
+
+        foreach (var name in stored.Keys.Concat(indexedNames).Where(name => !expected.ContainsKey(name)))
+            extra.Add(name);
+
+        var manifest = ReadDigest(connection);
+        var sound = missing.Count == 0 && extra.Count == 0 && string.Equals(manifest, digest, StringComparison.Ordinal);
+        return new VerifyResult([.. missing], [.. extra], sound ? 0 : 1);
+    }
+
+    /// <summary>The indexed fields of one note, in the same order and with the same length prefixes the manifest uses.</summary>
+    private static string Fields(IndexedNote item) => Join(
+        item.Note.Title, string.Join(' ', item.Note.Aliases), string.Join(' ', item.Note.Tags), item.Text,
+        item.Note.Updated.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+
+    private static string Join(params string[] values)
+    {
+        var builder = new StringBuilder();
+        foreach (var value in values)
+            builder.Append(value.Length).Append(':').Append(value).Append('\n');
+        return builder.ToString();
+    }
+
+    private static Dictionary<string, string> ReadRows(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name, title, aliases, tags, body, updated FROM notes";
+        using var reader = command.ExecuteReader();
+        var rows = new Dictionary<string, string>(StringComparer.Ordinal);
+        while (reader.Read())
+            rows[reader.GetString(0)] = Join(Text(reader, 1), Text(reader, 2), Text(reader, 3), Text(reader, 4), Text(reader, 5));
+        return rows;
+    }
+
+    private static HashSet<string> ReadFtsNames(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM notes_fts";
+        using var reader = command.ExecuteReader();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names;
+    }
+
+    private static string? ReadDigest(SqliteConnection connection)
+    {
+        if (!StateStore.TableExists(connection, "oom_index_meta"))
+            return null;
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT manifest_digest FROM oom_index_meta ORDER BY generation DESC LIMIT 1;";
+        return command.ExecuteScalar() as string;
+    }
+
+    private static string Text(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
 }

@@ -102,15 +102,32 @@ public sealed class Doctor
             : Item("install", HealthLevel.Warning, "binary-drift", installedPath, "Kurulu ikilinin özeti yayımlanan sürümle eşleşmiyor.");
     }
 
-    public VerifyResult VerifyIndex(IReadOnlyList<string> corpus, IReadOnlyList<string> index)
+    /// <summary>
+    /// The name-set comparison, delegated to <see cref="IndexVerifier"/> — doctor has no private copy
+    /// of the rule any more (Y-032 still measures this signature).
+    /// </summary>
+    public VerifyResult VerifyIndex(IReadOnlyList<string> corpus, IReadOnlyList<string> index) =>
+        IndexVerifier.Compare(corpus, index);
+
+    /// <summary>
+    /// "Is the index sound?", asked of the index itself. This is the same verifier
+    /// <see cref="Retrieve.Build"/> grades its own rebuild with, called through the same entry point:
+    /// doctor and the builder cannot disagree, because there is only one of them.
+    /// </summary>
+    public VerifyResult VerifyIndex(Retrieve retrieve)
     {
-        ArgumentNullException.ThrowIfNull(corpus);
-        ArgumentNullException.ThrowIfNull(index);
-        var corpusSet = corpus.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var indexSet = index.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var missing = corpusSet.Except(indexSet, StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
-        var extra = indexSet.Except(corpusSet, StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
-        return new VerifyResult(missing, extra, missing.Length == 0 && extra.Length == 0 ? 0 : 1);
+        ArgumentNullException.ThrowIfNull(retrieve);
+        return retrieve.VerifyIndex();
+    }
+
+    /// <summary>One health item carrying the verifier's verdict, for a normal <see cref="Check"/>.</summary>
+    public HealthItem IndexHealth(Retrieve retrieve)
+    {
+        var verdict = VerifyIndex(retrieve);
+        return verdict.ExitCode == 0
+            ? Item("state", HealthLevel.Info, "index-sound", "notes_fts", "Arama indeksi korpusla eşleşiyor.")
+            : Item("state", HealthLevel.Error, "index-mismatch", "notes_fts",
+                $"Arama indeksi korpusla eşleşmiyor: {verdict.Missing.Count} eksik, {verdict.Extra.Count} fazla — oom sweep.");
     }
 
     public IReadOnlyList<HealthItem> ValidateReleaseClaims(IReadOnlyDictionary<string, string> claims)

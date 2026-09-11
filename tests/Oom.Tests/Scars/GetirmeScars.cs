@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
 
@@ -247,5 +248,189 @@ public sealed class GetirmeScars
         Assert.Equal(fold.Fold("İstanbul"), fold.Fold("istanbul"));
         Assert.Equal(fold.Fold("ISTANBUL"), fold.Fold("ıstanbul"));
         Assert.Equal(fold.Tokenize("İstanbul"), fold.Tokenize("ISTANBUL"));
+    }
+
+    // yazan: claude · opus-5
+    /// <summary>
+    /// The served-note dedupe used to live in a <c>static readonly Dictionary</c> inside
+    /// <see cref="Retrieve"/>, and production spawns a fresh <c>oom.exe</c> for every hook event: the
+    /// dictionary was empty again on the very next prompt, so nothing was ever de-duplicated across
+    /// that process boundary and <c>retrieve_served</c> stayed unwritten by every code path in
+    /// <c>src/</c>. Instance <c>b</c> below is a second open of the same <c>state.db</c> file — not a
+    /// second OS process — and it shares no in-memory state with instance <c>a</c>:
+    /// <see cref="Retrieve"/>'s <c>_served</c> dictionary is instance-scoped precisely so this test
+    /// measures the file, not the process. If <c>b</c> still saw the note, the file would not be
+    /// carrying the silence at all.
+    /// </summary>
+    [Fact(DisplayName = "Y-173 · Onaylanan teslim ikinci süreçte de susar")]
+    public void Y173_AcknowledgedDeliverySilencesASecondOpenOfTheSameFile()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            Concepts(vault);
+            using (var _ = new State(null, null, index)) { }
+            SqliteConnection.ClearAllPools();
+            var options = new RetrieveOptions(VaultPath: vault, IndexPath: index);
+            new Retrieve(options).Build();
+
+            const string prompt = "Panel güvenlik kapısı nasıl çalışıyor?";
+            var session = "session-173-" + Guid.NewGuid().ToString("N")[..8];
+
+            var a = new Retrieve(options);
+            var first = a.Query(prompt, session, 3);
+            Assert.NotEmpty(first.Hits);
+
+            var acknowledged = a.AcknowledgeDelivery();
+            Assert.True(acknowledged == first.Hits.Count,
+                $"AcknowledgeDelivery {acknowledged} satır bildirdi, tutulan isabet sayısı {first.Hits.Count} idi");
+
+            var rows = ServedRows(index, session);
+            Assert.True(rows.Length == first.Hits.Count,
+                $"oturum için tabloda {rows.Length} satır var, beklenen {first.Hits.Count} idi");
+            Assert.All(rows, row => Assert.True(row.Status == "emitted", $"satır durumu 'emitted' değil: {row.Status}"));
+            Assert.All(rows, row => Assert.True(row.AckedTs is not null, "acked_ts onaylanmış satırda boş kaldı"));
+
+            // b is a second open of the same file, sharing no memory with a — only the file can carry
+            // the silence across it.
+            var b = new Retrieve(options);
+            var second = b.Query(prompt, session, 3);
+            Assert.Empty(second.Hits);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    // yazan: claude · opus-5
+    /// <summary>
+    /// Nothing in <c>src/</c> called <see cref="Retrieve.AcknowledgeDelivery"/> before this lane, so a
+    /// <c>prepared</c> row left by a run that crashed, was killed, or had its stdout discarded before
+    /// the block reached the model stayed exactly <c>prepared</c> forever — and
+    /// <c>Retrieve.Filter</c>'s suppression trusts only rows the ledger can prove
+    /// <c>emitted</c>. Within this one test process the pid never changes between <c>a</c> and
+    /// <c>b</c>, so the row asserted below stays literally <c>prepared</c>; a real second
+    /// <c>oom.exe</c> opens the same file under a different pid, and
+    /// <c>ServedLedger.Reclassify</c> turns that same row <c>uncertain</c> on open instead. Both
+    /// statuses are equally non-suppressing — that equivalence, not the exact string, is the property
+    /// under test. Instance <c>b</c> is a second open of the same file and shares no memory with
+    /// <c>a</c>.
+    /// </summary>
+    [Fact(DisplayName = "Y-174 · Onaylanmayan teslim teslim sayılmaz; hafıza geri verilir")]
+    public void Y174_UnacknowledgedDeliveryDoesNotSuppressASecondOpenOfTheSameFile()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            Concepts(vault);
+            using (var _ = new State(null, null, index)) { }
+            SqliteConnection.ClearAllPools();
+            var options = new RetrieveOptions(VaultPath: vault, IndexPath: index);
+            new Retrieve(options).Build();
+
+            const string prompt = "Panel güvenlik kapısı nasıl çalışıyor?";
+            var session = "session-174-" + Guid.NewGuid().ToString("N")[..8];
+
+            var a = new Retrieve(options);
+            var first = a.Query(prompt, session, 3);
+            Assert.NotEmpty(first.Hits);
+            // Deliberately no AcknowledgeDelivery() call: the rows stay `prepared`.
+
+            var rows = ServedRows(index, session);
+            Assert.True(rows.Length == first.Hits.Count,
+                $"oturum için tabloda {rows.Length} satır var, beklenen {first.Hits.Count} idi");
+            Assert.All(rows, row => Assert.True(row.Status == "prepared",
+                $"onaylanmadan satır durumu 'prepared' değil: {row.Status}"));
+            Assert.All(rows, row => Assert.True(row.AckedTs is null, "onaylanmadan acked_ts dolu geldi"));
+
+            var b = new Retrieve(options);
+            var second = b.Query(prompt, session, 3);
+            Assert.NotEmpty(second.Hits);
+            Assert.True(second.Hits[0].Name == first.Hits[0].Name,
+                $"ikinci açılışın ilk notu ({second.Hits[0].Name}) birincininkiyle ({first.Hits[0].Name}) eşleşmedi");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    // yazan: claude · opus-5
+    /// <summary>
+    /// Two properties that only show up once the ledger actually crosses a process boundary:
+    /// <list type="bullet">
+    /// <item>the seven-day window is scoped by session (see <see cref="ServedKey.SessionId"/>'s own
+    /// summary) — a delivery acknowledged in one conversation must not silence a note in a conversation
+    /// that has never seen it, or a single delivery would withhold that note from every new session for
+    /// a week;</item>
+    /// <item>the window is scoped by query signature (Y-039's property) — a different question in the
+    /// same session must see the same note again. Y-039 measured this against one process's in-memory
+    /// dictionary; now that the ledger persists, the same property has to hold across a reopen of the
+    /// file, not only within one process.</item>
+    /// </list>
+    /// Every instance after <c>a</c> below opens the same file fresh and shares no memory with it.
+    /// </summary>
+    [Fact(DisplayName = "Y-175 · Yedi günlük sessizlik oturumlara yayılmaz")]
+    public void Y175_SevenDaySilenceStaysScopedToSessionAndSignature()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            Concepts(vault);
+            using (var _ = new State(null, null, index)) { }
+            SqliteConnection.ClearAllPools();
+            var options = new RetrieveOptions(VaultPath: vault, IndexPath: index);
+            new Retrieve(options).Build();
+
+            const string prompt = "Panel güvenlik kapısı nasıl çalışıyor?";
+            const string otherQuestion = "Panel güvenlik bilgisi nedir?";
+
+            var a = new Retrieve(options);
+            var first = a.Query(prompt, "oturum-a", 3);
+            Assert.NotEmpty(first.Hits);
+            a.AcknowledgeDelivery();
+
+            // Same session, same question, acknowledged delivery: does suppress.
+            var sameSession = new Retrieve(options).Query(prompt, "oturum-a", 3);
+            Assert.Empty(sameSession.Hits);
+
+            // New session, same question: the acknowledged delivery must not have spread to it — a
+            // new conversation has never been told anything.
+            var newSession = new Retrieve(options).Query(prompt, "oturum-b", 3);
+            Assert.NotEmpty(newSession.Hits);
+            Assert.True(newSession.Hits[0].Name == first.Hits[0].Name,
+                $"yeni oturumun ilk notu ({newSession.Hits[0].Name}) birincininkiyle ({first.Hits[0].Name}) eşleşmedi");
+
+            // Same session, different question (different query signature): Y-039's property, now
+            // measured across a persisted, reopened ledger instead of one process's dictionary.
+            var differentQuestion = new Retrieve(options).Query(otherQuestion, "oturum-a", 3);
+            Assert.NotEmpty(differentQuestion.Hits);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    /// <summary>Reads <c>retrieve_served</c> rows for one session directly, bypassing <see cref="Retrieve"/>.</summary>
+    private static (string Status, string? AckedTs)[] ServedRows(string index, string sessionId)
+    {
+        using var connection = new SqliteConnection($"Data Source={index};Mode=ReadOnly");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT status, acked_ts FROM retrieve_served WHERE session_id = $session";
+        command.Parameters.AddWithValue("$session", sessionId);
+        using var reader = command.ExecuteReader();
+        var rows = new List<(string, string?)>();
+        while (reader.Read())
+            rows.Add((reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1)));
+        return rows.ToArray();
     }
 }

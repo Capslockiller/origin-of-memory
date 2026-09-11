@@ -380,6 +380,80 @@ public sealed class DurumDeposuScars
         }
     }
 
+    /// <summary>
+    /// Y-170 · There used to be a third DDL site in this codebase: <c>Retrieve.Build()</c> opened
+    /// its own <c>SqliteConnection</c> to the very same <c>state.db</c> that <c>StateStore</c>
+    /// owns, created <c>oom_index_meta</c> itself, and then <c>DROP TABLE</c>'d and re-<c>CREATE</c>d
+    /// <c>notes</c> and <c>notes_fts</c> on every rebuild — DDL against a file whose schema
+    /// belongs to somebody else. Now <c>StateStore</c> owns the retrieval index: opening the
+    /// state store alone, with no retrieval code involved anywhere in this test, is what produces
+    /// <c>notes</c>, <c>notes_fts</c>, <c>oom_index_meta</c>, <c>ix_notes_updated</c> and the
+    /// served ledger's scope columns — on a brand-new file and on a file left by an older build
+    /// alike, without moving the schema version off 4 and without losing a row.
+    /// </summary>
+    // yazan: claude · opus-5
+    [Fact(DisplayName = "Y-170 · Arama indeksi şemasının tek sahibi durum deposudur")]
+    public void Y170_StateStoreIsTheSoleOwnerOfTheRetrievalIndexSchema()
+    {
+        var freshRoot = ScarFixture.TempDirectory();
+        var migratedRoot = ScarFixture.TempDirectory();
+        try
+        {
+            // (a) A brand-new database: opening the STATE store alone must produce the whole
+            // retrieval index — no Retrieve.Build() call anywhere near this block.
+            var database = Path.Combine(freshRoot, "state.db");
+            using (var state = new State(null, null, database))
+            {
+                Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes'"));
+                Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'"));
+                Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'oom_index_meta'"));
+                Assert.True(state.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_notes_updated' AND tbl_name = 'notes'") == 1,
+                    "notes üzerindeki ix_notes_updated indeksi yeni veritabanında yok");
+                Assert.True(state.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_retrieve_served_scope'") == 1,
+                    "ix_retrieve_served_scope indeksi yeni veritabanında yok");
+
+                foreach (var column in new[] { "session_id", "query_sig", "note", "ts", "vault", "client", "entry", "content_hash", "status", "pid", "acked_ts" })
+                    Assert.True(state.Scalar($"SELECT COUNT(*) FROM pragma_table_info('retrieve_served') WHERE name = '{column}'") == 1,
+                        $"retrieve_served sütunu eksik: {column}");
+
+                // İndeks şeması var olan merdiven basamağına indi, dosyayı sessizce yeniden etiketlemedi.
+                Assert.Equal(4, state.Scalar("PRAGMA user_version"));
+            }
+
+            // (b) A file left by an older build gains the same shape on its next open, without
+            // losing a row and without a version bump — agrees with what Y-129 already pins.
+            var migratedDatabase = Path.Combine(migratedRoot, "state.db");
+            Seed(migratedDatabase, version: 2);
+
+            using (var migrated = new State(null, null, migratedDatabase))
+            {
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes'"));
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'"));
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'oom_index_meta'"));
+                Assert.True(migrated.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_notes_updated' AND tbl_name = 'notes'") == 1,
+                    "notes üzerindeki ix_notes_updated indeksi eski şemalı dosyada oluşmadı");
+
+                Assert.True(migrated.Scalar("SELECT COUNT(*) FROM pragma_table_info('retrieve_served') WHERE name = 'status'") == 1,
+                    "retrieve_served sütunu eksik: status");
+                Assert.True(migrated.Scalar("SELECT COUNT(*) FROM pragma_table_info('retrieve_served') WHERE name = 'content_hash'") == 1,
+                    "retrieve_served sütunu eksik: content_hash");
+
+                // Göçten önceki satırlar hâlâ aynı satırlar: hiçbir DROP TABLE çalışmadı.
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM calls"));
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM flush_log"));
+
+                Assert.Equal(4, migrated.SchemaReport.Version);
+                Assert.Equal(2, migrated.SchemaReport.FoundVersion);
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(freshRoot);
+            ScarFixture.Remove(migratedRoot);
+        }
+    }
+
     /// <summary>A database shaped the way build 2 left it: the split counters do not exist yet.</summary>
     private static void Seed(string database, int version)
     {

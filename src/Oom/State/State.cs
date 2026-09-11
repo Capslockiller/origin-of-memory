@@ -554,6 +554,23 @@ internal static class StateStore
 
     private static readonly string[] Counted = ["calls", "flush_log", "health", "sessions", "coverage", "compile_runs"];
 
+    /// <summary>
+    /// What <c>retrieve_served</c> needs beyond its version 1 shape to answer "was this note
+    /// actually delivered to this client, in this session, for this question, at this content"
+    /// after the process that asked has exited. Every one is additive with a default, so an
+    /// existing file gains them without a rewrite.
+    /// </summary>
+    private static readonly (string Name, string Definition)[] ServedColumns =
+    [
+        ("vault", "TEXT NOT NULL DEFAULT ''"),
+        ("client", "TEXT NOT NULL DEFAULT ''"),
+        ("entry", "TEXT NOT NULL DEFAULT ''"),
+        ("content_hash", "TEXT NOT NULL DEFAULT ''"),
+        ("status", "TEXT NOT NULL DEFAULT 'prepared'"),
+        ("pid", "INTEGER NOT NULL DEFAULT 0"),
+        ("acked_ts", "TEXT")
+    ];
+
     internal static (SqliteConnection Connection, StateSchemaReport Report) Open(string? path, StateAccess access)
     {
         if (path is null)
@@ -702,6 +719,45 @@ internal static class StateStore
         Execute(connection, "CREATE UNIQUE INDEX IF NOT EXISTS ix_calls_attempt_id ON calls(attempt_id) WHERE attempt_id IS NOT NULL;");
     }
 
+    /// <summary>
+    /// The retrieval index (<c>notes</c>, <c>notes_fts</c>, <c>oom_index_meta</c>) and the served
+    /// ledger's scope columns. This was the third DDL site: <c>Retrieve.Build()</c> opened its own
+    /// connection to the very same <c>state.db</c>, created <c>oom_index_meta</c>, and then
+    /// <c>DROP TABLE</c>'d <c>notes</c> and <c>notes_fts</c> on every rebuild — dropping tables out
+    /// from under the file's schema owner, in the file that also carries the owner's ledger.
+    ///
+    /// <c>ix_notes_updated</c> is deliberate and load-bearing as evidence: it belongs to this
+    /// owner, a <c>DROP TABLE notes</c> takes it with the table, and a <c>CREATE TABLE</c> issued
+    /// by the retrieval side would not put it back. Y-172 asserts it survives a rebuild, so the
+    /// DROP cannot come back unnoticed.
+    ///
+    /// <c>retrieve_served</c> existed from version 1 and nothing in <c>src/</c> ever inserted into
+    /// it; the columns added here are what makes a served note identifiable across the process
+    /// boundary that a hook event crosses twenty times a day (see <c>ServedLedger</c>).
+    /// </summary>
+    private static void RetrievalIndex(SqliteConnection connection)
+    {
+        Execute(connection,
+            "CREATE TABLE IF NOT EXISTS notes(name TEXT PRIMARY KEY, title TEXT, aliases TEXT, tags TEXT, body TEXT, updated TEXT);" +
+            "CREATE INDEX IF NOT EXISTS ix_notes_updated ON notes(updated);" +
+            "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(name UNINDEXED, title, aliases, tags, body);" +
+            "CREATE TABLE IF NOT EXISTS oom_index_meta(generation INTEGER NOT NULL, manifest_digest TEXT NOT NULL, built_at TEXT NOT NULL);");
+
+        foreach (var (name, definition) in ServedColumns)
+            EnsureColumn(connection, "retrieve_served", name, definition);
+
+        // Totality, not tidiness: the unique index below cannot be created over duplicate rows, and
+        // a DDL step that can throw on somebody's existing file is not a migration step. The table
+        // is empty on every installation in the field — nothing ever wrote to it — so in practice
+        // this deletes nothing.
+        Execute(connection,
+            "DELETE FROM retrieve_served WHERE rowid NOT IN (SELECT MIN(rowid) FROM retrieve_served " +
+            "GROUP BY vault, client, entry, session_id, query_sig, note, content_hash);");
+        Execute(connection,
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_retrieve_served_scope ON " +
+            "retrieve_served(vault, client, entry, session_id, query_sig, note, content_hash);");
+    }
+
     private static void UncachedInput(SqliteConnection connection) =>
         EnsureLedgerColumn(connection, "uncached_in_tok", "INTEGER");
 
@@ -719,11 +775,14 @@ internal static class StateStore
         // The default aggregate is deliberately measured-only. Estimates remain queryable in v_calls.
         "CREATE VIEW v_call_usage AS SELECT backend, component, tier, model, purpose, COUNT(*) AS attempt_count, COUNT(DISTINCT operation_id) AS operation_count, SUM(uncached_in_tok) AS uncached_in_tok, SUM(cache_r) AS cache_r, SUM(cache_w) AS cache_w, SUM(out_tok) AS out_tok FROM calls WHERE usage_rank = 2 AND usage_semantics = 'split-v1' GROUP BY backend, component, tier, model, purpose;");
 
-    private static void EnsureLedgerColumn(SqliteConnection connection, string name, string definition)
+    private static void EnsureLedgerColumn(SqliteConnection connection, string name, string definition) =>
+        EnsureColumn(connection, "calls", name, definition);
+
+    private static void EnsureColumn(SqliteConnection connection, string table, string name, string definition)
     {
         using (var columns = connection.CreateCommand())
         {
-            columns.CommandText = "PRAGMA table_info(calls)";
+            columns.CommandText = $"PRAGMA table_info({table})";
             using var reader = columns.ExecuteReader();
             while (reader.Read())
             {
@@ -732,7 +791,7 @@ internal static class StateStore
             }
         }
 
-        Execute(connection, $"ALTER TABLE calls ADD COLUMN {name} {definition}");
+        Execute(connection, $"ALTER TABLE {table} ADD COLUMN {name} {definition}");
     }
 
     private static void Execute(SqliteConnection connection, string sql)
@@ -758,12 +817,19 @@ internal static class StateStore
             "CREATE TABLE IF NOT EXISTS calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT, operation_id TEXT, attempt_id TEXT, attempt_no INTEGER, uncached_in_tok INTEGER, usage_rank INTEGER NOT NULL DEFAULT 0 CHECK(usage_rank BETWEEN 0 AND 2), usage_semantics TEXT NOT NULL DEFAULT 'legacy-total-input-v0');" +
             "CREATE TABLE IF NOT EXISTS health(ts TEXT, component TEXT, level TEXT, code TEXT, key TEXT, detail TEXT);" +
             "CREATE TABLE IF NOT EXISTS notified(class TEXT, key TEXT, ts TEXT);" +
-            "CREATE TABLE IF NOT EXISTS retrieve_served(session_id TEXT, query_sig TEXT, note TEXT, ts TEXT);" +
+            "CREATE TABLE IF NOT EXISTS retrieve_served(session_id TEXT, query_sig TEXT, note TEXT, ts TEXT, " +
+            "vault TEXT NOT NULL DEFAULT '', client TEXT NOT NULL DEFAULT '', entry TEXT NOT NULL DEFAULT '', " +
+            "content_hash TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'prepared', " +
+            "pid INTEGER NOT NULL DEFAULT 0, acked_ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS locks(name TEXT PRIMARY KEY, machine TEXT, pid INTEGER, ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS kota(ts TEXT, \"window\" TEXT, used_pct REAL, resets_at TEXT);" +
             "CREATE VIEW IF NOT EXISTS v_flush_log AS SELECT ts, session_id, reason, outcome, turns, chars, backend FROM flush_log;" +
             "CREATE VIEW IF NOT EXISTS v_coverage AS SELECT ts, total, covered, uncovered_json FROM coverage;" +
             "CREATE VIEW IF NOT EXISTS v_health AS SELECT ts, component, level, code, key, detail FROM health;" +
             "CREATE VIEW IF NOT EXISTS v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;");
+
+        // Part of the same step, and therefore of the same floor: the retrieval index is not a
+        // second schema that happens to live in this file, it is this schema.
+        RetrievalIndex(connection);
     }
 }

@@ -233,6 +233,167 @@ public sealed class IndeksScars
         }
     }
 
+    /// <summary>
+    /// `Retrieve.Build()` used to call <c>Directory.CreateDirectory</c> on the index's parent
+    /// directory before opening it, which minted a state root as a side effect of merely asking to
+    /// index — one per test run, one per <c>compile</c> against a workspace that had never run
+    /// <c>oom install</c>. An existing directory is now the condition for writing an index, not
+    /// something Build brings into being; an absent one is a legitimately empty answer, not a
+    /// broken one.
+    /// </summary>
+    [Fact(DisplayName = "Y-171 · İndeks kurulumu durum kökü yaratmaz")]
+    public void Y171_BuildDoesNotCreateAStateRoot()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var missingDirectory = Path.Combine(vault, "yok-boyle-bir-dizin");
+        var index = Path.Combine(missingDirectory, "state.db");
+        try
+        {
+            WriteNote(vault, "not.md", "govde-y171");
+            var retrieve = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            var before = retrieve.Build();
+
+            Assert.False(Directory.Exists(missingDirectory), "Build var olmayan dizini yaratmamalıydı.");
+            Assert.False(File.Exists(index), "Build dizin yokken indeks dosyası yaratmamalıydı.");
+            // İndeksin yokluğu bozuk bir indeks değil, ölçülmüş boş bir cevaptır.
+            Assert.Equal(0, before.ExitCode);
+            Assert.Empty(before.Missing);
+            Assert.Empty(before.Extra);
+
+            Directory.CreateDirectory(missingDirectory);
+            var after = retrieve.Build();
+
+            Assert.True(File.Exists(index), "Dizin var olduktan sonra Build indeks dosyasını yaratmalıydı.");
+            Assert.Equal(0, after.ExitCode);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    /// <summary>
+    /// A rebuild used to open its own connection to <c>state.db</c> and <c>DROP TABLE notes</c> /
+    /// <c>DROP TABLE notes_fts</c> before recreating them from scratch — destroying whatever the
+    /// schema owner (<c>StateStore</c>) had already put in that same file, including
+    /// <c>ix_notes_updated</c>, in a file that also carries the owner's own ledger
+    /// (<c>flush_log</c>, <c>PRAGMA user_version</c>). A rebuild now empties and refills the index
+    /// tables inside a transaction and drops nothing it does not own.
+    /// </summary>
+    [Fact(DisplayName = "Y-172 · Yeniden kurulum şema sahibinin tablolarını düşürmez")]
+    public void Y172_RebuildDoesNotDropTheSchemaOwnersTables()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            using (var state = new State(null, null, index))
+                state.RecordFlush(ScarFixture.Now, "y172", "sessionend", "ok", 4, 40, "claude");
+            SqliteConnection.ClearAllPools();
+
+            WriteNote(vault, "not.md", "eski-terim-y172");
+            var retrieve = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            retrieve.Build();
+            var first = ReadManifest(index);
+
+            WriteNote(vault, "not.md", "yeni-terim-y172"); // gövde değişir, gerçek bir yeniden kurulum tetiklenir.
+            retrieve.Build();
+            var second = ReadManifest(index);
+            Assert.True(second.Generation > first.Generation, "İkinci Build gerçek bir yeniden kurulum yapmalıydı.");
+
+            using (var connection = new SqliteConnection($"Data Source={index}"))
+            {
+                connection.Open();
+                using (var owned = connection.CreateCommand())
+                {
+                    owned.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_notes_updated'";
+                    // Şema sahibinin indeksi yeniden kurulumdan sağ çıkmalı — eski DROP TABLE altında bu 0 çıkardı.
+                    Assert.Equal(1L, (long)owned.ExecuteScalar()!);
+                }
+
+                using (var flush = connection.CreateCommand())
+                {
+                    flush.CommandText = "SELECT COUNT(*) FROM flush_log";
+                    Assert.Equal(1L, (long)flush.ExecuteScalar()!); // Yabancı satıra dokunulmamalı.
+                }
+
+                using (var version = connection.CreateCommand())
+                {
+                    version.CommandText = "PRAGMA user_version";
+                    Assert.Equal(4L, Convert.ToInt64(version.ExecuteScalar())); // Dosya hâlâ sahibi tarafından damgalı.
+                }
+            }
+
+            Assert.Contains("not.md", Candidates(index, "yeni-terim-y172"));
+            Assert.DoesNotContain("not.md", Candidates(index, "eski-terim-y172"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    /// <summary>
+    /// `Build()` used to trust an unchanged manifest digest completely: when the digest matched, it
+    /// skipped the rebuild, verified nothing, and returned success even though the index rows
+    /// underneath it had been tampered with by hand. `Build` now grades its own work on every call,
+    /// `VerifyIndex()` answers the identical read-only question, and <c>Doctor</c> reports the same
+    /// verdict through both its raw <see cref="VerifyResult"/> overload and its
+    /// <see cref="HealthItem"/> summary — one answer to "is the index sound", never a second opinion
+    /// that can call it clean while the first one calls it broken.
+    /// </summary>
+    [Fact(DisplayName = "Y-176 · Build kendi işini doğrular; bozuk indeks kırmızı çıkar ve doctor aynı cevabı verir")]
+    public void Y176_BuildVerifiesItsOwnWorkAndDoctorAgrees()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            WriteNote(vault, "bir.md", "birinci-govde-y176");
+            WriteNote(vault, "iki.md", "ikinci-govde-y176");
+            var sound = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index)).Build();
+            Assert.Equal(0, sound.ExitCode); // Sağlam derlem üzerinde ilk kurulum sağlam çıkmalı.
+            Assert.Empty(sound.Missing);
+
+            using (var connection = new SqliteConnection($"Data Source={index}"))
+            {
+                connection.Open();
+                using var tamper = connection.CreateCommand();
+                tamper.CommandText = "DELETE FROM notes WHERE name = 'bir.md'; DELETE FROM notes_fts WHERE name = 'bir.md';";
+                tamper.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            // Taze bir Retrieve: derlem diskte değişmedi, yalnızca indeks satırı kurcalandı.
+            var rebuilt = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index)).Build();
+            Assert.Equal(1, rebuilt.ExitCode); // Manifest aynı ama satır kurcalanmış; Build bunu görmeli.
+            Assert.Equal(["bir.md"], rebuilt.Missing); // Yalnızca kurcalanan not eksik görünmeli.
+            Assert.Empty(rebuilt.Extra);
+
+            var retrieve = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            var verified = retrieve.VerifyIndex();
+            Assert.Equal(rebuilt.Missing, verified.Missing); // VerifyIndex, Build'in kendi doğrulamasıyla aynı cevabı vermeli.
+            Assert.Equal(rebuilt.Extra, verified.Extra);
+            Assert.Equal(rebuilt.ExitCode, verified.ExitCode);
+
+            var doctorVerdict = new Doctor().VerifyIndex(retrieve);
+            Assert.Equal(rebuilt.Missing, doctorVerdict.Missing); // Doctor'ın ikinci bir görüşü yok.
+            Assert.Equal(rebuilt.Extra, doctorVerdict.Extra);
+            Assert.Equal(rebuilt.ExitCode, doctorVerdict.ExitCode);
+
+            var health = new Doctor().IndexHealth(retrieve);
+            Assert.Equal("index-mismatch", health.Code);
+            Assert.Equal(HealthLevel.Error, health.Level);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
     private static string WriteNote(string vault, string name, string body, string title = "İndeks notu", string aliases = "", string tags = "")
     {
         var concepts = Path.Combine(vault, "knowledge", "concepts");
