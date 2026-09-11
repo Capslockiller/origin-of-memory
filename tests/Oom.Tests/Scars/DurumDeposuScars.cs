@@ -308,7 +308,11 @@ public sealed class DurumDeposuScars
         var stateRoot = VaultIdentity.StateRoot(vault);
         try
         {
-            var doctor = GateFixture.Run("doctor", "--json", "--vault", vault);
+            // Tarama fikstüre yönlendirildi: yoksa yayımlanan doctor sahibin gerçek
+            // %LOCALAPPDATA%\oom altındaki HER veritabanını açar -- biri bozuk ve onarım bekliyor.
+            var scanRoot = Path.Combine(root, "profil");
+            Directory.CreateDirectory(Path.Combine(scanRoot, "oom"));
+            var doctor = GateFixture.RunScoped(scanRoot, "doctor", "--json", "--vault", vault);
             Assert.True(doctor.ExitCode == 0, $"'doctor --json --vault {vault}' çıkış kodu {doctor.ExitCode} döndürdü: {doctor.StandardError}");
             Assert.False(Directory.Exists(stateRoot), $"'doctor' (--fix olmadan) durum kökünü yarattı: {stateRoot}");
 

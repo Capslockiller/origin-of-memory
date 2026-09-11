@@ -250,6 +250,14 @@ internal static class Program
             {
                 hookSpecificOutput = new { hookEventName = "UserPromptSubmit", additionalContext = hooked.Output }
             }));
+
+            // Y-174: the served ledger records `prepared` when the block is built and only this
+            // line turns it into `emitted`. Without it every row ages into `uncertain` and the
+            // cross-process dedupe suppresses nothing -- the ledger would be written and never
+            // read. The flush comes first: an acknowledgement before the bytes are out is the
+            // same lie the ledger exists to stop.
+            Console.Out.Flush();
+            retrieve.AcknowledgeDelivery();
             return 0;
         }
 
@@ -325,7 +333,7 @@ internal static class Program
         // The FTS5 index over knowledge/concepts is rebuilt at the end of the run; the rebuild
         // is skipped when the concept manifest digest is unchanged (spec 6.4).
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        MakeRetrieve(vault, settings, settings.Retrieve.Top).Build();
+        ReportIndex(MakeRetrieve(vault, settings, settings.Retrieve.Top).Build());
         Console.WriteLine($"indeks: {System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0} ms");
 
         var decision = new Compile(vault).MaybeCompile(now, LastCompile(state), Pending(vault, state).Count > 0);
@@ -526,7 +534,7 @@ internal static class Program
         state.SeedCursors(new SweepRun(vault, settings, MakeFlush(vault, settings, state), state).ReadAnchors());
         state.SweepRetention(Clock.Now);
         new RootMap(vault).Regenerate();
-        MakeRetrieve(vault, settings, settings.Retrieve.Top).Build();
+        ReportIndex(MakeRetrieve(vault, settings, settings.Retrieve.Top).Build());
     }
 
     /// <summary>The notification policy of spec 6.8: only these classes toast, once in seven days.</summary>
@@ -696,7 +704,23 @@ internal static class Program
     /// existing roots carry no descriptor and surface as <c>artık</c> or <c>sahipsiz</c>, and what
     /// to do about them is the owner's decision on a concrete list (Y-162).
     /// </summary>
-    internal static IReadOnlyList<HealthItem> StateRootHealth() => new Doctor().StateRootItems();
+    /// <summary>
+    /// Y-162: the scan walks every database under the state-roots folder read-only, so a test
+    /// that drives the shipped `doctor` would otherwise open the owner's real vaults -- including
+    /// one whose database is corrupt. The override is a test seam and nothing else: production
+    /// never sets it, and the folder is still derived by <see cref="VaultIdentity"/>.
+    /// </summary>
+    internal static IReadOnlyList<HealthItem> StateRootHealth() =>
+        new Doctor().StateRootItems(Environment.GetEnvironmentVariable("OOM_LOCALAPPDATA"));
+
+    /// <summary>A red index is computed and then thrown away unless someone prints it.</summary>
+    private static void ReportIndex(VerifyResult index)
+    {
+        if (index.ExitCode != 0)
+            Console.Error.WriteLine($"indeks doğrulaması düştü: eksik {index.Missing.Count}, fazla {index.Extra.Count}"
+                + (index.Missing.Count > 0 ? $" · eksik: {string.Join(", ", index.Missing.Take(5))}" : string.Empty)
+                + (index.Extra.Count > 0 ? $" · fazla: {string.Join(", ", index.Extra.Take(5))}" : string.Empty));
+    }
 
     private static DateTimeOffset? LastCompile(State state)
     {

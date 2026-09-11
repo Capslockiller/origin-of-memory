@@ -31,7 +31,11 @@ public sealed class Gate12Boundary
         using var vault = new TempVault();
         GateFixture.WriteVault(vault.Path);
 
-        var run = GateFixture.Run("doctor", "--json", "--vault", vault.Path);
+        // Y-162: taramayı fikstüre yönlendir; yoksa yayımlanan doctor sahibin gerçek
+        // %LOCALAPPDATA%\oom altındaki her veritabanını açar.
+        var scanRoot = Path.Combine(vault.Path, "profil");
+        Directory.CreateDirectory(Path.Combine(scanRoot, "oom"));
+        var run = GateFixture.RunScoped(scanRoot, "doctor", "--json", "--vault", vault.Path);
         Assert.Equal(0, run.ExitCode);
 
         var root = JsonDocument.Parse(run.StandardOutput).RootElement;

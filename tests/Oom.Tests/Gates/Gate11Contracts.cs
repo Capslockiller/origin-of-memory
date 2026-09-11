@@ -78,7 +78,23 @@ internal static class GateFixture
             ?? throw new InvalidOperationException("oom.exe bulunamadı; src/Oom derlenmemiş.");
     }
 
-    internal static (int ExitCode, string StandardOutput, string StandardError) Run(params string[] arguments)
+    internal static (int ExitCode, string StandardOutput, string StandardError) Run(params string[] arguments) =>
+        RunScoped(null, arguments);
+
+    /// <summary>
+    /// Y-162: <paramref name="localAppData"/> redirects the shipped binary's stray-root scan at a
+    /// fixture. Without it a test that drives `doctor` opens every database under the owner's real
+    /// profile -- one of which is corrupt and awaiting repair. A suite must not touch what it is
+    /// not measuring.
+    /// </summary>
+    /// <summary>Drives a command that reads a hook payload from stdin (Y-177).</summary>
+    internal static (int ExitCode, string StandardOutput, string StandardError) RunWithInput(string standardInput, params string[] arguments) =>
+        RunScoped(null, standardInput, arguments);
+
+    internal static (int ExitCode, string StandardOutput, string StandardError) RunScoped(string? localAppData, params string[] arguments) =>
+        RunScoped(localAppData, null, arguments);
+
+    private static (int ExitCode, string StandardOutput, string StandardError) RunScoped(string? localAppData, string? standardInput, string[] arguments)
     {
         var startInfo = new ProcessStartInfo(Executable())
         {
@@ -92,10 +108,15 @@ internal static class GateFixture
             WorkingDirectory = Path.GetTempPath()
         };
 
+        if (localAppData is { Length: > 0 })
+            startInfo.Environment["OOM_LOCALAPPDATA"] = localAppData;
+
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("oom.exe başlatılamadı.");
+        if (standardInput is not null)
+            process.StandardInput.Write(standardInput);
         process.StandardInput.Close();
         var output = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
