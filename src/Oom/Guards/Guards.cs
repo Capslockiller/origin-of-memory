@@ -63,11 +63,12 @@ public sealed class Guards
     ];
 
     /// <summary>
-    /// Runs the chain. Returns the cleaned text, the guard classes that fired and
-    /// whether the text is refused. A refusal is only ever raised by the directive
-    /// stage on compile traffic: compile is the only component whose text is turned
-    /// into files, so a directive-shaped line there quarantines the whole run
-    /// (scar Y-026 for the daily input, scar Y-095 for the model output).
+    /// Runs the chain. Returns the cleaned text, the guard classes that fired, whether the
+    /// text is refused and the direction it was crossing. A refusal is only ever raised by
+    /// the directive stage on compile traffic being <em>admitted</em>: compile is the only
+    /// component whose text is turned into files, so a directive-shaped line there
+    /// quarantines the whole run (scar Y-026 for the daily input, scar Y-095 for the model
+    /// output). Egress is the exception and is spelled out at the verdict below (Y-127).
     /// </summary>
     public GateResult Gate(string text, Direction direction, ComponentKind component)
     {
@@ -90,11 +91,21 @@ public sealed class Guards
         if (directive)
             findings.Add("directive");
 
-        // Direction does not change the verdict today: a directive in compile's
-        // daily input quarantines the run just as one in its model output does.
-        // It stays in the signature because it is what the health row records.
-        _ = direction;
-        return new GateResult(cleaned, findings, directive && component == ComponentKind.Compile);
+        // Direction decides one thing and is reported for another.
+        //
+        // It decides refusal. Refusal exists so that untrusted text does not become files:
+        // a directive-shaped line in what compile is about to parse quarantines the run.
+        // Text on egress becomes nothing here — it is handed to a model that answers with
+        // a reply the inbound gate still reads — so egress redacts and never refuses.
+        // Without this, a directive-shaped line the owner wrote in his own daily would
+        // quarantine his compile run on the way out, every evening, forever.
+        //
+        // And it is reported: the direction rides out on the result, because "we masked a
+        // credential that was about to leave this machine" and "we masked a credential on
+        // its way into the vault" are different events and the health row has to tell them
+        // apart. Nothing recorded it before; the argument was discarded here.
+        var refused = directive && component == ComponentKind.Compile && direction is not Direction.Egress;
+        return new GateResult(cleaned, findings, refused, direction);
     }
 
     /// <summary>

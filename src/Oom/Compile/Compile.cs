@@ -71,6 +71,33 @@ public sealed class Compile
     public CompileResult Run(string dailyName, string dailyText, string modelOutput) => Run(dailyName, dailyText, modelOutput, 0);
 
     /// <summary>
+    /// Y-127: compile's send boundary. <see cref="CompilePrompt"/> renders the root map, the
+    /// dedupe registry and the whole daily body, and the daily body is summarised conversation
+    /// — every credential the owner ever pasted into a session lands in it. That text went to
+    /// the smart model untouched while the model's reply was guarded twice on the way back, so
+    /// the vault was protected and the boundary was not. The chain now runs on the prompt
+    /// before the runner sees it, exactly as flush does (Y-126).
+    ///
+    /// Refusal on the way out: there is none, and that is deliberate. Compile is the one
+    /// component whose gate can refuse, because compile turns text into files — but nothing
+    /// on this path becomes a file. A directive-shaped line in the owner's own daily would
+    /// otherwise quarantine his compile run before the model ever saw it, every evening, with
+    /// no way out but editing the daily. The decision about whether this daily may become
+    /// notes is still taken where it belongs, on admission: the gate on the model's reply and
+    /// the gate on each note body below are untouched, and the daily is fenced as untrusted
+    /// data in the prompt either way. So <see cref="Direction.Egress"/> redacts and sends.
+    /// </summary>
+    public RunResult Send(Runner runner, CompilePlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        ArgumentNullException.ThrowIfNull(plan);
+
+        var outbound = _guards.Gate(plan.Prompt, Direction.Egress, ComponentKind.Compile);
+        RecordBoundary(plan.Daily, outbound);
+        return runner.Run(outbound.Text, ModelTier.Smart, ComponentKind.Compile, "concepts");
+    }
+
+    /// <summary>
     /// One compile run over a single daily. All-or-nothing: unless every note passes the
     /// note validator and the guard chain, and unless the root map and the search index are
     /// rebuilt, nothing is published and the daily stays unconsumed (scars Y-029, Y-030).
@@ -93,6 +120,7 @@ public sealed class Compile
         // The guard chain runs before anything is parsed or promoted: a directive-shaped
         // reply quarantines the whole run rather than only warning about it (Y-027).
         var gated = _guards.Gate(modelOutput, Direction.Out, ComponentKind.Compile);
+        RecordBoundary(dailyName, gated);
         if (gated.Refused)
             return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, gated.Findings));
 
@@ -106,6 +134,7 @@ public sealed class Compile
             foreach (var (path, body) in files)
             {
                 var note = _guards.Gate(body, Direction.Out, ComponentKind.Compile);
+                RecordBoundary(dailyName, note);
                 if (note.Refused)
                     return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, note.Findings));
                 _notes.Validate(_notes.Parse(path, note.Text));
@@ -407,6 +436,34 @@ public sealed class Compile
             return new CompileResult("rejected", [], false, false);
         _notifier?.Notify($"{dailyName} derlenemedi ve park edildi: {reason}");
         return new CompileResult("parked", [], false, false);
+    }
+
+    /// <summary>
+    /// Y-127: a mask is only a guard if someone can see it afterwards, and the two directions
+    /// are different events. <see cref="Direction.Egress"/> means a credential in the daily was
+    /// about to leave the machine inside the compile prompt — warning level, and a named
+    /// notification. Admission means one came back in the model's reply and was kept out of the
+    /// published note — informational. Same masking, different row, so <c>oom doctor</c> does
+    /// not read the near-miss and the routine case as one thing.
+    /// </summary>
+    private void RecordBoundary(string dailyName, GateResult gated)
+    {
+        var masked = gated.Findings.Where(finding => finding is "secret" or "pii").ToArray();
+        if (masked.Length == 0)
+            return;
+
+        var classes = string.Join(", ", masked);
+        var egress = gated.Direction is Direction.Egress;
+        HealthLedger.Record(new HealthItem("compile",
+            egress ? HealthLevel.Warning : HealthLevel.Info,
+            egress ? "gonderim-siniri" : "alim-siniri",
+            dailyName,
+            egress
+                ? $"Modele giden derleme isteminde maskelendi: {classes} — daily makinede olduğu gibi kaldı."
+                : $"Nota girerken maskelendi: {classes} — metin makineden çıkmadı."), _clock.Now);
+
+        if (egress && masked.Contains("secret"))
+            _notifier?.Notify($"{dailyName}: modele giden derleme isteminde sır maskelendi ({classes}) — oom doctor");
     }
 
     private string Quarantine(string dailyName, string modelOutput, IReadOnlyList<string> findings)
