@@ -521,8 +521,8 @@ public enum StateAccess
 /// <summary>What one open did to the schema. <c>Applied</c> is empty when nothing had to change.</summary>
 public sealed record StateSchemaReport(int FoundVersion, int Version, IReadOnlyList<string> Applied, string? BackupPath);
 
-/// <summary>The file on disk carries a schema this executable does not know how to read.</summary>
-public sealed class StateSchemaException(string message) : Exception(message);
+/// <summary>The file on disk carries a schema this executable cannot read, or cannot migrate without losing rows.</summary>
+public sealed class StateSchemaException(string message, Exception? inner = null) : Exception(message, inner);
 
 /// <summary>
 /// The single owner of the state database's shape (spec 8). Three places used to create this
@@ -536,23 +536,28 @@ public sealed class StateSchemaException(string message) : Exception(message);
 /// </summary>
 internal static class StateStore
 {
-    // 4: call attempts own nullable, split token counters and stable operation identities.
-    internal const int SchemaVersion = 4;
+    // 5: the retrieval index and the served ledger's scope are a step of their own. They used to
+    //    ride along inside step 1, which meant they were re-applied on every single open of a
+    //    file that already claimed version 4 — DDL against somebody's live memory, outside any
+    //    migration, with nothing recorded as having been applied.
+    internal const int SchemaVersion = 5;
 
     /// <summary>
-    /// The migration path, in order. Every step is additive and idempotent — it creates what is
-    /// missing and touches nothing that exists — so the same ladder takes a brand new file and a
-    /// file written by any earlier build to the same shape, and running it twice is a no-op.
+    /// The migration path, in order. A step runs only when the file's own version is below it:
+    /// history is replayed for a file that has not seen it, never for a file that has. Every step
+    /// is still additive and idempotent, because a migration that was interrupted must be able to
+    /// run again from the version the file actually carries.
     /// </summary>
     internal static readonly (int Version, string Name, Action<SqliteConnection> Apply)[] Ladder =
     [
         (1, "temel tablolar", BaseTables),
         (2, "çağrı kimlikleri (operation_id, attempt_id, attempt_no)", CallIdentities),
         (3, "önbelleksiz girdi sayacı (uncached_in_tok)", UncachedInput),
-        (4, "bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)", SplitUsage)
+        (4, "bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)", SplitUsage),
+        (5, "getirim dizini ve served defteri kapsamı (notes, notes_fts, oom_index_meta, retrieve_served kapsam sütunları)", RetrievalIndex)
     ];
 
-    private static readonly string[] Counted = ["calls", "flush_log", "health", "sessions", "coverage", "compile_runs"];
+    private static readonly string[] Counted = ["calls", "flush_log", "health", "sessions", "coverage", "compile_runs", "retrieve_served"];
 
     /// <summary>
     /// What <c>retrieve_served</c> needs beyond its version 1 shape to answer "was this note
@@ -597,7 +602,17 @@ internal static class StateStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var connection = new SqliteConnection($"Data Source={path};Cache=Shared");
         connection.Open();
-        return (connection, Provision(connection, persistent: true, path));
+        try
+        {
+            return (connection, Provision(connection, persistent: true, path));
+        }
+        catch
+        {
+            // A refused or aborted open owns no handle on the owner's file: the next attempt, and
+            // the owner's own inspection of it, must not have to wait for this process to exit.
+            connection.Dispose();
+            throw;
+        }
     }
 
     /// <summary>The schema version the file claims; 0 for a file nothing has stamped yet.</summary>
@@ -610,28 +625,85 @@ internal static class StateStore
 
     private static StateSchemaReport Provision(SqliteConnection connection, bool persistent, string? path)
     {
-        Execute(connection, (persistent ? "PRAGMA journal_mode=WAL; " : string.Empty) + "PRAGMA busy_timeout=5000;");
+        // busy_timeout is a property of this connection and of nothing on disk, so it may be set
+        // before the file has been judged. Everything else below waits for the verdict.
+        Execute(connection, "PRAGMA busy_timeout=5000;");
 
+        // The version is read and judged before the first persistent change, journal_mode
+        // included: WAL is written into the file header, so the old order rewrote a database from
+        // a newer build and only then admitted that this executable cannot read it.
         var found = ReadVersion(connection);
         Guard(found, path);
 
-        // A file that already carries the ledger and an older stamp is real memory being migrated.
-        // It is copied and the copy verified before a single ALTER runs, and the copy is kept.
-        var backup = found < SchemaVersion && path is not null && TableExists(connection, "calls")
+        if (found == SchemaVersion)
+        {
+            // Already this shape. No step is replayed, no copy is taken, the stamp is not
+            // rewritten: a healthy reopen leaves the file's contents exactly as it found them.
+            if (persistent)
+                Execute(connection, "PRAGMA journal_mode=WAL;");
+            return new StateSchemaReport(found, found, [], null);
+        }
+
+        // Anything that is not a brand new file is real memory: it is copied and the copy verified
+        // before a single statement runs against the original, and the copy is kept. Keying this
+        // on the `calls` table alone migrated a database carrying sessions, notes or a served
+        // ledger and no ledger row with no backup at all.
+        var backup = persistent && path is not null && HasContent(connection)
             ? Backup(connection, path, found)
             : null;
 
+        if (persistent)
+            Execute(connection, "PRAGMA journal_mode=WAL;");
+
+        // Steps and stamp are one transaction. A migration that stops halfway — a failed step, a
+        // killed process — leaves the file at the version it arrived with and at that version's
+        // shape, which is the only state the next open knows how to continue from.
         var applied = new List<string>();
-        foreach (var (version, name, apply) in Ladder)
+        Execute(connection, "BEGIN IMMEDIATE;");
+        try
         {
-            apply(connection);
-            if (version > found)
+            foreach (var (version, name, apply) in Ladder.Where(step => step.Version > found))
+            {
+                apply(connection);
                 applied.Add($"{found}→{version}: {name}");
+            }
+
+            Views(connection);
+            Execute(connection, $"PRAGMA user_version={SchemaVersion};");
+            Execute(connection, "COMMIT;");
+        }
+        catch
+        {
+            Rollback(connection);
+            throw;
         }
 
-        Views(connection);
-        Execute(connection, $"PRAGMA user_version={SchemaVersion};");
         return new StateSchemaReport(found, SchemaVersion, applied, backup);
+    }
+
+    private static void Rollback(SqliteConnection connection)
+    {
+        try
+        {
+            Execute(connection, "ROLLBACK;");
+        }
+        catch (SqliteException)
+        {
+            // Nothing to undo: the failure happened before the transaction opened. The original
+            // exception is the one the caller needs, so this one is dropped deliberately.
+        }
+    }
+
+    /// <summary>
+    /// Whether the file already holds anything of the owner's — any table, view or index that is
+    /// not SQLite's own bookkeeping. A brand new file has none and needs no copy; everything else
+    /// gets one, whether or not it happens to carry a <c>calls</c> row.
+    /// </summary>
+    private static bool HasContent(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1";
+        return command.ExecuteScalar() is not null;
     }
 
     /// <summary>
@@ -734,6 +806,11 @@ internal static class StateStore
     /// <c>retrieve_served</c> existed from version 1 and nothing in <c>src/</c> ever inserted into
     /// it; the columns added here are what makes a served note identifiable across the process
     /// boundary that a hook event crosses twenty times a day (see <c>ServedLedger</c>).
+    ///
+    /// This is version 5's step, and that is the whole point of the number. It used to be the tail
+    /// of <c>BaseTables</c>, which meant it ran on every open of a file already stamped 4: new
+    /// tables, a new index and new columns appearing in somebody's live database with no version
+    /// change to mark them, no backup taken, and <c>Applied</c> reporting an empty list.
     /// </summary>
     private static void RetrievalIndex(SqliteConnection connection)
     {
@@ -741,21 +818,49 @@ internal static class StateStore
             "CREATE TABLE IF NOT EXISTS notes(name TEXT PRIMARY KEY, title TEXT, aliases TEXT, tags TEXT, body TEXT, updated TEXT);" +
             "CREATE INDEX IF NOT EXISTS ix_notes_updated ON notes(updated);" +
             "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(name UNINDEXED, title, aliases, tags, body);" +
-            "CREATE TABLE IF NOT EXISTS oom_index_meta(generation INTEGER NOT NULL, manifest_digest TEXT NOT NULL, built_at TEXT NOT NULL);");
+            "CREATE TABLE IF NOT EXISTS oom_index_meta(generation INTEGER NOT NULL, manifest_digest TEXT NOT NULL, built_at TEXT NOT NULL);" +
+            // A step owns what it needs. retrieve_served has existed since version 1, but a step
+            // that assumes a table another step created only works while every step runs on every
+            // open — which is the arrangement this version exists to end. The version 1 shape is
+            // created here if it is missing; the scope columns are then added to it as usual.
+            "CREATE TABLE IF NOT EXISTS retrieve_served(session_id TEXT, query_sig TEXT, note TEXT, ts TEXT);");
 
         foreach (var (name, definition) in ServedColumns)
             EnsureColumn(connection, "retrieve_served", name, definition);
 
-        // Totality, not tidiness: the unique index below cannot be created over duplicate rows, and
-        // a DDL step that can throw on somebody's existing file is not a migration step. The table
-        // is empty on every installation in the field — nothing ever wrote to it — so in practice
-        // this deletes nothing.
-        Execute(connection,
-            "DELETE FROM retrieve_served WHERE rowid NOT IN (SELECT MIN(rowid) FROM retrieve_served " +
-            "GROUP BY vault, client, entry, session_id, query_sig, note, content_hash);");
-        Execute(connection,
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_retrieve_served_scope ON " +
-            "retrieve_served(vault, client, entry, session_id, query_sig, note, content_hash);");
+        // This step deletes nothing. It used to open with an unconditional DELETE that collapsed
+        // rows sharing the scope key, justified by "the table is empty on every installation in
+        // the field — nothing ever wrote to it". That nothing wrote to it is not evidence that it
+        // is empty; it is only evidence that nobody looked. A migration that cannot be applied
+        // without destroying rows stops and says so, and the owner decides what the rows meant.
+        try
+        {
+            Execute(connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_retrieve_served_scope ON " +
+                "retrieve_served(vault, client, entry, session_id, query_sig, note, content_hash);");
+        }
+        catch (SqliteException e)
+        {
+            throw new StateSchemaException(
+                $"göç durduruldu: retrieve_served içinde kapsam anahtarını paylaşan {ServedScopeConflicts(connection)} küme var, " +
+                "benzersiz kapsam indeksi bunların üzerine kurulamaz. Hiçbir satır silinmedi ve şema sürümü yükseltilmedi; " +
+                "çakışan satırları inceleyip hangisinin kalacağına karar verin.", e);
+        }
+    }
+
+    /// <summary>
+    /// How many groups of <c>retrieve_served</c> rows share a scope key. NULL is left out on
+    /// purpose: a unique index counts two NULLs as different rows, so a group-by that counted them
+    /// as equal would report a conflict the index does not actually have.
+    /// </summary>
+    private static long ServedScopeConflicts(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT COUNT(*) FROM (SELECT 1 FROM retrieve_served " +
+            "WHERE session_id IS NOT NULL AND query_sig IS NOT NULL AND note IS NOT NULL " +
+            "GROUP BY vault, client, entry, session_id, query_sig, note, content_hash HAVING COUNT(*) > 1)";
+        return Convert.ToInt64(command.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
     }
 
     private static void UncachedInput(SqliteConnection connection) =>
@@ -827,9 +932,5 @@ internal static class StateStore
             "CREATE VIEW IF NOT EXISTS v_coverage AS SELECT ts, total, covered, uncovered_json FROM coverage;" +
             "CREATE VIEW IF NOT EXISTS v_health AS SELECT ts, component, level, code, key, detail FROM health;" +
             "CREATE VIEW IF NOT EXISTS v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;");
-
-        // Part of the same step, and therefore of the same floor: the retrieval index is not a
-        // second schema that happens to live in this file, it is this schema.
-        RetrievalIndex(connection);
     }
 }
