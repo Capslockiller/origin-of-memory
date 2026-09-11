@@ -1,10 +1,14 @@
 // yazan: codex · gpt-5
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace Oom.Contracts;
 
 public sealed record DoctorObservation(HealthItem Item, DateTimeOffset ObservedAt);
+
+/// <summary>One state root as InspectStateRoots found it: what it is named, what it says it serves, and whether it can be trusted.</summary>
+public sealed record StateRootReport(string Path, string Hash, string? Vault, long Rows, string Status);
 
 public sealed record DoctorSnapshot(
     IReadOnlyList<DoctorObservation> Observations,
@@ -23,12 +27,17 @@ public sealed class Doctor
     private readonly IClock clock;
     private readonly Func<DateTimeOffset, DoctorSnapshot> probe;
     private readonly Action repair;
+    private readonly Func<IReadOnlyList<HealthItem>> stateRoots;
 
-    public Doctor(IClock? clock = null, Func<DateTimeOffset, DoctorSnapshot>? probe = null, Action? repair = null)
+    public Doctor(IClock? clock = null, Func<DateTimeOffset, DoctorSnapshot>? probe = null, Action? repair = null,
+        Func<IReadOnlyList<HealthItem>>? stateRoots = null)
     {
         this.clock = clock ?? SystemClock.Instance;
         this.probe = probe ?? DefaultSnapshot;
         this.repair = repair ?? (() => { });
+        // Default off: an empty scan, never a live one — the test suite runs against the real
+        // %LOCALAPPDATA% and must not start opening the owner's real databases just by constructing a Doctor.
+        this.stateRoots = stateRoots ?? (() => []);
     }
 
     public DoctorResult Check(DateTimeOffset now)
@@ -43,6 +52,7 @@ public sealed class Doctor
         AddCount(items, "queue", "queue-length", snapshot.QueueLength, HealthLevel.Warning, $"Kuyruk uzunluğu: {snapshot.QueueLength}");
         AddCount(items, "quarantine", "quarantine", snapshot.Quarantine, HealthLevel.Warning, $"Karantina: {snapshot.Quarantine}");
         AddCount(items, "notes", "invalid-frontmatter", snapshot.InvalidFrontmatter, HealthLevel.Error, $"Geçersiz frontmatter: {snapshot.InvalidFrontmatter}");
+        items.AddRange(stateRoots());
         return new DoctorResult(items, snapshot.Coverage, snapshot.RejectionRate, snapshot.Pending, 0);
     }
 
@@ -145,6 +155,121 @@ public sealed class Doctor
         return Path.IsPathRooted(resolved)
             ? Item("runner", HealthLevel.Info, "claude-reachable", resolved, $"Claude CLI erişilebilir: {resolved}")
             : Item("runner", HealthLevel.Warning, "claude-reachable", "claude", "Claude CLI PATH içinde bulunamadı.");
+    }
+
+    /// <summary>
+    /// One line per subdirectory of <see cref="VaultIdentity.StateRootsDirectory"/>: what it is
+    /// named, what vault it claims to serve, how many rows its database carries, and whether it
+    /// can be trusted at all. Never deletes anything — this method only reports (spec 8, D9).
+    /// </summary>
+    public IReadOnlyList<StateRootReport> InspectStateRoots(string? localAppData = null)
+    {
+        var directory = VaultIdentity.StateRootsDirectory(localAppData);
+        if (!Directory.Exists(directory))
+            return [];
+
+        var reports = new List<StateRootReport>();
+        foreach (var root in Directory.EnumerateDirectories(directory))
+        {
+            var hash = Path.GetFileName(root);
+            try
+            {
+                reports.Add(InspectOneStateRoot(root, hash));
+            }
+            catch (Exception error) when (error is SqliteException or IOException or UnauthorizedAccessException)
+            {
+                // One unreadable root must never abort the scan of the other twenty-five.
+                reports.Add(new StateRootReport(root, hash, null, 0, "okunamıyor"));
+            }
+        }
+
+        // Read-only handles must not outlive the scan, or the owner cannot move/delete a root afterwards.
+        SqliteConnection.ClearAllPools();
+        return reports.OrderBy(report => report.Path, StringComparer.Ordinal).ToArray();
+    }
+
+    private static StateRootReport InspectOneStateRoot(string root, string hash)
+    {
+        var vault = VaultIdentity.ReadDescriptor(root);
+        var databasePath = Path.Combine(root, VaultIdentity.DatabaseName);
+        long rows = 0;
+        var readable = true;
+
+        if (File.Exists(databasePath))
+        {
+            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+            connection.Open();
+
+            // integrity_check FIRST: on a corrupt file a COUNT(*) still returns a number, and that number lies.
+            using (var integrity = connection.CreateCommand())
+            {
+                integrity.CommandText = "PRAGMA integrity_check";
+                readable = string.Equals(integrity.ExecuteScalar() as string, "ok", StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (readable)
+            {
+                var existingTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                using (var tables = connection.CreateCommand())
+                {
+                    tables.CommandText = "SELECT name FROM sqlite_master WHERE type='table'";
+                    using var reader = tables.ExecuteReader();
+                    while (reader.Read())
+                        existingTables.Add(reader.GetString(0));
+                }
+
+                // Only the tables that actually exist: a database that was never provisioned must not throw.
+                foreach (var table in new[] { "calls", "flush_log", "health", "sessions", "coverage", "compile_runs" }.Where(existingTables.Contains))
+                {
+                    using var count = connection.CreateCommand();
+                    count.CommandText = $"SELECT COUNT(*) FROM {table}";
+                    rows += Convert.ToInt64(count.ExecuteScalar());
+                }
+            }
+        }
+
+        var status = !readable ? "okunamıyor"
+            : vault is not null && string.Equals(VaultIdentity.Hash(vault), hash, StringComparison.Ordinal) ? "kullanımda"
+            : vault is not null ? "eşleşmiyor"
+            : rows > 0 ? "sahipsiz"
+            : "artık";
+        return new StateRootReport(root, hash, vault, readable ? rows : 0, status);
+    }
+
+    /// <summary>Turns <see cref="InspectStateRoots"/> into health items Doctor can fold into a normal Check.</summary>
+    public IReadOnlyList<HealthItem> StateRootItems(string? localAppData = null)
+    {
+        var reports = InspectStateRoots(localAppData);
+        var items = new List<HealthItem>();
+
+        // Report order (by Path), not grouped by status — "kullanımda" roots contribute no item at all.
+        foreach (var report in reports)
+        {
+            switch (report.Status)
+            {
+                case "artık":
+                    items.Add(Item("state", HealthLevel.Warning, "stray-state-root", report.Hash,
+                        $"Sahipsiz boş durum kökü: {report.Path} — hiç satır yok, vault künyesi yok. Silme kararı sahibin; oom hiçbir şeyi silmez."));
+                    break;
+                case "eşleşmiyor":
+                    items.Add(Item("state", HealthLevel.Warning, "state-root-mismatch", report.Hash,
+                        $"Durum kökü {report.Path}, \"{report.Vault}\" adlı vault'u taşıyor ama bu vault'un doğru adresi {VaultIdentity.Hash(report.Vault!)} olmalı; iki veritabanı aynı vault için ulaşılabilir."));
+                    break;
+                case "sahipsiz":
+                    items.Add(Item("state", HealthLevel.Warning, "unattributed-state-root", report.Hash,
+                        $"Durum kökü {report.Path} {report.Rows} satır taşıyor ama hiçbir vault künyesi yok; boş olmadığı için sahipsiz sayılır, artık (stray) sayılmaz."));
+                    break;
+                case "okunamıyor":
+                    items.Add(Item("state", HealthLevel.Warning, "state-root-unreadable", report.Hash,
+                        $"Durum kökü {report.Path} okunamıyor: state.db bütünlük denetiminden geçmedi ya da açılamadı."));
+                    break;
+            }
+        }
+
+        var byStatus = reports.ToLookup(report => report.Status);
+        items.Insert(0, Item("state", HealthLevel.Info, "state-roots", reports.Count.ToString(),
+            $"{reports.Count} durum kökü · kullanımda {byStatus["kullanımda"].Count()} · artık {byStatus["artık"].Count()} · sahipsiz {byStatus["sahipsiz"].Count()} · eşleşmiyor {byStatus["eşleşmiyor"].Count()} · okunamıyor {byStatus["okunamıyor"].Count()}"));
+        return items;
     }
 
     private static DoctorObservation Observe(DateTimeOffset now, string component, string code, string key, string detail) =>

@@ -15,8 +15,6 @@ namespace Oom.Contracts;
 /// </summary>
 public sealed partial class State : IDisposable, IIngestStateStore
 {
-    // 4: call attempts own nullable, split token counters and stable operation identities.
-    private const int SchemaVersion = 4;
     private const int ReplaceAttempts = 5;
     private const int ReplaceBackoffMs = 200;
     private const int StaleWarningHours = 24;
@@ -34,6 +32,7 @@ public sealed partial class State : IDisposable, IIngestStateStore
     private readonly IClock _clock;
     private readonly IFileOperations _files;
     private readonly SqliteConnection _connection;
+    private readonly StateAccess _access;
     private readonly string _workDirectory;
     private readonly Lock _gate = new();
     private long _temporaryCounter;
@@ -41,24 +40,48 @@ public sealed partial class State : IDisposable, IIngestStateStore
     public State() : this(null, null, null) { }
 
     public State(IClock? clock, IFileOperations? files = null, string? databasePath = null)
+        : this(clock, files, databasePath, StateAccess.ReadWrite) { }
+
+    /// <summary>
+    /// Opens the state database. <see cref="StateAccess.ReadOnly"/> creates no directory and
+    /// issues no DDL: a command that only reads may not bring a state root into existence, which
+    /// is how 26 unattributable roots accumulated under one profile.
+    /// </summary>
+    public State(IClock? clock, IFileOperations? files, string? databasePath, StateAccess access)
     {
         _clock = clock ?? SystemClock.Instance;
         _files = files ?? new WindowsFileOperations();
-        var path = databasePath ?? VaultPaths.StateDatabase();
+        _access = access;
+        var path = databasePath ?? (access is StateAccess.ReadOnly ? VaultIdentity.ExistingDatabase() : VaultPaths.StateDatabase());
         _workDirectory = path is null
             ? Path.Combine(Path.GetTempPath(), "oom", "state")
             : Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(_workDirectory);
+        if (access is StateAccess.ReadWrite)
+            Directory.CreateDirectory(_workDirectory);
 
-        _connection = new SqliteConnection(path is null
-            ? "Data Source=:memory:"
-            : $"Data Source={path};Cache=Shared");
-        _connection.Open();
-        Initialize(path is not null);
+        var opened = StateStore.Open(path, access);
+        _connection = opened.Connection;
+        SchemaReport = opened.Report;
+    }
+
+    /// <summary>
+    /// Opens the vault's state database for reading without creating anything; <c>null</c> when
+    /// there is no vault or the database has never been written.
+    /// </summary>
+    public static State? OpenReadOnly(string? databasePath = null)
+    {
+        var path = databasePath ?? VaultIdentity.ExistingDatabase();
+        return path is not null && File.Exists(path) ? new State(null, null, path, StateAccess.ReadOnly) : null;
     }
 
     /// <summary>Where atomic writes land when the caller passes a relative name.</summary>
     public string WorkDirectory => _workDirectory;
+
+    /// <summary>How this handle was opened.</summary>
+    public StateAccess Access => _access;
+
+    /// <summary>What the open did to the schema: the version found, the version left, and the steps run.</summary>
+    public StateSchemaReport SchemaReport { get; }
 
     /// <summary>
     /// Spend aggregation. A Claude transcript republishes the same assistant
@@ -483,11 +506,245 @@ public sealed partial class State : IDisposable, IIngestStateStore
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
     private static object Db(long? value) => value is null ? DBNull.Value : value.Value;
 
-    private void Initialize(bool persistent)
+}
+
+/// <summary>How a caller intends to use the state database.</summary>
+public enum StateAccess
+{
+    /// <summary>The state root is created if missing and the schema is provisioned or migrated.</summary>
+    ReadWrite,
+
+    /// <summary>Nothing is created and no DDL runs; the file must already exist.</summary>
+    ReadOnly
+}
+
+/// <summary>What one open did to the schema. <c>Applied</c> is empty when nothing had to change.</summary>
+public sealed record StateSchemaReport(int FoundVersion, int Version, IReadOnlyList<string> Applied, string? BackupPath);
+
+/// <summary>The file on disk carries a schema this executable does not know how to read.</summary>
+public sealed class StateSchemaException(string message) : Exception(message);
+
+/// <summary>
+/// The single owner of the state database's shape (spec 8). Three places used to create this
+/// file — <c>State.Initialize</c>, the installer through its own fresh <c>State</c>, and the
+/// retrieval index build — with no version any of them agreed on, and the old code stamped
+/// <c>PRAGMA user_version</c> unconditionally, which silently relabelled a database written by a
+/// newer build. Here the version is explicit, the path from an older file is an ordered list of
+/// steps, a file newer than this executable is refused instead of being downgraded in place, and
+/// an existing database is copied and the copy verified before any step runs. Nothing is ever
+/// dropped and recreated: this is the owner's memory, not a test fixture.
+/// </summary>
+internal static class StateStore
+{
+    // 4: call attempts own nullable, split token counters and stable operation identities.
+    internal const int SchemaVersion = 4;
+
+    /// <summary>
+    /// The migration path, in order. Every step is additive and idempotent — it creates what is
+    /// missing and touches nothing that exists — so the same ladder takes a brand new file and a
+    /// file written by any earlier build to the same shape, and running it twice is a no-op.
+    /// </summary>
+    internal static readonly (int Version, string Name, Action<SqliteConnection> Apply)[] Ladder =
+    [
+        (1, "temel tablolar", BaseTables),
+        (2, "çağrı kimlikleri (operation_id, attempt_id, attempt_no)", CallIdentities),
+        (3, "önbelleksiz girdi sayacı (uncached_in_tok)", UncachedInput),
+        (4, "bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)", SplitUsage)
+    ];
+
+    private static readonly string[] Counted = ["calls", "flush_log", "health", "sessions", "coverage", "compile_runs"];
+
+    internal static (SqliteConnection Connection, StateSchemaReport Report) Open(string? path, StateAccess access)
     {
-        using var command = _connection.CreateCommand();
-        command.CommandText = (persistent ? "PRAGMA journal_mode=WAL; " : string.Empty) +
-            "PRAGMA busy_timeout=5000; " +
+        if (path is null)
+        {
+            if (access is StateAccess.ReadOnly)
+                throw new StateSchemaException("salt okunur durum açılışı için bir veritabanı yolu gerekir.");
+            var memory = new SqliteConnection("Data Source=:memory:");
+            memory.Open();
+            return (memory, Provision(memory, persistent: false, path: null));
+        }
+
+        if (access is StateAccess.ReadOnly)
+        {
+            // No CreateDirectory and no DDL on this path: the read is the whole point.
+            if (!File.Exists(path))
+                throw new FileNotFoundException($"durum veritabanı yok: {path}", path);
+            var reader = new SqliteConnection($"Data Source={path};Mode=ReadOnly;Cache=Shared");
+            reader.Open();
+            var found = ReadVersion(reader);
+            Guard(found, path);
+            return (reader, new StateSchemaReport(found, found, [], null));
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var connection = new SqliteConnection($"Data Source={path};Cache=Shared");
+        connection.Open();
+        return (connection, Provision(connection, persistent: true, path));
+    }
+
+    /// <summary>The schema version the file claims; 0 for a file nothing has stamped yet.</summary>
+    internal static int ReadVersion(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version";
+        return Convert.ToInt32(command.ExecuteScalar() ?? 0, CultureInfo.InvariantCulture);
+    }
+
+    private static StateSchemaReport Provision(SqliteConnection connection, bool persistent, string? path)
+    {
+        Execute(connection, (persistent ? "PRAGMA journal_mode=WAL; " : string.Empty) + "PRAGMA busy_timeout=5000;");
+
+        var found = ReadVersion(connection);
+        Guard(found, path);
+
+        // A file that already carries the ledger and an older stamp is real memory being migrated.
+        // It is copied and the copy verified before a single ALTER runs, and the copy is kept.
+        var backup = found < SchemaVersion && path is not null && TableExists(connection, "calls")
+            ? Backup(connection, path, found)
+            : null;
+
+        var applied = new List<string>();
+        foreach (var (version, name, apply) in Ladder)
+        {
+            apply(connection);
+            if (version > found)
+                applied.Add($"{found}→{version}: {name}");
+        }
+
+        Views(connection);
+        Execute(connection, $"PRAGMA user_version={SchemaVersion};");
+        return new StateSchemaReport(found, SchemaVersion, applied, backup);
+    }
+
+    /// <summary>
+    /// A database written by a newer build is not opened. The old code ran its CREATEs and then
+    /// stamped user_version back down to its own number, so a downgrade left no trace at all.
+    /// </summary>
+    private static void Guard(int found, string? path)
+    {
+        if (found <= SchemaVersion)
+            return;
+        throw new StateSchemaException(
+            $"durum veritabanı şema sürümü {found}, bu ikili en çok {SchemaVersion} biliyor: {path ?? ":memory:"} — " +
+            "daha yeni bir oom sürümüyle açın; bu sürüm veriyi geriye dönüştürmez.");
+    }
+
+    /// <summary>
+    /// Copy and verify, never migrate in place without a way back. <c>VACUUM INTO</c> is SQLite's
+    /// own consistent copy: it reads through the live connection, so a WAL that has not been
+    /// checkpointed still lands in the copy, which a plain File.Copy would leave behind.
+    /// </summary>
+    private static string Backup(SqliteConnection connection, string path, int found)
+    {
+        var directory = Path.Combine(Path.GetDirectoryName(path)!, "backup");
+        Directory.CreateDirectory(directory);
+        var copy = Path.Combine(directory, $"state.db.v{found}-{DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff", CultureInfo.InvariantCulture)}.bak");
+
+        using (var vacuum = connection.CreateCommand())
+        {
+            vacuum.CommandText = "VACUUM INTO $target";
+            vacuum.Parameters.AddWithValue("$target", copy);
+            vacuum.ExecuteNonQuery();
+        }
+
+        Verify(connection, copy, found);
+        return copy;
+    }
+
+    /// <summary>
+    /// Integrity first, counts second: COUNT(*) on a corrupt SQLite file returns a number, and the
+    /// number is a lie. A copy that does not verify stops the migration — the original is left
+    /// exactly as it was and the owner is told, which is the only safe answer.
+    /// </summary>
+    private static void Verify(SqliteConnection source, string copy, int found)
+    {
+        using var verification = new SqliteConnection($"Data Source={copy};Mode=ReadOnly");
+        verification.Open();
+
+        using (var integrity = verification.CreateCommand())
+        {
+            integrity.CommandText = "PRAGMA integrity_check";
+            if (integrity.ExecuteScalar()?.ToString() is not { } answer || !answer.Equals("ok", StringComparison.OrdinalIgnoreCase))
+                throw new StateSchemaException($"göç durduruldu: yedek bütünlük denetimini geçmedi ({copy}). Özgün dosyaya dokunulmadı.");
+        }
+
+        if (ReadVersion(verification) != found)
+            throw new StateSchemaException($"göç durduruldu: yedeğin şema sürümü özgün dosyayla eşleşmiyor ({copy}). Özgün dosyaya dokunulmadı.");
+
+        foreach (var table in Counted.Where(table => TableExists(source, table)))
+        {
+            if (Count(source, table) != Count(verification, table))
+                throw new StateSchemaException($"göç durduruldu: yedekte {table} satır sayısı tutmuyor ({copy}). Özgün dosyaya dokunulmadı.");
+        }
+    }
+
+    private static long Count(SqliteConnection connection, string table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table}";
+        return Convert.ToInt64(command.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
+    }
+
+    internal static bool TableExists(SqliteConnection connection, string table)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name";
+        command.Parameters.AddWithValue("$name", table);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private static void CallIdentities(SqliteConnection connection)
+    {
+        EnsureLedgerColumn(connection, "operation_id", "TEXT");
+        EnsureLedgerColumn(connection, "attempt_id", "TEXT");
+        EnsureLedgerColumn(connection, "attempt_no", "INTEGER");
+        Execute(connection, "CREATE UNIQUE INDEX IF NOT EXISTS ix_calls_attempt_id ON calls(attempt_id) WHERE attempt_id IS NOT NULL;");
+    }
+
+    private static void UncachedInput(SqliteConnection connection) =>
+        EnsureLedgerColumn(connection, "uncached_in_tok", "INTEGER");
+
+    private static void SplitUsage(SqliteConnection connection)
+    {
+        EnsureLedgerColumn(connection, "usage_rank", "INTEGER NOT NULL DEFAULT 0 CHECK(usage_rank BETWEEN 0 AND 2)");
+        EnsureLedgerColumn(connection, "usage_semantics", "TEXT NOT NULL DEFAULT 'legacy-total-input-v0'");
+    }
+
+    private static void Views(SqliteConnection connection) => Execute(connection,
+        "DROP VIEW IF EXISTS v_calls;" +
+        "DROP VIEW IF EXISTS v_call_usage;" +
+        // v_calls remains a detail view: estimates and unknowns stay visible and never collapse.
+        "CREATE VIEW v_calls AS SELECT ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose, operation_id, attempt_id, attempt_no, uncached_in_tok, usage_rank, usage_semantics FROM calls;" +
+        // The default aggregate is deliberately measured-only. Estimates remain queryable in v_calls.
+        "CREATE VIEW v_call_usage AS SELECT backend, component, tier, model, purpose, COUNT(*) AS attempt_count, COUNT(DISTINCT operation_id) AS operation_count, SUM(uncached_in_tok) AS uncached_in_tok, SUM(cache_r) AS cache_r, SUM(cache_w) AS cache_w, SUM(out_tok) AS out_tok FROM calls WHERE usage_rank = 2 AND usage_semantics = 'split-v1' GROUP BY backend, component, tier, model, purpose;");
+
+    private static void EnsureLedgerColumn(SqliteConnection connection, string name, string definition)
+    {
+        using (var columns = connection.CreateCommand())
+        {
+            columns.CommandText = "PRAGMA table_info(calls)";
+            using var reader = columns.ExecuteReader();
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), name, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+        }
+
+        Execute(connection, $"ALTER TABLE calls ADD COLUMN {name} {definition}");
+    }
+
+    private static void Execute(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    private static void BaseTables(SqliteConnection connection)
+    {
+        Execute(connection,
             "CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, transcript_path TEXT, last_turn_index INTEGER, last_flush_ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS flush_log(ts TEXT, session_id TEXT, reason TEXT, outcome TEXT, turns INTEGER, chars INTEGER, backend TEXT);" +
             "CREATE TABLE IF NOT EXISTS retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);" +
@@ -507,43 +764,6 @@ public sealed partial class State : IDisposable, IIngestStateStore
             "CREATE VIEW IF NOT EXISTS v_flush_log AS SELECT ts, session_id, reason, outcome, turns, chars, backend FROM flush_log;" +
             "CREATE VIEW IF NOT EXISTS v_coverage AS SELECT ts, total, covered, uncovered_json FROM coverage;" +
             "CREATE VIEW IF NOT EXISTS v_health AS SELECT ts, component, level, code, key, detail FROM health;" +
-            "CREATE VIEW IF NOT EXISTS v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;";
-        command.ExecuteNonQuery();
-
-        EnsureLedgerColumn("operation_id", "TEXT");
-        EnsureLedgerColumn("attempt_id", "TEXT");
-        EnsureLedgerColumn("attempt_no", "INTEGER");
-        EnsureLedgerColumn("uncached_in_tok", "INTEGER");
-        EnsureLedgerColumn("usage_rank", "INTEGER NOT NULL DEFAULT 0 CHECK(usage_rank BETWEEN 0 AND 2)");
-        EnsureLedgerColumn("usage_semantics", "TEXT NOT NULL DEFAULT 'legacy-total-input-v0'");
-
-        using var ledger = _connection.CreateCommand();
-        ledger.CommandText =
-            "DROP VIEW IF EXISTS v_calls;" +
-            "DROP VIEW IF EXISTS v_call_usage;" +
-            // v_calls remains a detail view: estimates and unknowns stay visible and never collapse.
-            "CREATE VIEW v_calls AS SELECT ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose, operation_id, attempt_id, attempt_no, uncached_in_tok, usage_rank, usage_semantics FROM calls;" +
-            // The default aggregate is deliberately measured-only. Estimates remain queryable in v_calls.
-            "CREATE VIEW v_call_usage AS SELECT backend, component, tier, model, purpose, COUNT(*) AS attempt_count, COUNT(DISTINCT operation_id) AS operation_count, SUM(uncached_in_tok) AS uncached_in_tok, SUM(cache_r) AS cache_r, SUM(cache_w) AS cache_w, SUM(out_tok) AS out_tok FROM calls WHERE usage_rank = 2 AND usage_semantics = 'split-v1' GROUP BY backend, component, tier, model, purpose;" +
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_calls_attempt_id ON calls(attempt_id) WHERE attempt_id IS NOT NULL;" +
-            $"PRAGMA user_version={SchemaVersion};";
-        ledger.ExecuteNonQuery();
-    }
-
-    private void EnsureLedgerColumn(string name, string definition)
-    {
-        using var columns = _connection.CreateCommand();
-        columns.CommandText = "PRAGMA table_info(calls)";
-        using var reader = columns.ExecuteReader();
-        while (reader.Read())
-        {
-            if (string.Equals(reader.GetString(1), name, StringComparison.OrdinalIgnoreCase))
-                return;
-        }
-
-        reader.Close();
-        using var alter = _connection.CreateCommand();
-        alter.CommandText = $"ALTER TABLE calls ADD COLUMN {name} {definition}";
-        alter.ExecuteNonQuery();
+            "CREATE VIEW IF NOT EXISTS v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;");
     }
 }

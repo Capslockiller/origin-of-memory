@@ -138,7 +138,11 @@ public sealed class Install
             SecurePath(claudeConfig);
             var executable = Path.Combine(oom, "oom.exe");
             InstallBinary(executable);
-            using (var freshState = new State(clock, null, Path.Combine(stateRoot, "state.db"))) freshState.WriteVaultStamp(clock.Now); // Y-118: the vault's own coverage window starts here.
+            using (var freshState = new State(clock, null, Path.Combine(stateRoot, VaultIdentity.DatabaseName))) freshState.WriteVaultStamp(clock.Now); // Y-118: the vault's own coverage window starts here.
+            // The state root records which vault it serves. Without it a root is eight hex digits
+            // nobody can attribute, which is why 26 of them could accumulate under one profile
+            // with no way to tell an abandoned one from a live one.
+            WriteIfMissing(Path.Combine(stateRoot, VaultIdentity.DescriptorName), JsonSerializer.Serialize(new { vault, schema = 1 }));
             InstallHooks(vault, executable);
             registrations.Add("hooks:4");
             scheduler.Register(TaskName, new Sweep().BuildScheduledTaskXml(executable));
@@ -393,8 +397,8 @@ public sealed class Install
     private static IEnumerable<string> PlannedPaths(string oom, string stateRoot, string claudeConfig) =>
     [
         Path.Combine(oom, "oom.exe"), Path.Combine(oom, "vault.json"), Path.Combine(oom, "oom.json"), Path.Combine(oom, "hub-config.json"),
-        claudeConfig, Path.Combine(oom, "quarantine"), Path.Combine(stateRoot, "state.db"),
-        Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs")
+        claudeConfig, Path.Combine(oom, "quarantine"), Path.Combine(stateRoot, VaultIdentity.DatabaseName),
+        Path.Combine(stateRoot, VaultIdentity.DescriptorName), Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs")
     ];
     private static void CreateDirectories(string oom, string stateRoot)
     {
@@ -513,9 +517,11 @@ public sealed class Install
     /// D3: one vault, one state root. The installer used to hash the upper-cased path while
     /// <see cref="VaultPaths.StateDatabase"/> hashes the path as written, so <c>install</c>
     /// provisioned <c>state.db</c> — and migrated every v0 row into it — in a directory the
-    /// running exe never opened. Lane C owns the answer; the installer asks it.
+    /// running exe never opened. It then kept a second, quieter copy of the answer: its own
+    /// <c>Path.GetFullPath</c> wrapper. Two functions is the same defect wearing a smaller hat,
+    /// so there is now exactly one, in <see cref="VaultIdentity"/>, and the installer asks it.
     /// </summary>
-    private static string StateRoot(string vault) => LaneCVaultPaths.StateRoot(Path.GetFullPath(vault));
+    private static string StateRoot(string vault) => VaultIdentity.StateRoot(vault);
     private static bool CommandAvailable(string command) => (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
         .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Any(directory => new[] { command + ".exe", command + ".cmd", command + ".bat" }.Any(file => File.Exists(Path.Combine(directory.Trim('"'), file))));
     private static bool Fts5Available()

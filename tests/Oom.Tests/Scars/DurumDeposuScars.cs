@@ -112,4 +112,169 @@ public sealed class DurumDeposuScars
             ScarFixture.Remove(root);
         }
     }
+
+    /// <summary>
+    /// Two opens of one file on disk, exactly as two hook processes see it: the first finds a v2
+    /// database and migrates it, the second finds v4 and does nothing. Same process, two
+    /// independent opens — the whole state lives in the file, so the open path is the production
+    /// path; what this does NOT prove is anything about in-memory state surviving a process exit.
+    /// </summary>
+    [Fact(DisplayName = "Y-129 · Eski şemalı durum deposu kopyalanıp doğrulanarak göç eder, satırları kalır ve ikinci açılış hiçbir şey yapmaz")]
+    public void Y129_OlderDatabaseIsMigratedByCopyAndVerifyAndKeepsItsRows()
+    {
+        var root = ScarFixture.TempDirectory();
+        try
+        {
+            var database = Path.Combine(root, "state.db");
+            Seed(database, version: 2);
+
+            using (var migrated = new State(null, null, database))
+            {
+                var report = migrated.SchemaReport;
+                Assert.Equal(2, report.FoundVersion);
+                Assert.Equal(4, report.Version);
+                Assert.Equal(
+                    ["2→3: önbelleksiz girdi sayacı (uncached_in_tok)", "2→4: bölünmüş sayaç anlambilimi (usage_rank, usage_semantics)"],
+                    report.Applied);
+
+                // Nothing was dropped and recreated: the pre-migration rows are still the same rows.
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM calls"));
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM flush_log"));
+                Assert.Equal(1, migrated.Scalar("SELECT COUNT(*) FROM calls WHERE purpose = 'eski satır'"));
+                Assert.Equal(4, migrated.Scalar("PRAGMA user_version"));
+
+                // A proven way back exists before a single ALTER runs, and it is kept, not cleaned up.
+                Assert.NotNull(report.BackupPath);
+                Assert.True(File.Exists(report.BackupPath));
+                Assert.Equal(2, Read(report.BackupPath!, "PRAGMA user_version"));
+                Assert.Equal(1, Read(report.BackupPath!, "SELECT COUNT(*) FROM calls"));
+                Assert.Equal(0, Read(report.BackupPath!, "SELECT COUNT(*) FROM pragma_table_info('calls') WHERE name = 'usage_rank'"));
+            }
+
+            SqliteConnection.ClearAllPools();
+            using var reopened = new State(null, null, database);
+            Assert.Equal(4, reopened.SchemaReport.FoundVersion);
+            Assert.Empty(reopened.SchemaReport.Applied);
+            Assert.Null(reopened.SchemaReport.BackupPath);
+            Assert.Equal(1, reopened.Scalar("SELECT COUNT(*) FROM calls"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
+    }
+
+    [Fact(DisplayName = "Y-130 · Daha yeni şemalı durum deposu sessizce eski sürüme etiketlenmez, açılış reddedilir")]
+    public void Y130_NewerSchemaIsRefusedInsteadOfBeingRelabelled()
+    {
+        var root = ScarFixture.TempDirectory();
+        try
+        {
+            var database = Path.Combine(root, "state.db");
+            using (var provisioned = new State(null, null, database))
+                Assert.Equal(4, provisioned.Scalar("PRAGMA user_version"));
+            SqliteConnection.ClearAllPools();
+
+            Execute(database, "PRAGMA user_version=99;");
+            SqliteConnection.ClearAllPools();
+
+            var error = Assert.Throws<StateSchemaException>(() => new State(null, null, database));
+            Assert.Contains("99", error.Message, StringComparison.Ordinal);
+
+            // Refused means untouched: the file still says 99, so a newer build still recognises it.
+            SqliteConnection.ClearAllPools();
+            Assert.Equal(99, Read(database, "PRAGMA user_version"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
+    }
+
+    [Fact(DisplayName = "Y-131 · Vault kimliği tek işlevdir; kurulum kendi kopyasını taşımaz, ikinci yazım bildirilerek yakalanır")]
+    public void Y131_VaultIdentityIsOneFunctionAndASecondSpellingIsReported()
+    {
+        const string vault = @"E:\bir kasa";
+        Assert.Equal(VaultIdentity.StateRoot(vault), VaultIdentity.StateRoot(vault + Path.DirectorySeparatorChar));
+        Assert.Equal(Path.Combine(VaultIdentity.StateRoot(vault), "state.db"), VaultIdentity.DatabasePath(vault));
+        Assert.Equal(VaultIdentity.StateRootsDirectory(), Path.GetDirectoryName(VaultIdentity.StateRoot(vault)));
+
+        // A second spelling still names a second directory — that is not repointed silently, it is
+        // detectable, which is what lets doctor say "two databases are reachable for one vault".
+        Assert.True(VaultIdentity.IsCanonical(vault));
+        Assert.False(VaultIdentity.IsCanonical("E:/bir kasa"));
+        Assert.NotEqual(VaultIdentity.Hash(vault), VaultIdentity.Hash("E:/bir kasa"));
+
+        // The installer used to keep its own quieter copy of the answer. One function, one caller path.
+        var sources = Directory.EnumerateFiles(Path.Combine(ScarFixture.RepositoryRoot(), "src", "Oom"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(part => part is "obj" or "bin"))
+            .ToArray();
+        Assert.DoesNotContain("LaneCVaultPaths", File.ReadAllText(sources.Single(path => path.EndsWith("Install.cs", StringComparison.Ordinal))), StringComparison.Ordinal);
+        Assert.Equal(1, sources.SelectMany(File.ReadLines)
+            .Count(line => line.Contains("SHA256.HashData", StringComparison.Ordinal) && line.Contains("TrimEnd(Path.DirectorySeparatorChar)", StringComparison.Ordinal)));
+    }
+
+    [Fact(DisplayName = "Y-132 · Salt okunur açılış hiçbir durum kökü yaratmaz; yazan açılış yaratır")]
+    public void Y132_ReadOnlyOpenCreatesNoStateRoot()
+    {
+        var root = ScarFixture.TempDirectory();
+        try
+        {
+            var missing = Path.Combine(root, "yok");
+            var database = Path.Combine(missing, "state.db");
+
+            Assert.Null(State.OpenReadOnly(database));
+            Assert.False(Directory.Exists(missing));
+            Assert.Throws<FileNotFoundException>(() => new State(null, null, database, StateAccess.ReadOnly));
+            Assert.False(Directory.Exists(missing));
+
+            using (var writer = new State(null, null, database))
+                writer.RecordFlush(ScarFixture.Now, "y132", "sessionend", "ok", 4, 40, "claude");
+            SqliteConnection.ClearAllPools();
+            Assert.True(File.Exists(database));
+
+            using var reader = State.OpenReadOnly(database);
+            Assert.NotNull(reader);
+            Assert.Equal(StateAccess.ReadOnly, reader!.Access);
+            Assert.Equal(1, reader.Scalar("SELECT COUNT(*) FROM flush_log"));
+            Assert.Empty(reader.SchemaReport.Applied);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
+    }
+
+    /// <summary>A database shaped the way build 2 left it: the split counters do not exist yet.</summary>
+    private static void Seed(string database, int version)
+    {
+        Execute(database,
+            "CREATE TABLE calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT, operation_id TEXT, attempt_id TEXT, attempt_no INTEGER);" +
+            "INSERT INTO calls(ts, backend, purpose) VALUES('2026-01-01T00:00:00+00:00', 'claude', 'eski satır');" +
+            "CREATE TABLE flush_log(ts TEXT, session_id TEXT, reason TEXT, outcome TEXT, turns INTEGER, chars INTEGER, backend TEXT);" +
+            "INSERT INTO flush_log(ts, session_id, outcome) VALUES('2026-01-01T00:00:00+00:00', 'eski', 'ok');" +
+            $"PRAGMA user_version={version};");
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static void Execute(string database, string sql)
+    {
+        using var connection = new SqliteConnection($"Data Source={database}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    private static long Read(string database, string sql)
+    {
+        using var connection = new SqliteConnection($"Data Source={database};Mode=ReadOnly");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToInt64(command.ExecuteScalar() ?? 0L);
+    }
 }

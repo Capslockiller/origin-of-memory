@@ -13,7 +13,8 @@ internal static class HealthLedger
     internal static void Record(HealthItem item, DateTimeOffset observedAt)
     {
         Memory[$"{item.Component}:{item.Code}:{item.Key}"] = new DoctorObservation(item, observedAt);
-        var path = VaultPaths.StateDatabase();
+        // A read may not bring a state root into existence: only look at a database that already exists.
+        var path = VaultIdentity.ExistingDatabase();
         if (path is null)
             return;
 
@@ -40,7 +41,8 @@ internal static class HealthLedger
     internal static IReadOnlyList<DoctorObservation> Read()
     {
         var observations = Memory.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-        var path = VaultPaths.StateDatabase();
+        // A read may not bring a state root into existence: only look at a database that already exists.
+        var path = VaultIdentity.ExistingDatabase();
         if (path is not null && File.Exists(path))
             try
             {

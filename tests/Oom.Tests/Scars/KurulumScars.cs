@@ -429,4 +429,92 @@ public sealed class KurulumScars(ITestOutputHelper output)
 
         public ProcessResult Run(ProcessRequest request, TimeSpan timeout) => new(0, taskOutput, string.Empty, true);
     }
+
+    [Fact(DisplayName = "Y-133 · Durum kökü hangi vault'a ait olduğunu yazar; doctor künyesiz kökleri bildirir, silmez")]
+    public void Y133_StateRootCarriesItsVaultDescriptorAndDoctorReportsStrayRootsWithoutDeleting()
+    {
+        var root = ScarFixture.TempDirectory();
+        try
+        {
+            var vault = Path.Combine(root, "kasa");
+            var installLocal = Path.Combine(root, "kurulum-yerel");
+            var profile = Path.Combine(root, "profil");
+            var claude = Path.Combine(root, "claude-kaynak");
+            var stateRoot = Path.Combine(root, "state");
+            foreach (var path in new[] { vault, installLocal, profile, claude })
+                Directory.CreateDirectory(path);
+            var executable = Path.Combine(root, "oom.exe");
+            File.WriteAllText(executable, "synthetic executable");
+
+            var install = new Install(
+                scheduler: new FakeScheduler(),
+                windowsSupported: () => true,
+                commandAvailable: _ => true,
+                fts5Available: () => true,
+                shortcutRegistrar: _ => false,
+                eventLogRegistrar: () => false,
+                userSettingsPath: () => Path.Combine(profile, ".claude", "settings.json"),
+                mcpCandidates: () => [Path.Combine(profile, "mcp", "claude_desktop_config.json")],
+                processPath: () => executable,
+                localAppDataPath: () => installLocal,
+                claudeUserConfigPath: () => claude,
+                knownSyncRoots: () => [],
+                shortcutRemover: () => false,
+                eventLogRemover: () => { },
+                stateRootPath: _ => stateRoot,
+                doctorAction: () => { });
+
+            var result = install.Run(vault);
+            Assert.True(result.Success, result.Error);
+
+            // Without this a state root is eight hex digits nobody can attribute, which is exactly
+            // how 26 of them accumulated under one profile with no way to tell live from abandoned.
+            var descriptor = Path.Combine(stateRoot, VaultIdentity.DescriptorName);
+            Assert.True(File.Exists(descriptor), $"durum kökü künyesi yazılmadı: {descriptor}");
+            using (var document = JsonDocument.Parse(File.ReadAllText(descriptor, new UTF8Encoding(false))))
+                Assert.Equal(vault, document.RootElement.GetProperty("vault").GetString());
+
+            // A fixture profile carrying one of each kind of root. The scan must tell them apart,
+            // and it must leave every single one of them exactly where it is.
+            var scanLocal = Path.Combine(root, "tarama-yerel");
+            var roots = Path.Combine(scanLocal, "oom");
+            var live = Path.Combine(roots, VaultIdentity.Hash(vault));
+            var stray = Path.Combine(roots, "00000000deadbeef");
+            var orphan = Path.Combine(roots, "11111111deadbeef");
+            var mismatch = Path.Combine(roots, "22222222deadbeef");
+            foreach (var path in new[] { live, stray, orphan, mismatch })
+                Directory.CreateDirectory(path);
+            File.Copy(descriptor, Path.Combine(live, VaultIdentity.DescriptorName));
+            File.Copy(descriptor, Path.Combine(mismatch, VaultIdentity.DescriptorName));
+            foreach (var path in new[] { live, orphan })
+                using (var state = new State(null, null, Path.Combine(path, VaultIdentity.DatabaseName)))
+                    state.RecordFlush(ScarFixture.Now, "y133", "sessionend", "ok", 3, 30, "claude");
+
+            var doctor = new Doctor();
+            var reports = doctor.InspectStateRoots(scanLocal).ToDictionary(report => report.Path, StringComparer.Ordinal);
+            Assert.Equal("kullanımda", reports[live].Status);
+            Assert.Equal("artık", reports[stray].Status);
+            Assert.Equal("sahipsiz", reports[orphan].Status);
+            Assert.Equal("eşleşmiyor", reports[mismatch].Status);
+            Assert.True(reports[orphan].Rows > 0);
+
+            var items = doctor.StateRootItems(scanLocal);
+            Assert.Equal("state-roots", items[0].Code);
+            Assert.Contains(items, item => item.Code == "stray-state-root" && item.Key == Path.GetFileName(stray));
+            Assert.Contains(items, item => item.Code == "state-root-mismatch" && item.Key == Path.GetFileName(mismatch));
+            Assert.Contains(items, item => item.Code == "unattributed-state-root" && item.Key == Path.GetFileName(orphan));
+            // A root with rows is never called stray, and a live root raises nothing at all.
+            Assert.DoesNotContain(items, item => item.Code == "stray-state-root" && item.Key != Path.GetFileName(stray));
+            Assert.DoesNotContain(items, item => item.Key == Path.GetFileName(live) && item.Level != HealthLevel.Info);
+
+            // Report, never delete. Deletion in this project is the owner's decision on a concrete list.
+            foreach (var path in new[] { live, stray, orphan, mismatch })
+                Assert.True(Directory.Exists(path), $"tarama bir kökü sildi: {path}");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
+    }
 }
