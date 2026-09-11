@@ -1,7 +1,7 @@
 <!-- yazan: codex · gpt-6 -->
 # Yara Durumu — per-scar test tablosu
 
-Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 215, Geçti: 215, Başarısız: 0. Kapı testleriyle birlikte toplam 259 test, 259 geçti (paralellik kapalı; açıkken aralıklı Y-170 kırmızısı — KAR-1 açık). Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
+Ölçüm: `dotnet test Oom.sln -c Release` — Toplam yara sayısı: 217, Geçti: 217, Başarısız: 0. Kapı testleriyle birlikte toplam 261 test, 261 geçti (paralellik depodaki `xunit.runner.json` ile kapalı). Tarih: 2026-09-11, şeritler SOZ·OLCU·PROV·SINIR birleşimi, `9b116e0` üstü.
 
 Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara (Y-035, Y-039, Y-042, Y-046, Y-050, Y-069, Y-098) şerit CI tarafından kapatıldı: eksik davranış yazıldı, fixture'lar depoya girdi. Gerçekler `progress.md` içinde `## Lane CI` bölümündedir.
 
@@ -215,6 +215,8 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | Y-282 | durum-deposu | WAL'sız yolda başlık kontrolünden **sonra** özgün dosya açılıyordu; arada kip değişirse karışık içerik okunabilirdi. Yazıcı bağlıyken o kök yerinde okunmuyor, kopyaya düşüyor | DoctorHonestDiagnosisTests.Y282_* | yeşil |
 | Y-283 | durum-deposu | Açık bir işlemin geri alma günlüğü varken kök `ölçülemedi` sayılıyor — hareket eden dosyaya kefil olunmuyor | DoctorHonestDiagnosisTests.Y283_* | yeşil |
 | Y-284 | durum-deposu | Sahibi gitmiş bir kökün `-wal`'ı kopyaya dahil ediliyor; yoksa o kökün kayıtları görünmez olurdu | DoctorHonestDiagnosisTests.Y284_* | yeşil |
+| Y-290 | test-disiplini | `SqliteConnection.ClearAllPools()` süreç genelidir ve depoda 12 test dosyasında 115 çağrı yeri vardır; üretimde de `Doctor.cs`'te iki yerde çağrılır. Yalnız bu çağrıyı koşturan bir iş parçacığı, aynı süreçteki açık bir bağlantıyı kullanan **üretim kodunu** (`Doctor.ReadContent`) öldürebiliyor. Açık `State` ile `Doctor` taraması artık aynı süreçte, gerçek eşzamanlılıkla sınanıyor | EszamanliTemizlikTests.Y290_* | yeşil |
+| Y-291 | test-disiplini | Ürünün gerçek eşzamanlılığı iki ayrı `oom doctor` süreciyle, aynı izole kök üzerinde sınanıyor. Sınıfların seri koşması bu sınamanın içindeki eşzamanlılığı kaldırmıyor | EszamanliTemizlikTests.Y291_* | yeşil |
 | Y-170 | durum-deposu | Üçüncü DDL yeri: `Retrieve.Build()` kendi bağlantısını açıp `oom_index_meta`, `notes` ve `notes_fts`'i aynı `state.db` içinde yaratıyordu — şemanın tek sahibi olmasına rağmen. İndeks şeması artık `StateStore`'un merdiveninde; `Build()` sıfır DDL koşuyor | IndeksScars.Y170_* | yeşil |
 | Y-171 | durum-deposu | `Retrieve.Build()` kendi `Directory.CreateDirectory` çağrısını yapıyordu: test paketi her koşumda bir durum kökü sızdırıyordu (ölçüldü, sızan kökte yalnız indeks tabloları ve `user_version=0` vardı). Artık var olan dizin yazmanın koşulu; sızıntı bitti | IndeksScars.Y171_* | yeşil |
 | Y-172 | durum-deposu | Yeniden kurulum `DROP TABLE notes` ile şema sahibinin altından tabloyu alıyordu. Yerine aynı işlem içinde `DELETE` geldi: indeks indeks olarak yenileniyor, `ix_notes_updated` ve sürüm damgası yerinde kalıyor | IndeksScars.Y172_* | yeşil |
@@ -235,6 +237,6 @@ Fixture kurmadan davranış iddia ettikleri için kırmızı bırakılan 7 yara 
 | kota | 6 | 0 |
 | durum-deposu | 71 | 0 |
 | kurulum | 33 | 0 |
-| test-disiplini | 24 | 0 |
+| test-disiplini | 26 | 0 |
 | süreç-işletme | 9 | 0 |
-| **Toplam** | **215** | **0** |
+| **Toplam** | **217** | **0** |
