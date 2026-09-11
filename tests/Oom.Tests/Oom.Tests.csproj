@@ -15,6 +15,21 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
 
+  <!--
+    yazan: claude · opus-5 (KAR-1)
+    Test isolation, not a product fix. xunit.runner.json turns off class parallelism because this
+    suite shares one process-wide resource with the code it tests: Microsoft.Data.Sqlite's
+    connection pool. Neither xunit.core nor xunit.runner.visualstudio copies this file to the
+    output directory by convention, so without the Content item below the file is present in the
+    repository and read by nobody. Measured on 3a05200 with two probe classes and an overlap
+    witness: no file, peak concurrency 2; the RunSettings <xUnit> node the xunit docs describe,
+    peak concurrency 2 (not honoured by runner.visualstudio 2.8.2); this file plus this item,
+    peak concurrency 1.
+  -->
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>

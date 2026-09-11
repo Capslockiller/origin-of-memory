@@ -1,0 +1,99 @@
+# KAR-1 · yama önerisi — UYGULANMADI
+
+Bu şeridin DO-NOT-TOUCH kapsamı `src/**`. Aşağıdaki değişiklik yazılmadı, ölçülmedi ve
+doğrulanmadı; yalnız adlandırıldı. Uygulayacak şerit, aşağıdaki "doğrulama" maddelerini
+koşmadan yeşil saymasın.
+
+Taban: 3a05200 · ölçen: claude · opus-5 · Microsoft.Data.Sqlite 10.0.12
+
+## Ne düzeltiliyor
+
+`SqliteConnection.ClearAllPools()` süreç geneli. Üretimde iki yerde çağrılıyor
+(`Doctor.InspectStateRoots`, `StateRootSnapshot.Dispose`) ve ikisi de tek bir dizinin/taramanın
+tutamaçlarını bırakmak için bütün sürecin havuzlarını siliyor. `Program.Health` (Program.cs:415-446)
+bu taramayı, açık bir `State` tutamacını elinde tutarken aynı iş parçacığında çağırıyor.
+
+Öneri: taramanın açtığı teşhis bağlantıları `Pooling=False` ile açılsın. O zaman `Dispose`
+işletim sistemi tutamacını hemen kapatır, kopyanın silinmesi için havuz temizliğine gerek
+kalmaz ve süreç geneli çağrıların ikisi de kaldırılabilir.
+
+## Doğrulanması gereken, burada ölçülmeyenler
+
+1. `Pooling=False` ile açılan salt okunur bağlantının `Dispose`'undan sonra kopyanın dizini
+   **silinebiliyor** mu — D3'ün ölçtüğü 66 artık dizin geri gelmemeli.
+2. `oom doctor` tek süreçte bugün `%TEMP%\oom-doctor-*` altında 1-3 dizin bırakıyor (ölçüldü,
+   KAR1.md). Yama sonrası bu sayı 0 olmalı; olmuyorsa `StateRootSnapshot.Dispose`'daki
+   `Delete`'in sessiz `catch`'i ayrıca ele alınmalı.
+3. Paket 259+2 testin tamamı yeşil kalmalı.
+
+--- a/src/Oom/Doctor/Doctor.cs
++++ b/src/Oom/Doctor/Doctor.cs
+@@ -246,8 +246,12 @@
+             }
+         }
+ 
+-        // Read-only handles must not outlive the scan, or the owner cannot move/delete a root afterwards.
+-        SqliteConnection.ClearAllPools();
++        // Read-only handles must not outlive the scan, or the owner cannot move/delete a root
++        // afterwards. They no longer do: every connection this scan opens is unpooled (see
++        // ReadContent and StateDiagnostics.Diagnose), so Dispose closes the operating-system
++        // handle instead of parking it. Clearing the whole process's pools to achieve that also
++        // reached connections this scan never opened -- including the state handle Program.Health
++        // holds open while it calls this method.
+         return reports.OrderBy(report => report.Path, StringComparer.Ordinal).ToArray();
+     }
+ 
+@@ -497,11 +501,10 @@
+         {
+             if (directory is not null)
+             {
+-                // The copy is what the pool is holding; it has to let go before the directory can go.
+-                // Disposing a SqliteConnection returns it to the pool with the operating-system
+-                // handle still open, so without this the delete below fails and a byte-for-byte
+-                // duplicate of the owner's database is left in the temporary directory.
+-                SqliteConnection.ClearAllPools();
++                // Nothing holds the copy any more: the connections opened against it are unpooled,
++                // so their Dispose closed the operating-system handle rather than parking it. This
++                // used to clear every pool in the process to get the same effect, which is a
++                // process-wide answer to a question about one directory.
+                 Delete(directory);
+             }
+ 
+@@ -607,7 +610,9 @@
+ 
+     private static StateRootContent ReadContent(string databasePath)
+     {
+-        using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
++        // Pooling=False: a diagnostic open is read once and thrown away, and a pooled handle that
++        // outlives it is a lock on the owner's file that only a process-wide clear can release.
++        using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
+         connection.Open();
+ 
+         // integrity_check FIRST: on a corrupt file a COUNT(*) still returns a number, and that number lies.
+--- a/src/Oom/State/StateSchemaAudit.cs
++++ b/src/Oom/State/StateSchemaAudit.cs
+@@ -503,7 +503,9 @@
+ 
+         try
+         {
+-            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
++            // Pooling=False: see Doctor.ReadContent. Diagnose is the scan's other way into a root,
++            // and a handle it leaves in the pool is a handle the scan cannot let go of by itself.
++            using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
+             connection.Open();
+ 
+             if (Integrity(connection) is { } complaint)
+--- a/src/Oom/State/State.cs
++++ b/src/Oom/State/State.cs
+@@ -828,7 +828,10 @@
+     /// </summary>
+     private static void Verify(SqliteConnection source, string copy, int found)
+     {
+-        using var verification = new SqliteConnection($"Data Source={copy};Mode=ReadOnly");
++        // Pooling=False: the backup copy is verified once and never opened again, and the pooled
++        // handle left behind is what makes the copy undeletable until some unrelated caller clears
++        // every pool in the process.
++        using var verification = new SqliteConnection($"Data Source={copy};Mode=ReadOnly;Pooling=False");
+         verification.Open();
+ 
+         using (var integrity = verification.CreateCommand())
