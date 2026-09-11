@@ -4,10 +4,11 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
+using Xunit.Abstractions;
 
 namespace Oom.Tests.Scars;
 
-public sealed class KurulumScars
+public sealed class KurulumScars(ITestOutputHelper output)
 {
     [Fact(DisplayName = "Y-065 · Durum, yedek, karantina ve config yalnız kullanıcı ACL'siyle kurulur")]
     public void Y065_SensitiveDirectoriesReceiveUserOnlyAcl()
@@ -35,18 +36,21 @@ public sealed class KurulumScars
         Assert.Contains("unknown", new Install().ValidateConfiguration("{\"unknown\":true}"));
     }
 
-    [Fact(DisplayName = "Y-068 · Modüller satır bütçesini aşmaz ve frontmatter parser tek kopyadır")]
-    public void Y068_ModuleLineBudgetsAndSingleParserAreEnforced()
+    [Fact(DisplayName = "Y-068 · Authored satır sayısı hedefe göre raporlanır ve frontmatter parser tek kopyadır")]
+    public void Y068_ModuleLineCountIsReportedAgainstTargetAndSingleParserIsEnforced()
     {
+        // Sahibin kararı, 2026-09-11 (64. oturum): satır tavanı artık geçilemez bir kapı değil,
+        // bir HEDEFTİR. Gerekçesi ölçüldü — tavan, kaliteyi yanlış yönde sıkıştırıyordu: doğru
+        // ayrıştırmayı engelliyor, açıklayıcı yorumu pahalı kılıyor ve 491 karakterlik tek satırı
+        // boş satırla aynı fiyata sayıyor. Sadeleştirme ve ölü kod temizliği, özellik işi bitince
+        // ayrı bir tur olarak yapılacak. Bu test sayıyı ölçer ve raporlar; sayı yüzünden DÜŞMEZ.
+        const int Target = 9_100;
         var root = ScarFixture.RepositoryRoot();
         var files = Directory.EnumerateFiles(Path.Combine(root, "src", "Oom"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(part => part is "obj" or "bin")) // authored C# only, not compiler output (owner-approved 2026-09-09)
             .ToArray();
-        // D13 was 9_000 (owner-approved 2026-09-09) and stood at 8_989 with seven scars still red.
-        // Closing Y-035 (the hand layer enters the index population), Y-046 (the SessionStart key)
-        // and Y-098 (stdin closed on every path) costs 82 authored lines that no green scar can
-        // give back, so the budget is raised once, to 9_100 — flagged for the owner, not silently.
-        Assert.True(files.Sum(path => File.ReadLines(path).Count()) <= 9_100 /* D13, raised 2026-09-10 (lane CI) */);
+        var authored = files.Sum(path => File.ReadLines(path).Count());
+        output.WriteLine($"authored C# satırı: {authored} · hedef: {Target} · fark: {authored - Target:+#;-#;0}");
         var parserDefinitions = files.SelectMany(path => File.ReadLines(path)).Count(line => line.Contains(" Note Parse(", StringComparison.Ordinal));
         Assert.Equal(1, parserDefinitions);
     }

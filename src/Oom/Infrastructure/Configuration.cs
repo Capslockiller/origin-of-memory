@@ -1,3 +1,5 @@
+// yazan: codex · gpt-5
+using System.Net;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -67,8 +69,8 @@ public sealed record OomSettings(
         new BackendSettings(
             ["claude", "local"],
             ["claude"],
-            new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5", Path.Combine(".oom", "claude-config")),
-            new LocalSettings("http://localhost:11434/v1", "qwen3:8b", "qwen3:14b", "nomic-embed-text")),
+            new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5", @"%LOCALAPPDATA%\oom\claude-config"),
+            new LocalSettings("http://127.0.0.1:11434/v1", "qwen3:8b", "qwen3:14b", "nomic-embed-text")),
         "bm25",
         new SweepSettings(8, 8, 3, 20, [.. DefaultRoots.Select(Expand)]),
         new CompileOptions(18, 20, 3),
@@ -148,7 +150,7 @@ public sealed record OomSettings(
                 UnknownKeys = Unknown(root)
             };
         }
-        catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
+        catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException or FormatException)
         {
             return defaults with { LoadError = $"{path}: {error.Message}" };
         }
@@ -162,8 +164,8 @@ public sealed record OomSettings(
     /// </summary>
     public string ClaudeConfigDirectory(string vault)
     {
-        var configured = Expand(Backend.Claude.ConfigDir);
-        return Path.IsPathRooted(configured) ? configured : Path.Combine(vault, configured);
+        _ = Backend.Claude.ConfigDir; // retained in the serialized contract; it cannot move credentials
+        return ClaudeIsolation.ConfigurationDirectory(vault);
     }
 
     private static BackendSettings ReadBackend(JsonElement element, BackendSettings fallback) => new(
@@ -178,10 +180,35 @@ public sealed record OomSettings(
         Text(element, "configDir", fallback.ConfigDir));
 
     private static LocalSettings ReadLocal(JsonElement element, LocalSettings fallback) => new(
-        Text(element, "url", fallback.Url),
+        ValidateLocalUrl(TranslateLegacyLocalhostUrl(Text(element, "url", fallback.Url))),
         Text(element, "fast", fallback.Fast),
         Text(element, "smart", fallback.Smart),
         Text(element, "embed", fallback.Embed), Number(element, "numCtx", fallback.NumCtx));
+
+    /// <summary>Translates the pre-2.0 localhost spelling at the file-load boundary without DNS.</summary>
+    private static string TranslateLegacyLocalhostUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttp ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !uri.IdnHost.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return value;
+
+        var hostStart = value.IndexOf("://", StringComparison.Ordinal) + 3;
+        return $"{value[..hostStart]}127.0.0.1{value[(hostStart + "localhost".Length)..]}";
+    }
+
+    /// <summary>Accepts only absolute HTTP URLs whose host is a numeric loopback address.</summary>
+    public static string ValidateLocalUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttp)
+            throw new FormatException("backend.local.url yalnız mutlak http adresi olabilir.");
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+            throw new FormatException("backend.local.url kullanıcı bilgisi içeremez.");
+        if (!IPAddress.TryParse(uri.IdnHost.Trim('[', ']'), out var address) || !IPAddress.IsLoopback(address))
+            throw new FormatException("backend.local.url yalnız sayısal geri döngü adresi kullanabilir.");
+        return value.TrimEnd('/');
+    }
 
     private static SweepSettings ReadSweep(JsonElement element, SweepSettings fallback) => new(
         Number(element, "everyHours", fallback.EveryHours),

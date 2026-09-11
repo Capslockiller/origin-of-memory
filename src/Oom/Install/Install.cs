@@ -35,6 +35,13 @@ public sealed class Install
     private readonly Func<string> userSettingsPath;
     private readonly Func<string[]> mcpCandidates;
     private readonly Func<string?> processPath;
+    private readonly Func<string> localAppDataPath;
+    private readonly Func<string> claudeUserConfigPath;
+    private readonly Func<string[]> knownSyncRoots;
+    private readonly Func<bool> shortcutRemover;
+    private readonly Action eventLogRemover;
+    private readonly Func<string, string> stateRootPath;
+    private readonly Action doctorAction;
     private const string TaskName = "OdenaOS Memory Sweep";
 
     /// <summary>Findings the last <see cref="Run"/> produced; the D3 fallback is reported here.</summary>
@@ -49,7 +56,10 @@ public sealed class Install
     public Install(IClock? clock = null, ITaskScheduler? scheduler = null, Func<bool>? windowsSupported = null,
         Func<string, bool>? commandAvailable = null, Func<bool>? fts5Available = null,
         IProcessRunner? processRunner = null, Func<string, bool>? shortcutRegistrar = null, Func<bool>? eventLogRegistrar = null,
-        Func<string>? userSettingsPath = null, Func<string[]>? mcpCandidates = null, Func<string?>? processPath = null)
+        Func<string>? userSettingsPath = null, Func<string[]>? mcpCandidates = null, Func<string?>? processPath = null,
+        Func<string>? localAppDataPath = null, Func<string>? claudeUserConfigPath = null, Func<string[]>? knownSyncRoots = null,
+        Func<bool>? shortcutRemover = null, Action? eventLogRemover = null, Func<string, string>? stateRootPath = null,
+        Action? doctorAction = null)
     {
         this.clock = clock ?? SystemClock.Instance;
         this.processRunner = processRunner ?? new WindowsProcessRunner();
@@ -66,6 +76,14 @@ public sealed class Install
         // K7/Y-105 seam: --uninstall run from the installed copy must recognize its own exe by
         // comparing to the running process's path, not by trusting a hardcoded name.
         this.processPath = processPath ?? (() => Environment.ProcessPath);
+        this.localAppDataPath = localAppDataPath ??
+            (() => Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        this.claudeUserConfigPath = claudeUserConfigPath ?? ClaudeIsolation.UserConfigDirectory;
+        this.knownSyncRoots = knownSyncRoots ?? (() => [.. ClaudeIsolation.KnownSyncRoots()]);
+        this.shortcutRemover = shortcutRemover ?? ShortcutRegistration.TryRemove;
+        this.eventLogRemover = eventLogRemover ?? (() => { ShortcutRegistration.TryRemoveEventLogSource(); });
+        this.stateRootPath = stateRootPath ?? StateRoot;
+        this.doctorAction = doctorAction ?? RunDoctor;
     }
 
     public InstallResult Run(string vaultPath, bool fromV0 = false) => Run(vaultPath, fromV0, dryRun: false);
@@ -90,8 +108,14 @@ public sealed class Install
         }
         var vault = Path.GetFullPath(vaultPath);
         var oom = Path.Combine(vault, ".oom");
-        var stateRoot = StateRoot(vault);
-        var planned = PlannedPaths(oom, stateRoot).ToList();
+        var stateRoot = stateRootPath(vault);
+        string claudeConfig;
+        try { claudeConfig = ClaudeIsolation.ConfigurationDirectory(vault, localAppDataPath(), knownSyncRoots()); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            return Failure($"Claude kimlik dizini reddedildi: {error.Message}");
+        }
+        var planned = PlannedPaths(oom, stateRoot, claudeConfig).ToList();
         if (fixtureMode || dryRun)
         {
             ToastRegistered = ShortcutRegistration.IsRegistered;
@@ -109,7 +133,9 @@ public sealed class Install
             WriteIfMissing(Path.Combine(oom, "vault.json"), JsonSerializer.Serialize(new { vault, schema = 1 }));
             WriteIfMissing(Path.Combine(oom, "oom.json"), DefaultConfiguration);
             WriteIfMissing(Path.Combine(oom, "hub-config.json"), "{\"schema\":1,\"hubs\":[]}");
-            ClaudeIsolation.Prepare(Path.Combine(oom, "claude-config"));
+            var isolation = ClaudeIsolation.Prepare(claudeConfig, vault, claudeUserConfigPath(), localAppDataPath(), knownSyncRoots());
+            if (isolation == "hazırlanamadı") throw new IOException("Claude kimlik dizini hazırlanamadı.");
+            SecurePath(claudeConfig);
             var executable = Path.Combine(oom, "oom.exe");
             InstallBinary(executable);
             using (var freshState = new State(clock, null, Path.Combine(stateRoot, "state.db"))) freshState.WriteVaultStamp(clock.Now); // Y-118: the vault's own coverage window starts here.
@@ -124,7 +150,7 @@ public sealed class Install
             else Record(HealthLevel.Info, "event-log-atlandi", "event-log",
                 "Event Log kaynağı yönetici hakkı olmadan oluşturulamadı; günlükler logs\\ altında tutuluyor.");
             if (fromV0) MigrationReport = new Migration(clock, processRunner).Run(vault, stateRoot, userSettingsPath(), dryRun: false, RemoveV0Task);
-            RunDoctor();
+            doctorAction();
             return new InstallResult(true, planned, registrations);
         }
         catch (Exception exception)
@@ -191,35 +217,37 @@ public sealed class Install
             return new InstallResult(true, [], ["hooks:kaldırıldı", "task:kaldırıldı", "aumid:kaldırıldı", "mcp:kaldırıldı"]);
         var vault = Path.GetFullPath(vaultPath);
         var oom = Path.Combine(vault, ".oom");
-        var stateRoot = StateRoot(vault);
+        var stateRoot = stateRootPath(vault);
         var removed = new List<string>();
         var registrations = new List<string>();
-        try { UninstallCore(vault, oom, stateRoot, removed, registrations); }
+        try
+        {
+            // These registrations are independent of the identity directory. Run them before
+            // deriving that path so a safety rejection cannot leave live entry points behind.
+            RemoveHooks();
+            registrations.Add("hooks:kaldırıldı");
+            if (scheduler is InstallRuntime.SchtasksScheduler schtasks) schtasks.Unregister(TaskName);
+            registrations.Add("task:kaldırıldı");
+            RemoveMcp();
+            registrations.Add("mcp:kaldırıldı");
+
+            var claudeConfig = ClaudeIsolation.ConfigurationDirectory(vault, localAppDataPath(), knownSyncRoots());
+            UninstallCore(vault, oom, stateRoot, claudeConfig, removed, registrations);
+            return new InstallResult(true, removed, registrations);
+        }
         catch (Exception error)
         {
-            // K7/Y-105: whatever went wrong, the hooks/task/MCP steps above already ran — the
-            // machine is not half-uninstalled. Report and still succeed rather than crash.
             registrations.Add($"kaldırma-hata:{error.Message}");
+            return new InstallResult(false, removed, registrations, $"Kaldırma tamamlanamadı: {error.Message}");
         }
-        return new InstallResult(true, removed, registrations);
     }
 
-    private void UninstallCore(string vault, string oom, string stateRoot, List<string> removed, List<string> registrations)
+    private void UninstallCore(string vault, string oom, string stateRoot, string claudeConfig, List<string> removed, List<string> registrations)
     {
-        // K7/Y-105: hooks, the scheduled task and the MCP entry come FIRST — before any file is
-        // touched — so a self-delete failure below never leaves a half-uninstalled machine with
-        // the hooks/task/MCP still wired to a binary the user believes is gone.
-        RemoveHooks();
-        registrations.Add("hooks:kaldırıldı");
-        if (scheduler is InstallRuntime.SchtasksScheduler schtasks) schtasks.Unregister(TaskName);
-        registrations.Add("task:kaldırıldı");
-        RemoveMcp();
-        registrations.Add("mcp:kaldırıldı");
-        if (ShortcutRegistration.TryRemove()) removed.Add(ShortcutRegistration.ShortcutPath());
-        ShortcutRegistration.TryRemoveEventLogSource();
+        if (shortcutRemover()) removed.Add(ShortcutRegistration.ShortcutPath());
+        eventLogRemover();
         registrations.Add("aumid:kaldırıldı");
-        var claudeConfig = Path.Combine(oom, "claude-config");
-        if (Directory.Exists(claudeConfig)) { Directory.Delete(claudeConfig, true); removed.Add(claudeConfig); }
+        if (ClaudeIsolation.RemoveOwned(claudeConfig, vault, localAppDataPath(), knownSyncRoots())) removed.Add(claudeConfig);
         // Beside the state root, not inside it (the root itself is what gets moved), but named
         // for the vault: a shared backup\uninstall-<ts> made two vaults uninstalled in the same
         // second overwrite each other's evidence (D3 evidence run).
@@ -362,17 +390,16 @@ public sealed class Install
         File.WriteAllText(marker, $"Kaynak: {vault}\nZaman: {clock.Now:O}\n", Utf8);
         if (!File.Exists(marker)) throw new IOException("Yedek doğrulanamadı.");
     }
-    private static IEnumerable<string> PlannedPaths(string oom, string stateRoot) =>
+    private static IEnumerable<string> PlannedPaths(string oom, string stateRoot, string claudeConfig) =>
     [
         Path.Combine(oom, "oom.exe"), Path.Combine(oom, "vault.json"), Path.Combine(oom, "oom.json"), Path.Combine(oom, "hub-config.json"),
-        Path.Combine(oom, "claude-config"), Path.Combine(oom, "quarantine"), Path.Combine(stateRoot, "state.db"),
+        claudeConfig, Path.Combine(oom, "quarantine"), Path.Combine(stateRoot, "state.db"),
         Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs")
     ];
     private static void CreateDirectories(string oom, string stateRoot)
     {
-        foreach (var path in new[] { oom, Path.Combine(oom, "claude-config"), Path.Combine(oom, "quarantine"), stateRoot, Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs") })
+        foreach (var path in new[] { oom, Path.Combine(oom, "quarantine"), stateRoot, Path.Combine(stateRoot, "backup"), Path.Combine(stateRoot, "logs") })
             Directory.CreateDirectory(path);
-        SecurePath(Path.Combine(oom, "claude-config"));
         SecurePath(Path.Combine(oom, "quarantine"));
         SecurePath(stateRoot);
         SecurePath(Path.Combine(stateRoot, "backup"));
@@ -382,9 +409,9 @@ public sealed class Install
         if (File.Exists(path)) return;
         File.WriteAllText(path, content + Environment.NewLine, Utf8);
     }
-    private static void InstallBinary(string destination)
+    private void InstallBinary(string destination)
     {
-        var source = Environment.ProcessPath;
+        var source = processPath();
         if (source is null || !Path.GetFileName(source).Equals("oom.exe", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Kurulum yalnız yayımlanmış oom.exe üzerinden çalıştırılabilir.");
         if (!Path.GetFullPath(source).Equals(Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase)) File.Copy(source, destination, true);
@@ -395,7 +422,7 @@ public sealed class Install
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
         var root = File.Exists(settingsPath) ? JsonNode.Parse(File.ReadAllText(settingsPath, Utf8)) as JsonObject : new JsonObject();
         root ??= new JsonObject();
-        var backupDirectory = Path.Combine(StateRoot(vault), "backup");
+        var backupDirectory = Path.Combine(stateRootPath(vault), "backup");
         Directory.CreateDirectory(backupDirectory);
         // Overwrite: the name carries the second, so a collision is the same second — and refusing
         // it would make the repeated install spec 6.11 calls idempotent fail outright.

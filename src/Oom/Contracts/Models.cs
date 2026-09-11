@@ -6,6 +6,7 @@ public enum ModelTier { Fast, Smart }
 public enum ComponentKind { Flush, Compile, Context, Retrieve, Sweep, Doctor, Ingest, Install }
 public enum Direction { In, Out }
 public enum HealthLevel { Info, Warning, Error }
+public enum UsageSourceKind { Unknown = 0, Estimate = 1, Measured = 2 }
 
 public sealed record Turn(int Index, string Role, string Kind, string Text, DateTimeOffset Timestamp);
 public sealed record Session(string Id, string Source, IReadOnlyList<Turn> Turns, DateTimeOffset StartedAt);
@@ -14,7 +15,12 @@ public sealed record FlushResult(FlushOutcome Outcome, int Cursor, string? Daily
 public sealed record SweepOptions(int SinceHours = 8, int MinTurns = 3, int MaxSessionsPerRun = 20, int FreshSeconds = 0);
 public sealed record SweepResult(int Total, int Covered, IReadOnlyList<string> UncoveredIds, int Skipped, IReadOnlyList<FlushResult> Results);
 public sealed record GateResult(string Text, IReadOnlyList<string> Findings, bool Refused);
-public sealed record RunResult(string Text, string? Error, string Backend, string Model, string UsageSource = "actual");
+public sealed record TokenUsage(long? UncachedInputTokens, long? OutputTokens, long? CacheReadTokens, long? CacheWriteTokens);
+public sealed record RunResult(string Text, string? Error, string Backend, string Model, string UsageSource = "unknown", TokenUsage? Usage = null,
+    string? OperationId = null, string? AttemptId = null, int? AttemptNumber = null)
+{
+    public UsageSourceKind UsageQuality => UsageSource switch { "measured" => UsageSourceKind.Measured, "estimate" => UsageSourceKind.Estimate, _ => UsageSourceKind.Unknown };
+}
 public sealed record ProcessRequest(string FileName, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment, string StandardInput);
 public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError, bool StandardInputClosed, bool TimedOut = false);
 public sealed record LocalRequest(bool Stream, double Temperature, bool Think, int MaxTokens, string Model, string Prompt);

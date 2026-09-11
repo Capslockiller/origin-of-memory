@@ -31,6 +31,9 @@ internal sealed record CorpusStats(
     IReadOnlyDictionary<string, int> Frequency,
     IReadOnlyDictionary<string, int> Length);
 
+internal sealed record IndexedNote(Note Note, string Text);
+internal sealed record IndexManifest(long Generation, string Digest, DateTimeOffset BuiltAt);
+
 public sealed class Retrieve
 {
     // bm25(notes_fts, 0.0, 8.0, 6.0, 3.0, 1.0): the leading 0.0 belongs to the UNINDEXED
@@ -70,8 +73,6 @@ public sealed class Retrieve
 
     private static readonly Dictionary<ServedKey, DateTimeOffset> Served = [];
     private static readonly UTF8Encoding Utf8 = new(false);
-    private static string _manifestDigest = string.Empty;
-
     private readonly RetrieveOptions _options;
     private readonly TurkishFold _fold;
     private readonly Notes _notes;
@@ -96,33 +97,37 @@ public sealed class Retrieve
     /// </summary>
     public VerifyResult Build()
     {
-        var corpus = LoadCorpus();
-        if (corpus.Count == 0 || IndexFile() is not { } indexPath)
+        var corpus = LoadCorpus(refresh: true);
+        if (IndexFile() is not { } indexPath)
             return new VerifyResult([], [], 0);
 
         Directory.CreateDirectory(Path.GetDirectoryName(indexPath)!);
 
-        var digest = ManifestDigest(corpus);
-        if (string.Equals(digest, _manifestDigest, StringComparison.Ordinal))
-            return new VerifyResult([], [], 0);
+        // IndexableText is both what FTS receives and what the manifest covers. Prepare it once
+        // so content hashing does not add a second note-body pass to a rebuild.
+        var indexed = corpus.Select(note => new IndexedNote(note, _notes.IndexableText(note))).ToArray();
+        var digest = ManifestDigest(indexed);
 
         using var connection = new SqliteConnection($"Data Source={indexPath}");
         connection.Open();
         Execute(connection, "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;");
-        Execute(connection, "DROP TABLE IF EXISTS notes_fts; DROP TABLE IF EXISTS notes;");
-        Execute(connection, "CREATE TABLE notes(name TEXT PRIMARY KEY, title TEXT, aliases TEXT, tags TEXT, body TEXT, updated TEXT);");
-        Execute(connection, "CREATE VIRTUAL TABLE notes_fts USING fts5(name UNINDEXED, title, aliases, tags, body);");
+        Execute(connection, "CREATE TABLE IF NOT EXISTS oom_index_meta(generation INTEGER NOT NULL, manifest_digest TEXT NOT NULL, built_at TEXT NOT NULL);");
+        var previous = ReadManifest(connection);
+        if (previous is not null && string.Equals(digest, previous.Digest, StringComparison.Ordinal))
+            return new VerifyResult([], [], 0);
 
         using var transaction = connection.BeginTransaction();
-        foreach (var note in corpus)
+        Execute(connection, transaction, "DROP TABLE IF EXISTS notes_fts; DROP TABLE IF EXISTS notes;");
+        Execute(connection, transaction, "CREATE TABLE notes(name TEXT PRIMARY KEY, title TEXT, aliases TEXT, tags TEXT, body TEXT, updated TEXT);");
+        Execute(connection, transaction, "CREATE VIRTUAL TABLE notes_fts USING fts5(name UNINDEXED, title, aliases, tags, body);");
+        foreach (var item in indexed)
         {
-            var indexable = _notes.IndexableText(note);
-            Insert(connection, "INSERT INTO notes(name, title, aliases, tags, body, updated) VALUES($n,$t,$a,$g,$b,$u);", note, indexable);
-            Insert(connection, "INSERT INTO notes_fts(name, title, aliases, tags, body) VALUES($n,$t,$a,$g,$b);", note, indexable);
+            Insert(connection, transaction, "INSERT INTO notes(name, title, aliases, tags, body, updated) VALUES($n,$t,$a,$g,$b,$u);", item.Note, item.Text);
+            Insert(connection, transaction, "INSERT INTO notes_fts(name, title, aliases, tags, body) VALUES($n,$t,$a,$g,$b);", item.Note, item.Text);
         }
 
+        WriteManifest(connection, transaction, new IndexManifest((previous?.Generation ?? 0) + 1, digest, _clock.Now));
         transaction.Commit();
-        _manifestDigest = digest;
         return new VerifyResult([], [], 0);
     }
 
@@ -329,10 +334,18 @@ public sealed class Retrieve
     /// The concept corpus, parsed once per instance: re-reading 542 notes for every query cost
     /// two thirds of a second and blew the 300 ms budget of spec 6.4 on a batch.
     /// </summary>
-    private IReadOnlyList<Note> LoadCorpus()
+    private IReadOnlyList<Note> LoadCorpus(bool refresh = false)
     {
-        if (_corpus is not null)
+        if (!refresh && _corpus is not null)
             return _corpus;
+
+        if (refresh)
+        {
+            _corpus = null;
+            _fields = null;
+            _surfaces = null;
+            _retired = null;
+        }
 
         var directory = _options.VaultPath is null ? null : Path.Combine(_options.VaultPath, "knowledge", "concepts");
         if (directory is null || !Directory.Exists(directory))
@@ -483,8 +496,47 @@ public sealed class Retrieve
 
     private string? IndexFile() => _options.IndexPath;
 
-    private string ManifestDigest(IReadOnlyList<Note> corpus) =>
-        Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(string.Join('\n', corpus.Select(note => $"{note.Name}|{note.Updated:yyyy-MM-dd}")))));
+    private static string ManifestDigest(IReadOnlyList<IndexedNote> corpus)
+    {
+        var manifest = new StringBuilder();
+        foreach (var item in corpus.OrderBy(item => item.Note.Name, StringComparer.Ordinal))
+        {
+            // These are exactly the values inserted into `notes` and `notes_fts`, length-prefixed
+            // to preserve field boundaries. An edit to any indexed field changes this SHA-256.
+            AppendManifestField(manifest, item.Note.Name);
+            AppendManifestField(manifest, item.Note.Title);
+            AppendManifestField(manifest, string.Join(' ', item.Note.Aliases));
+            AppendManifestField(manifest, string.Join(' ', item.Note.Tags));
+            AppendManifestField(manifest, item.Text);
+            AppendManifestField(manifest, item.Note.Updated.ToString("yyyy-MM-dd"));
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(manifest.ToString())));
+    }
+
+    private static void AppendManifestField(StringBuilder manifest, string value) =>
+        manifest.Append(value.Length).Append(':').Append(value).Append('\n');
+
+    private static IndexManifest? ReadManifest(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT generation, manifest_digest, built_at FROM oom_index_meta ORDER BY generation DESC LIMIT 1;";
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new IndexManifest(reader.GetInt64(0), reader.GetString(1), DateTimeOffset.Parse(reader.GetString(2)))
+            : null;
+    }
+
+    private static void WriteManifest(SqliteConnection connection, SqliteTransaction transaction, IndexManifest manifest)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM oom_index_meta; INSERT INTO oom_index_meta(generation, manifest_digest, built_at) VALUES($g, $d, $t);";
+        command.Parameters.AddWithValue("$g", manifest.Generation);
+        command.Parameters.AddWithValue("$d", manifest.Digest);
+        command.Parameters.AddWithValue("$t", manifest.BuiltAt.ToString("O"));
+        command.ExecuteNonQuery();
+    }
 
     private static bool IsPathToken(string word) =>
         word.Contains('\\') || (word.Contains('/') && word.Contains('.')) || word.Contains(":\\", StringComparison.Ordinal);
@@ -499,6 +551,14 @@ public sealed class Retrieve
 
     private static DateTimeOffset ToOffset(DateOnly date) => new(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
 
+    private static void Execute(SqliteConnection connection, SqliteTransaction transaction, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
     private static void Execute(SqliteConnection connection, string sql)
     {
         using var command = connection.CreateCommand();
@@ -506,9 +566,10 @@ public sealed class Retrieve
         command.ExecuteNonQuery();
     }
 
-    private static void Insert(SqliteConnection connection, string sql, Note note, string body)
+    private static void Insert(SqliteConnection connection, SqliteTransaction transaction, string sql, Note note, string body)
     {
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = sql;
         command.Parameters.AddWithValue("$n", note.Name);
         command.Parameters.AddWithValue("$t", note.Title);

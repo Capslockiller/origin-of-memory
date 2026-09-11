@@ -15,8 +15,8 @@ namespace Oom.Contracts;
 /// </summary>
 public sealed partial class State : IDisposable, IIngestStateStore
 {
-    // 3: adds ingest_done (Y-114); older tables unchanged.
-    private const int SchemaVersion = 3;
+    // 4: call attempts own nullable, split token counters and stable operation identities.
+    private const int SchemaVersion = 4;
     private const int ReplaceAttempts = 5;
     private const int ReplaceBackoffMs = 200;
     private const int StaleWarningHours = 24;
@@ -297,13 +297,14 @@ public sealed partial class State : IDisposable, IIngestStateStore
     }
 
     /// <summary>One ledger row per model call; content is never written (spec 6.6).</summary>
-    public void RecordCall(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, long elapsedMs, string outcome, string usageSource, string purpose,
-        long inputTokens = 0, long outputTokens = 0, long cacheRead = 0, long cacheWrite = 0) =>
-        Write("INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose) " +
-              "VALUES ($ts, $backend, $component, $tier, $model, $in, $out, $intok, $outtok, $cacher, $cachew, $ms, $outcome, $usage, $purpose)",
+    public void RecordCall(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, long elapsedMs, string outcome, UsageSourceKind usageSource, string purpose,
+        string operationId, string attemptId, int attemptNumber, TokenUsage? usage) =>
+        Write("INSERT INTO calls(ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose, operation_id, attempt_id, attempt_no, uncached_in_tok, usage_rank, usage_semantics) " +
+              "VALUES ($ts, $backend, $component, $tier, $model, $in, $out, NULL, $outtok, $cacher, $cachew, $ms, $outcome, $usage, $purpose, $operation, $attempt, $attemptno, $uncached, $rank, 'split-v1')",
             ("$ts", Stamp(_clock.Now)), ("$backend", backend), ("$component", component.ToString()), ("$tier", tier.ToString()), ("$model", model),
-            ("$in", inputChars), ("$out", outputChars), ("$intok", inputTokens), ("$outtok", outputTokens), ("$cacher", cacheRead), ("$cachew", cacheWrite),
-            ("$ms", elapsedMs), ("$outcome", outcome), ("$usage", usageSource), ("$purpose", purpose));
+            ("$in", inputChars), ("$out", outputChars), ("$outtok", Db(usage?.OutputTokens)), ("$cacher", Db(usage?.CacheReadTokens)), ("$cachew", Db(usage?.CacheWriteTokens)),
+            ("$ms", elapsedMs), ("$outcome", outcome), ("$usage", usageSource.ToString().ToLowerInvariant()), ("$purpose", purpose),
+            ("$operation", operationId), ("$attempt", attemptId), ("$attemptno", attemptNumber), ("$uncached", Db(usage?.UncachedInputTokens)), ("$rank", (int)usageSource));
 
     /// <summary>One <c>flush_log</c> row per session outcome (spec 6.3-8).</summary>
     public void RecordFlush(DateTimeOffset now, string sessionId, string reason, string outcome, int turns, int chars, string backend) =>
@@ -480,13 +481,13 @@ public sealed partial class State : IDisposable, IIngestStateStore
     }
 
     private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
+    private static object Db(long? value) => value is null ? DBNull.Value : value.Value;
 
     private void Initialize(bool persistent)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = (persistent ? "PRAGMA journal_mode=WAL; " : string.Empty) +
             "PRAGMA busy_timeout=5000; " +
-            $"PRAGMA user_version={SchemaVersion}; " +
             "CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, transcript_path TEXT, last_turn_index INTEGER, last_flush_ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS flush_log(ts TEXT, session_id TEXT, reason TEXT, outcome TEXT, turns INTEGER, chars INTEGER, backend TEXT);" +
             "CREATE TABLE IF NOT EXISTS retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);" +
@@ -497,19 +498,52 @@ public sealed partial class State : IDisposable, IIngestStateStore
             "CREATE TABLE IF NOT EXISTS vault_meta(key TEXT PRIMARY KEY, value TEXT);" +
             "CREATE TABLE IF NOT EXISTS compile_runs(ts TEXT, daily TEXT, status TEXT, created INTEGER, updated INTEGER, ms INTEGER);" +
             "CREATE TABLE IF NOT EXISTS quarantine(digest TEXT PRIMARY KEY, source TEXT, reason TEXT, ts TEXT, path TEXT);" +
-            "CREATE TABLE IF NOT EXISTS calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT);" +
+            "CREATE TABLE IF NOT EXISTS calls(ts TEXT, backend TEXT, component TEXT, tier TEXT, model TEXT, in_chars INTEGER, out_chars INTEGER, in_tok INTEGER, out_tok INTEGER, cache_r INTEGER, cache_w INTEGER, ms INTEGER, outcome TEXT, usage_source TEXT, purpose TEXT, operation_id TEXT, attempt_id TEXT, attempt_no INTEGER, uncached_in_tok INTEGER, usage_rank INTEGER NOT NULL DEFAULT 0 CHECK(usage_rank BETWEEN 0 AND 2), usage_semantics TEXT NOT NULL DEFAULT 'legacy-total-input-v0');" +
             "CREATE TABLE IF NOT EXISTS health(ts TEXT, component TEXT, level TEXT, code TEXT, key TEXT, detail TEXT);" +
             "CREATE TABLE IF NOT EXISTS notified(class TEXT, key TEXT, ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS retrieve_served(session_id TEXT, query_sig TEXT, note TEXT, ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS locks(name TEXT PRIMARY KEY, machine TEXT, pid INTEGER, ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS kota(ts TEXT, \"window\" TEXT, used_pct REAL, resets_at TEXT);" +
-            // Spec 2.2-2: phase 2 packages read these five views, never the tables behind them.
-            // A SQLite view without an INSTEAD OF trigger is read-only, which is the contract.
-            "CREATE VIEW IF NOT EXISTS v_calls AS SELECT ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose FROM calls;" +
             "CREATE VIEW IF NOT EXISTS v_flush_log AS SELECT ts, session_id, reason, outcome, turns, chars, backend FROM flush_log;" +
             "CREATE VIEW IF NOT EXISTS v_coverage AS SELECT ts, total, covered, uncovered_json FROM coverage;" +
             "CREATE VIEW IF NOT EXISTS v_health AS SELECT ts, component, level, code, key, detail FROM health;" +
             "CREATE VIEW IF NOT EXISTS v_kota AS SELECT ts, \"window\", used_pct, resets_at FROM kota;";
         command.ExecuteNonQuery();
+
+        EnsureLedgerColumn("operation_id", "TEXT");
+        EnsureLedgerColumn("attempt_id", "TEXT");
+        EnsureLedgerColumn("attempt_no", "INTEGER");
+        EnsureLedgerColumn("uncached_in_tok", "INTEGER");
+        EnsureLedgerColumn("usage_rank", "INTEGER NOT NULL DEFAULT 0 CHECK(usage_rank BETWEEN 0 AND 2)");
+        EnsureLedgerColumn("usage_semantics", "TEXT NOT NULL DEFAULT 'legacy-total-input-v0'");
+
+        using var ledger = _connection.CreateCommand();
+        ledger.CommandText =
+            "DROP VIEW IF EXISTS v_calls;" +
+            "DROP VIEW IF EXISTS v_call_usage;" +
+            // v_calls remains a detail view: estimates and unknowns stay visible and never collapse.
+            "CREATE VIEW v_calls AS SELECT ts, backend, component, tier, model, in_chars, out_chars, in_tok, out_tok, cache_r, cache_w, ms, outcome, usage_source, purpose, operation_id, attempt_id, attempt_no, uncached_in_tok, usage_rank, usage_semantics FROM calls;" +
+            // The default aggregate is deliberately measured-only. Estimates remain queryable in v_calls.
+            "CREATE VIEW v_call_usage AS SELECT backend, component, tier, model, purpose, COUNT(*) AS attempt_count, COUNT(DISTINCT operation_id) AS operation_count, SUM(uncached_in_tok) AS uncached_in_tok, SUM(cache_r) AS cache_r, SUM(cache_w) AS cache_w, SUM(out_tok) AS out_tok FROM calls WHERE usage_rank = 2 AND usage_semantics = 'split-v1' GROUP BY backend, component, tier, model, purpose;" +
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_calls_attempt_id ON calls(attempt_id) WHERE attempt_id IS NOT NULL;" +
+            $"PRAGMA user_version={SchemaVersion};";
+        ledger.ExecuteNonQuery();
+    }
+
+    private void EnsureLedgerColumn(string name, string definition)
+    {
+        using var columns = _connection.CreateCommand();
+        columns.CommandText = "PRAGMA table_info(calls)";
+        using var reader = columns.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), name, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        reader.Close();
+        using var alter = _connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE calls ADD COLUMN {name} {definition}";
+        alter.ExecuteNonQuery();
     }
 }

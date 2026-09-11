@@ -63,13 +63,13 @@ public sealed class Runner
 
     public Runner() : this((IProcessRunner?)null, null, null, null) { }
 
-    public Runner(IProcessRunner? processes, IHttp? http = null, IClock? clock = null, State? state = null, string localUrl = "http://localhost:11434/v1", bool? configured = null, IReadOnlyDictionary<ComponentKind, IReadOnlyList<string>>? chains = null)
+    public Runner(IProcessRunner? processes, IHttp? http = null, IClock? clock = null, State? state = null, string localUrl = "http://127.0.0.1:11434/v1", bool? configured = null, IReadOnlyDictionary<ComponentKind, IReadOnlyList<string>>? chains = null)
     {
         _processes = processes ?? new WindowsProcessRunner();
         _http = http ?? new HttpTransport();
         _clock = clock ?? SystemClock.Instance;
         _state = state;
-        _localUrl = localUrl;
+        _localUrl = OomSettings.ValidateLocalUrl(localUrl);
         _configured = configured ?? VaultPaths.ReadVault() is not null;
         _chains = chains;
     }
@@ -93,28 +93,24 @@ public sealed class Runner
         var text = StripMachineEnvelopes(prompt);
         var requestedModel = ModelFor(ClaudeBackend, tier);
         var chain = BackendChain(component);
+        var operationId = Guid.NewGuid().ToString("N");
         if (chain.Count == 0)
-            return new RunResult(text, "yapılandırma yok (backend listesi boş)", "none", requestedModel, "none");
+            return new RunResult(text, "yapılandırma yok (backend listesi boş)", "none", requestedModel, "unknown", OperationId: operationId);
 
-        var started = _clock.Now;
-        var backend = chain[^1];
-        string? error = null;
-
-        foreach (var candidate in chain)
+        RunResult? lastAttempt = null;
+        for (var index = 0; index < chain.Count; index++)
         {
-            backend = candidate;
-            var attempt = Attempt(candidate, text, tier);
+            var attemptStarted = _clock.Now;
+            var attempt = Attempt(chain[index], text, tier, operationId, Guid.NewGuid().ToString("N"), index + 1);
+            var outcome = attempt.Error is null ? "ok" : index == chain.Count - 1 ? "fallback" : "retry";
+            Record(attempt, component, tier, text.Length, attempt.Error is null ? attempt.Text.Length : 0, attemptStarted, outcome, purpose);
             if (attempt.Error is null)
-            {
-                Record(candidate, component, tier, attempt.Model, text.Length, attempt.Text.Length, started, "ok", attempt.UsageSource, purpose);
                 return attempt;
-            }
 
-            error = attempt.Error;
+            lastAttempt = attempt;
         }
 
-        Record(backend, component, tier, requestedModel, text.Length, 0, started, "fallback", "estimate", purpose);
-        return new RunResult(text, error ?? "backend yok", backend, requestedModel, "estimate");
+        return lastAttempt! with { Text = text, Model = requestedModel };
     }
 
     /// <summary>
@@ -296,29 +292,31 @@ public sealed class Runner
         return new WaitResult(false, maxAttempts, 1, $"'{target}' sonucu {maxAttempts} denemede gelmedi — oom doctor");
     }
 
-    private RunResult Attempt(string backend, string prompt, ModelTier tier)
+    private RunResult Attempt(string backend, string prompt, ModelTier tier, string operationId, string attemptId, int attemptNumber)
     {
         var model = ModelFor(backend, tier);
         if (!_configured)
-            return new RunResult(string.Empty, $"{backend}: yapılandırma yok (vault.json bulunamadı)", backend, model);
+            return UnknownAttempt(string.Empty, $"{backend}: yapılandırma yok (vault.json bulunamadı)", backend, model, operationId, attemptId, attemptNumber);
         if (Environment.GetEnvironmentVariable(RecursionGuard) is { Length: > 0 })
-            return new RunResult(string.Empty, $"{backend}: özyineleme koruması etkin", backend, model);
+            return UnknownAttempt(string.Empty, $"{backend}: özyineleme koruması etkin", backend, model, operationId, attemptId, attemptNumber);
 
         try
         {
-            return backend == ClaudeBackend ? CallClaude(prompt, tier, model) : CallLocal(prompt, tier, model);
+            return backend == ClaudeBackend
+                ? CallClaude(prompt, tier, model, operationId, attemptId, attemptNumber)
+                : CallLocal(prompt, tier, model, operationId, attemptId, attemptNumber);
         }
         catch (IOException exception)
         {
-            return new RunResult(string.Empty, $"{backend}: {exception.Message}", backend, model);
+            return UnknownAttempt(string.Empty, $"{backend}: {exception.Message}", backend, model, operationId, attemptId, attemptNumber);
         }
         catch (InvalidOperationException exception)
         {
-            return new RunResult(string.Empty, $"{backend}: {exception.Message}", backend, model);
+            return UnknownAttempt(string.Empty, $"{backend}: {exception.Message}", backend, model, operationId, attemptId, attemptNumber);
         }
     }
 
-    private RunResult CallClaude(string prompt, ModelTier tier, string model)
+    private RunResult CallClaude(string prompt, ModelTier tier, string model, string operationId, string attemptId, int attemptNumber)
     {
         var vault = _profile?.Vault
             ?? Path.GetDirectoryName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))
@@ -331,7 +329,7 @@ public sealed class Runner
         var request = BuildClaudeRequest(prompt, model, vault, configDirectory);
         var result = RunProcess(request, tier is ModelTier.Fast ? FastTimeout : SmartTimeout);
         if (result.TimedOut || result.ExitCode != 0)
-            return new RunResult(string.Empty, $"claude: çıkış {result.ExitCode} {result.StandardError}".Trim(), ClaudeBackend, model);
+            return UnknownAttempt(string.Empty, $"claude: çıkış {result.ExitCode} {result.StandardError}".Trim(), ClaudeBackend, model, operationId, attemptId, attemptNumber);
 
         try
         {
@@ -341,22 +339,22 @@ public sealed class Runner
             {
                 // The CLI's output contract changed; this needs the user, so it is
                 // a warning that notifies, plus an automatic fallback (spec 6.6).
-                return new RunResult(string.Empty, "warn:claude-cli-contract", ClaudeBackend, model);
+                return UnknownAttempt(string.Empty, "warn:claude-cli-contract", ClaudeBackend, model, operationId, attemptId, attemptNumber);
             }
 
             var used = ReadUsedModel(root) ?? model;
-            LastUsage = ReadUsage(root, used);
-            return new RunResult(answer.GetString() ?? string.Empty, null, ClaudeBackend, used);
+            var usage = ReadClaudeUsage(root);
+            return new RunResult(answer.GetString() ?? string.Empty, null, ClaudeBackend, used, UsageSource(usage), usage, operationId, attemptId, attemptNumber);
         }
         catch (JsonException)
         {
-            return new RunResult(result.StandardOutput, null, ClaudeBackend, model, "estimate");
+            return UnknownAttempt(result.StandardOutput, null, ClaudeBackend, model, operationId, attemptId, attemptNumber);
         }
     }
 
     // Y-115: /v1/chat/completions drops num_ctx silently (verified live, Ollama 0.33.3); only the
     // native /api/chat route honours it, so local calls go there, capped to that same window.
-    private RunResult CallLocal(string prompt, ModelTier tier, string model)
+    private RunResult CallLocal(string prompt, ModelTier tier, string model, string operationId, string attemptId, int attemptNumber)
     {
         var numCtx = _profile?.Local.NumCtx ?? LocalDefaultNumCtx;
         var capped = prompt.Length > numCtx * 3 ? prompt[..(numCtx * 3)] : prompt;
@@ -375,54 +373,73 @@ public sealed class Runner
         try
         {
             using var document = JsonDocument.Parse(response);
-            var content = document.RootElement.GetProperty("message").GetProperty("content").GetString();
+            var root = document.RootElement;
+            var usage = ReadLocalUsage(root);
+            var content = root.GetProperty("message").GetProperty("content").GetString();
             return string.IsNullOrWhiteSpace(content)
-                ? new RunResult(string.Empty, "local: boş yanıt", LocalBackend, model)
-                : new RunResult(content, null, LocalBackend, model);
+                ? new RunResult(string.Empty, "local: boş yanıt", LocalBackend, model, UsageSource(usage), usage, operationId, attemptId, attemptNumber)
+                : new RunResult(content, null, LocalBackend, model, UsageSource(usage), usage, operationId, attemptId, attemptNumber);
         }
-        catch (JsonException) { return new RunResult(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model); }
-        catch (KeyNotFoundException) { return new RunResult(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model); }
+        catch (JsonException) { return UnknownAttempt(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model, operationId, attemptId, attemptNumber); }
+        catch (KeyNotFoundException) { return UnknownAttempt(string.Empty, "local: yanıt biçimi tanınmadı", LocalBackend, model, operationId, attemptId, attemptNumber); }
     }
 
     private static string LocalRoot(string url) => url.EndsWith("/v1", StringComparison.OrdinalIgnoreCase) ? url[..^3] : url;
 
-    /// <summary>
-    /// What the last Claude call actually spent. <c>Input</c> is the <em>whole</em> prompt the
-    /// model read — <c>inputTokens + cacheCreationInputTokens + cacheReadInputTokens</c> — and
-    /// the two cache halves are kept beside it. Claude Code's <c>inputTokens</c> counts only the
-    /// uncached remainder, which is why a 58 000 character prompt was recorded as <c>in_tok=10</c>
-    /// in the live acceptance run: the other ~15 000 tokens were a cache read nobody was told about.
-    /// </summary>
-    public (long Input, long Output, long CacheRead, long CacheWrite) LastUsage { get; private set; }
-
-    private void Record(string backend, ComponentKind component, ModelTier tier, string model, int inputChars, int outputChars, DateTimeOffset started, string outcome, string usageSource, string purpose) =>
-        _state?.RecordCall(backend, component, tier, model, inputChars, outputChars, (long)(_clock.Now - started).TotalMilliseconds, outcome, usageSource, purpose,
-            LastUsage.Input, LastUsage.Output, LastUsage.CacheRead, LastUsage.CacheWrite);
+    private void Record(RunResult attempt, ComponentKind component, ModelTier tier, int inputChars, int outputChars, DateTimeOffset started, string outcome, string purpose) =>
+        _state?.RecordCall(attempt.Backend, component, tier, attempt.Model, inputChars, outputChars,
+            (long)(_clock.Now - started).TotalMilliseconds, outcome, attempt.UsageQuality, purpose,
+            attempt.OperationId!, attempt.AttemptId!, attempt.AttemptNumber!.Value, attempt.Usage);
 
     /// <summary>
     /// <c>modelUsage</c> is keyed by model id and a single call may carry more than one entry
     /// (a mid-call fallback), so every entry is summed rather than the first one taken.
     /// </summary>
-    private static (long Input, long Output, long CacheRead, long CacheWrite) ReadUsage(JsonElement root, string model)
+    private static TokenUsage? ReadClaudeUsage(JsonElement root)
     {
         if (!root.TryGetProperty("modelUsage", out var usage) || usage.ValueKind is not JsonValueKind.Object)
-            return default;
+            return null;
 
         long input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+        var inputSeen = false;
+        var outputSeen = false;
+        var cacheReadSeen = false;
+        var cacheWriteSeen = false;
         foreach (var property in usage.EnumerateObject())
         {
             if (property.Value.ValueKind is not JsonValueKind.Object) continue;
-            input += Count(property.Value, "inputTokens");
-            output += Count(property.Value, "outputTokens");
-            cacheRead += Count(property.Value, "cacheReadInputTokens");
-            cacheWrite += Count(property.Value, "cacheCreationInputTokens");
+            Add(property.Value, "inputTokens", ref input, ref inputSeen);
+            Add(property.Value, "outputTokens", ref output, ref outputSeen);
+            Add(property.Value, "cacheReadInputTokens", ref cacheRead, ref cacheReadSeen);
+            Add(property.Value, "cacheCreationInputTokens", ref cacheWrite, ref cacheWriteSeen);
         }
 
-        return (input + cacheRead + cacheWrite, output, cacheRead, cacheWrite);
+        if (!inputSeen && !outputSeen && !cacheReadSeen && !cacheWriteSeen)
+            return null;
 
-        static long Count(JsonElement element, string name) =>
-            element.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.Number ? value.GetInt64() : 0;
+        return new TokenUsage(inputSeen ? input : null, outputSeen ? output : null, cacheReadSeen ? cacheRead : null, cacheWriteSeen ? cacheWrite : null);
+
+        static void Add(JsonElement element, string name, ref long total, ref bool seen)
+        {
+            if (!element.TryGetProperty(name, out var value) || value.ValueKind is not JsonValueKind.Number)
+                return;
+
+            total += value.GetInt64();
+            seen = true;
+        }
     }
+
+    private static TokenUsage? ReadLocalUsage(JsonElement root)
+    {
+        var input = ReadNumber(root, "prompt_eval_count");
+        var output = ReadNumber(root, "eval_count");
+        return input is null && output is null ? null : new TokenUsage(input, output, null, null);
+    }
+
+    private static string UsageSource(TokenUsage? usage) => usage is null ? "unknown" : "measured";
+
+    private static RunResult UnknownAttempt(string text, string? error, string backend, string model, string operationId, string attemptId, int attemptNumber) =>
+        new(text, error, backend, model, "unknown", null, operationId, attemptId, attemptNumber);
 
     /// <summary>The component's chain from <c>oom.json</c> (spec 6.6); the spec 4.1 defaults when unconfigured.</summary>
     private IReadOnlyList<string> BackendChain(ComponentKind component) =>

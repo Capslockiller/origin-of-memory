@@ -210,11 +210,15 @@ public sealed class WindowsProcessRunner : IProcessRunner
 /// <summary>The real HTTP boundary for the local, OpenAI compatible endpoint.</summary>
 public sealed class HttpTransport : IHttp
 {
-    private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(240) };
+    private static readonly HttpClient Client = new(new HttpClientHandler
+    {
+        AllowAutoRedirect = false,
+        UseProxy = false
+    }) { Timeout = TimeSpan.FromSeconds(240) };
 
     public string Send(string method, string url, string body)
     {
-        using var message = new HttpRequestMessage(new HttpMethod(method), url)
+        using var message = new HttpRequestMessage(new HttpMethod(method), OomSettings.ValidateLocalUrl(url))
         {
             Content = new StringContent(body, new UTF8Encoding(false), "application/json")
         };

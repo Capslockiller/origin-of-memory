@@ -96,7 +96,8 @@ public sealed class TestDisipliniScars
         File.WriteAllText(noTurns, "{\"sessionId\":\"empty-1\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"iç konuşma\"}}");
 
         var chain = new Dictionary<ComponentKind, IReadOnlyList<string>> { [ComponentKind.Flush] = ["local"] };
-        var runner = new Runner(null, null, null, null, "http://localhost:11434/v1", false, chain);
+        // yazan: codex · gpt-5
+        var runner = new Runner(null, null, null, null, "http://127.0.0.1:11434/v1", false, chain);
         var (records, excludedSubagent, excludedNoTurns) = Bench.MeasureFlush([real, subagent, noTurns], runner);
 
         Assert.Equal(1, excludedSubagent);
