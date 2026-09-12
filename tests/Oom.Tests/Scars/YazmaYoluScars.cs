@@ -91,11 +91,12 @@ public sealed class YazmaYoluScars
         Assert.Contains("Gerçek kullanıcı kararı", result.Text);
     }
 
-    [Fact(DisplayName = "Y-011 · Claude runner plan modundan yalıtılır ve biçimsiz yanıt fallback'e gider")]
+    [Fact(DisplayName = "Y-011 · Claude runner kullanıcının kendi oturumuyla, vault dışından koşar; biçimsiz yanıt fallback'e gider")]
     public void Y011_ClaudeRunnerIsIsolatedAndFallsBack()
     {
-        var request = new Runner().BuildClaudeRequest("özetle", "claude-haiku-4-5-20251001", @"D:\vault", @"D:\vault\.oom\claude-config");
-        Assert.Equal(@"D:\vault\.oom\claude-config", request.Environment["CLAUDE_CONFIG_DIR"]);
+        var request = new Runner().BuildClaudeRequest("özetle", "claude-haiku-4-5-20251001", @"D:\vault");
+        Assert.False(request.Environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+        Assert.Equal("oom", request.Environment["OOM_INVOKED_BY"]);
         Assert.DoesNotContain(@"D:\vault", request.WorkingDirectory, StringComparison.OrdinalIgnoreCase);
         var validation = new Flush().ValidateSummary("<ExitPlanMode/>\n" + ScarFixture.ValidSummary(), "isolated");
         Assert.False(validation.Accepted);

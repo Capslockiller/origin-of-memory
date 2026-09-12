@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
 
-public sealed record RunnerProfile(string Vault, string ClaudeConfigDirectory, ClaudeSettings Claude);
+public sealed record RunnerProfile(string Vault, ClaudeSettings Claude);
 
 public sealed class Runner
 {
@@ -58,18 +58,16 @@ public sealed class Runner
         return attempt.Error is null ? attempt : attempt with { Text = text, Model = ModelFor(tier) };
     }
 
-    public ProcessRequest BuildClaudeRequest(string prompt, string model, string vaultPath, string isolatedConfigDir, string? pathValue = null)
+    public ProcessRequest BuildClaudeRequest(string prompt, string model, string vaultPath, string? pathValue = null)
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentException.ThrowIfNullOrWhiteSpace(vaultPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(isolatedConfigDir);
         if (!FullModelId.IsMatch(model ?? string.Empty))
             throw new ArgumentException($"model kimliği tam olmalı, takma ad kabul edilmez: '{model}'", nameof(model));
 
         var workingDirectory = OutsideVault(vaultPath);
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["CLAUDE_CONFIG_DIR"] = isolatedConfigDir,
             [RecursionGuard] = "oom"
         };
 
@@ -178,8 +176,7 @@ public sealed class Runner
         var vault = _profile?.Vault
             ?? Path.GetDirectoryName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))
             ?? AppContext.BaseDirectory;
-        var configDirectory = _profile?.ClaudeConfigDirectory ?? Path.Combine(AppContext.BaseDirectory, "claude-config");
-        var request = BuildClaudeRequest(prompt, model, vault, configDirectory);
+        var request = BuildClaudeRequest(prompt, model, vault);
         var result = RunProcess(request, tier is ModelTier.Fast ? FastTimeout : SmartTimeout);
         if (result.TimedOut || result.ExitCode != 0)
             return UnknownAttempt(string.Empty, $"claude: çıkış {result.ExitCode} {result.StandardError}".Trim(), ClaudeBackend, model, operationId, attemptId, attemptNumber);

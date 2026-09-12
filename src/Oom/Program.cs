@@ -562,9 +562,8 @@ internal static class Program
     });
 
     private static Runner MakeRunner(string vault, OomSettings settings) =>
-        new(new RunnerProfile(vault, ClaudeConfigDirectory(vault), settings.Backend.Claude));
+        new(new RunnerProfile(vault, settings.Backend.Claude));
 
-    private static string ClaudeConfigDirectory(string vault) => Path.Combine(vault, ".oom", "claude-config");
 
     private static Flush MakeFlush(string vault, OomSettings settings, State? state)
     {
