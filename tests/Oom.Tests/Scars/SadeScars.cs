@@ -235,4 +235,82 @@ public sealed class SadeScars
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact(DisplayName = "Y-318 · nudge her mesajda saat satırı basar: yeni oturum, alt dakika, kırk dakikalık ara, iki günlük ara")]
+    public void Y318_NudgePrintsAClockLineOnEveryPrompt()
+    {
+        var root = ScarFixture.TempDirectory();
+        try
+        {
+            using var state = new State(null, null, Path.Combine(root, "state.db"));
+            var session = "y318-" + Guid.NewGuid().ToString("N")[..8];
+            var start = new DateTimeOffset(2026, 9, 12, 16, 40, 0, TimeSpan.FromHours(3));
+
+            Assert.Equal("[Zaman] 2026-09-12 16:40 · oturum şimdi başladı · 1. mesaj",
+                Nudge.Lines(state, session, start, every: 15));
+
+            Assert.Equal("[Zaman] 2026-09-12 23:42 · oturum 16:40'ta başladı (7 sa 2 dk) · son mesaj 7 sa 2 dk önce · 7 sa 2 dk ara · 2. mesaj",
+                Nudge.Lines(state, session, start.AddHours(7).AddMinutes(2), every: 15));
+
+            Assert.Equal("[Zaman] 2026-09-12 23:48 · oturum 16:40'ta başladı (7 sa 8 dk) · son mesaj 6 dk önce · 3. mesaj",
+                Nudge.Lines(state, session, start.AddHours(7).AddMinutes(8), every: 15));
+
+            Assert.Equal("[Zaman] 2026-09-13 00:28 · oturum 16:40'ta başladı (7 sa 48 dk) · son mesaj 40 dk önce · 40 dk ara · 4. mesaj",
+                Nudge.Lines(state, session, start.AddHours(7).AddMinutes(48), every: 15));
+
+            Assert.Equal("[Zaman] 2026-09-15 03:28 · oturum 16:40'ta başladı (2 gün 10 sa) · son mesaj 2 gün 3 sa önce · 2 gün 3 sa ara · 5. mesaj",
+                Nudge.Lines(state, session, start.AddDays(2).AddHours(10).AddMinutes(48), every: 15));
+
+            var fresh = "y318b-" + Guid.NewGuid().ToString("N")[..8];
+            Nudge.Lines(state, fresh, start, every: 15);
+            Assert.Equal("[Zaman] 2026-09-12 16:40 · oturum şimdi başladı · son mesaj az önce · 2. mesaj",
+                Nudge.Lines(state, fresh, start.AddSeconds(20), every: 15));
+
+            var every = new List<string>();
+            for (var prompt = 3; prompt <= 15; prompt++)
+                every.Add(Nudge.Lines(state, fresh, start.AddMinutes(prompt), every: 15));
+
+            Assert.All(every.Take(12), line => Assert.DoesNotContain("[Hafıza]", line, StringComparison.Ordinal));
+            Assert.Equal("[Hafıza] 15. mesaj. Oturum sonunda 🔮 850-Companion/Last-Session.md ve Threads.md güncellemeyi unutma.",
+                every[^1].Split('\n')[1]);
+            Assert.StartsWith("[Zaman] ", every[^1], StringComparison.Ordinal);
+            Assert.True(every[^1].Split('\n')[0].Length < 120);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
+    }
+
+    [Fact(DisplayName = "Y-319 · context açılış bloğu son oturum bitişini bilir, hiç yoksa bilmediğini söyler")]
+    public void Y319_ContextOpensWithAClockLine()
+    {
+        var root = ScarFixture.TempDirectory();
+        var vault = Path.Combine(root, "kasa");
+        Directory.CreateDirectory(Path.Combine(vault, ScarFixture.CompanionDir));
+        try
+        {
+            var settings = OomSettings.Defaults(vault);
+            var now = new DateTimeOffset(2026, 9, 12, 23, 48, 0, TimeSpan.FromHours(3));
+            using var state = new State(null, null, Path.Combine(root, "state.db"));
+
+            Assert.Null(state.LastSessionEnd());
+            var blank = new Context(settings.Context with { LastSessionEnd = state.LastSessionEnd() }).Build(vault, now);
+            Assert.Contains("Zaman", blank.Sections);
+            Assert.Equal("[Zaman] 2026-09-12 23:48 · son oturum bilinmiyor", blank.Text.Split('\n')[1]);
+
+            state.RecordFlush(new DateTimeOffset(2026, 9, 12, 15, 30, 0, TimeSpan.FromHours(3)), "y319", "manual", "summary", 4, 100, "cli");
+            Assert.Equal(new DateTimeOffset(2026, 9, 12, 15, 30, 0, TimeSpan.FromHours(3)), state.LastSessionEnd());
+
+            var known = new Context(settings.Context with { LastSessionEnd = state.LastSessionEnd() }).Build(vault, now);
+            Assert.Equal("[Zaman] 2026-09-12 23:48 · son oturum bitişi: 2026-09-12 15:30 (8 sa 18 dk önce)", known.Text.Split('\n')[1]);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(root);
+        }
+    }
+
 }

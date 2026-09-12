@@ -306,8 +306,8 @@ internal static class StateStore
         {
             probe.CommandText = "PRAGMA user_version";
             var stamped = Convert.ToInt64(probe.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture) != 0;
-            probe.CommandText = "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'prompt_count'";
-            var current = Convert.ToInt64(probe.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture) == 1;
+            probe.CommandText = "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN ('prompt_count', 'last_prompt_ts')";
+            var current = Convert.ToInt64(probe.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture) == 2;
             if (!stamped && (current || !TableExists(connection, "sessions")))
                 return null;
         }
@@ -337,7 +337,7 @@ internal static class StateStore
             Execute(connection, "PRAGMA journal_mode=WAL;");
 
         Execute(connection,
-            "CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, transcript_path TEXT, last_turn_index INTEGER, last_flush_ts TEXT, prompt_count INTEGER NOT NULL DEFAULT 0, first_seen TEXT);" +
+            "CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, transcript_path TEXT, last_turn_index INTEGER, last_flush_ts TEXT, prompt_count INTEGER NOT NULL DEFAULT 0, first_seen TEXT, last_prompt_ts TEXT);" +
             "CREATE TABLE IF NOT EXISTS flush_log(ts TEXT, session_id TEXT, reason TEXT, outcome TEXT, turns INTEGER, chars INTEGER, backend TEXT);" +
             "CREATE TABLE IF NOT EXISTS retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);" +
             "CREATE TABLE IF NOT EXISTS sweep_stamps(path TEXT PRIMARY KEY, mtime TEXT, size INTEGER, outcome TEXT);" +

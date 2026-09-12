@@ -118,7 +118,7 @@ internal static class Program
     {
         var hook = HookPayload.Read(ReadStandardInput());
         using var state = OpenStateForUpdate();
-        var options = settings.Context with { PendingNotification = state?.TakeReflectionDebt() };
+        var options = settings.Context with { PendingNotification = state?.TakeReflectionDebt(), LastSessionEnd = state?.LastSessionEnd() };
         var result = new Context(options).Build(vault, now);
         var text = WithExtensions(result.Text, settings, vault);
 
@@ -412,8 +412,7 @@ internal static class Program
         var hook = HookPayload.Read(ReadStandardInput());
         var session = Value(args, "--session") ?? hook.SessionId ?? "cli";
         using var state = OpenState();
-        if (Nudge.Envelope(Nudge.Count(state, session, now, settings.NudgeEvery)) is { Length: > 0 } envelope)
-            Console.WriteLine(envelope);
+        Console.WriteLine(Nudge.Envelope(Nudge.Lines(state, session, now, settings.NudgeEvery)));
 
         return 0;
     }

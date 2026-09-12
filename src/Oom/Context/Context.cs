@@ -7,7 +7,8 @@ namespace Oom.Contracts;
 public sealed record ContextOptions(
     string CompanionDir = "🔮 850-Companion",
     int CapChars = 16_000,
-    string? PendingNotification = null);
+    string? PendingNotification = null,
+    DateTimeOffset? LastSessionEnd = null);
 
 public sealed class Context
 {
@@ -15,7 +16,7 @@ public sealed class Context
 
     private static readonly string[] SectionNames =
     [
-        "Bildirim", "Son Oturum", "Aktif Threadler", "Kurallar", "Düzeltmeler", "Son Journal",
+        "Bildirim", "Zaman", "Son Oturum", "Aktif Threadler", "Kurallar", "Düzeltmeler", "Son Journal",
         "Bilgi Tabanı — İndeks", "Bugünün Logu"
     ];
 
@@ -51,6 +52,7 @@ public sealed class Context
 
         var builder = new StringBuilder();
         Append(builder, "[Bildirim]", _options.PendingNotification);
+        builder.Append(Nudge.LastSession(now, _options.LastSessionEnd)).Append('\n');
         foreach (var (section, file, lines) in CompanionFiles)
             Append(builder, Label(section), Head(companion is null ? null : Path.Combine(companion, file), lines, section));
 

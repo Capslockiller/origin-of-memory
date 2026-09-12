@@ -2,6 +2,8 @@ using System.Globalization;
 
 namespace Oom.Contracts;
 
+public sealed record PromptMark(int Count, DateTimeOffset FirstSeen, DateTimeOffset? LastPrompt);
+
 public sealed record SessionRow(string SessionId, string? TranscriptPath, int Cursor, int Attempts, DateTimeOffset NextAt, string? LastError);
 
 public sealed partial class State
@@ -89,12 +91,34 @@ public sealed partial class State
             WriteSessionRow(sessionId, null, cursor);
     }
 
-    public int CountPrompt(string sessionId, DateTimeOffset now)
+    public int CountPrompt(string sessionId, DateTimeOffset now) => MarkPrompt(sessionId, now).Count;
+
+    public PromptMark MarkPrompt(string sessionId, DateTimeOffset now)
     {
-        Write("INSERT INTO sessions(session_id, last_turn_index, prompt_count, first_seen) VALUES ($id, -1, 1, $ts) " +
-              "ON CONFLICT(session_id) DO UPDATE SET prompt_count = prompt_count + 1, first_seen = COALESCE(first_seen, $ts)",
+        DateTimeOffset? firstSeen;
+        DateTimeOffset? lastPrompt;
+        lock (_gate)
+        {
+            using var command = Command("SELECT first_seen, last_prompt_ts FROM sessions WHERE session_id = $id", [("$id", sessionId)]);
+            using var reader = command.ExecuteReader();
+            var found = reader.Read();
+            firstSeen = found && !reader.IsDBNull(0) ? DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture) : null;
+            lastPrompt = found && !reader.IsDBNull(1) ? DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture) : null;
+        }
+
+        Write("INSERT INTO sessions(session_id, last_turn_index, prompt_count, first_seen, last_prompt_ts) VALUES ($id, -1, 1, $ts, $ts) " +
+              "ON CONFLICT(session_id) DO UPDATE SET prompt_count = prompt_count + 1, first_seen = COALESCE(first_seen, $ts), last_prompt_ts = $ts",
             ("$id", sessionId), ("$ts", Stamp(now)));
-        return (int)ScalarFor("SELECT prompt_count FROM sessions WHERE session_id = $id", sessionId);
+        return new PromptMark(
+            (int)ScalarFor("SELECT prompt_count FROM sessions WHERE session_id = $id", sessionId),
+            firstSeen ?? now,
+            lastPrompt);
+    }
+
+    public DateTimeOffset? LastSessionEnd()
+    {
+        var value = Text("SELECT MAX(ts) FROM (SELECT MAX(last_flush_ts) AS ts FROM sessions UNION ALL SELECT MAX(ts) AS ts FROM flush_log)");
+        return string.IsNullOrWhiteSpace(value) ? null : DateTimeOffset.Parse(value, CultureInfo.InvariantCulture);
     }
 
     public (int PromptCount, DateTimeOffset? FirstSeen) ReadSessionActivity(string sessionId)
