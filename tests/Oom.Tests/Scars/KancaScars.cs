@@ -159,9 +159,9 @@ public sealed class KancaScars
     [Fact(DisplayName = "Y-309 · Kanca komutu eğik çizgili yol yazar; ters bölü bash altında yutulur")]
     public void Y309_HookCommandUsesForwardSlashes()
     {
-        var hooks = HookTemplates.Build(@"E:\OdenaOS\.oom\bin\oom.exe");
-        Assert.All(hooks, hook => Assert.StartsWith("E:/OdenaOS/.oom/bin/oom.exe ", hook.Command, StringComparison.Ordinal));
-        var spaced = HookTemplates.Build(@"C:\Program Files\oom\oom.exe");
-        Assert.All(spaced, hook => Assert.StartsWith("\"C:/Program Files/oom/oom.exe\" ", hook.Command, StringComparison.Ordinal));
+        var hooks = HookTemplates.Build(@"E:\OdenaOS\.oom\bin\oom.exe", @"E:\OdenaOS");
+        Assert.All(hooks, hook => Assert.StartsWith("E:/OdenaOS/.oom/bin/oom.exe --vault E:/OdenaOS ", hook.Command, StringComparison.Ordinal));
+        var spaced = HookTemplates.Build(@"C:\Program Files\oom\oom.exe", @"D:\My Vault");
+        Assert.All(spaced, hook => Assert.StartsWith("\"C:/Program Files/oom/oom.exe\" --vault \"D:/My Vault\" ", hook.Command, StringComparison.Ordinal));
     }
 }

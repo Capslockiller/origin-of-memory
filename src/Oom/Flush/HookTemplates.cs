@@ -6,17 +6,21 @@ public sealed record HookRegistration(string Event, string Command, int TimeoutS
 
 public static class HookTemplates
 {
-    public static IReadOnlyList<HookRegistration> Build(string executablePath) =>
-    [
-        new("SessionStart", Quote(executablePath) + " context", 15),
-        new("UserPromptSubmit", Quote(executablePath) + " nudge", 5),
-        new("SessionEnd", Quote(executablePath) + " flush --reason sessionend", 15),
-        new("PreCompact", Quote(executablePath) + " flush --reason precompact", 15)
-    ];
-
-    public static string Render(string executablePath)
+    public static IReadOnlyList<HookRegistration> Build(string executablePath, string vault)
     {
-        var hooks = Build(executablePath).ToDictionary(
+        var prefix = Quote(executablePath) + " --vault " + Quote(vault);
+        return
+        [
+            new("SessionStart", prefix + " context", 15),
+            new("UserPromptSubmit", prefix + " nudge", 5),
+            new("SessionEnd", prefix + " flush --reason sessionend", 15),
+            new("PreCompact", prefix + " flush --reason precompact", 15)
+        ];
+    }
+
+    public static string Render(string executablePath, string vault)
+    {
+        var hooks = Build(executablePath, vault).ToDictionary(
             registration => registration.Event,
             registration => new[]
             {

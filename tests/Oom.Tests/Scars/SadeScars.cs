@@ -147,7 +147,7 @@ public sealed class SadeScars
 
             var hooks = JsonDocument.Parse(File.ReadAllText(settingsPath)).RootElement;
             Assert.True(hooks.TryGetProperty("permissions", out _), "install ilgisiz anahtarı sildi");
-            foreach (var registration in HookTemplates.Build(Environment.ProcessPath!))
+            foreach (var registration in HookTemplates.Build(Environment.ProcessPath!, vault))
                 Assert.Contains(registration.Command, Commands(hooks, registration.Event), StringComparer.Ordinal);
 
             Assert.Contains("kendi-betigim.cmd", Commands(hooks, "SessionStart"), StringComparer.Ordinal);

@@ -353,7 +353,7 @@ internal static class Program
         }
 
         var hooks = root["hooks"] as JsonObject ?? [];
-        foreach (var registration in HookTemplates.Build(executable))
+        foreach (var registration in HookTemplates.Build(executable, vault))
         {
             var kept = new JsonArray();
             if (hooks[registration.Event] is JsonArray existing)
