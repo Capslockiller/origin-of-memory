@@ -14,8 +14,8 @@ Persistent memory for Claude Code sessions, kept as plain Markdown in an Obsidia
 1. **Session start** — `context` prints today's log, the knowledge index and the companion files into the session as additional context.
 2. **During the session** — `nudge` counts prompts and periodically asks the session to record what it learned.
 3. **Session end / compaction** — `flush` summarises the transcript with the fast model and appends a block to `daily/YYYY-MM-DD.md`.
-4. **Every few hours** — `sweep` finds transcripts that changed on disk and flushes the ones the hooks missed.
-5. **Evenings** — `compile` folds the daily logs into `knowledge/` concept notes with the smart model and rebuilds the root map.
+4. **`oom sweep`** — finds transcripts that changed on disk and flushes the ones the hooks missed. Nothing schedules it; run it yourself or from Task Scheduler. `sweep.everyHours` stops it doing the work twice.
+5. **`oom compile`** — folds the daily logs into `knowledge/` concept notes with the smart model and rebuilds the root map. Same: run it, it decides whether it is due (`compile.eveningHour`, `minIntervalHours`).
 6. **On request** — `retrieve` or the MCP tools search the notes with BM25 and return a bounded excerpt.
 
 Every file it writes is Markdown you can read and edit; the SQLite state is a cache that can be deleted at any time.
