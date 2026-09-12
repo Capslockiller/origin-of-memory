@@ -1,0 +1,16 @@
+name: Feature request
+description: A behaviour you want and how you would measure it
+labels: [enhancement]
+body:
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: measure
+    attributes:
+      label: How would you know it works?
+    validations:
+      required: true

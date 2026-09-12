@@ -1,0 +1,29 @@
+name: Bug report
+description: Something behaves differently from what README says
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "3.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual, with the output of `oom doctor`
+    validations:
+      required: true

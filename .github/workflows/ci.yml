@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main, "wave/**", "lane/**"]
+    branches: [main, "sade/**"]
     tags: ["v*"]
   pull_request:
 jobs:
@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "9.0.x"   # D1: .NET 10 LTS once the SDK is installed on the owner machine
+          dotnet-version: "9.0.x"
       - run: dotnet restore Oom.sln
       - run: dotnet build Oom.sln --no-restore -c Release
       - run: dotnet test Oom.sln --no-build -c Release

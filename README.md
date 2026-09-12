@@ -1,8 +1,31 @@
 # Origin of Memory
 
+[![CI](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Capslockiller/origin-of-memory/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Capslockiller/origin-of-memory)](https://github.com/Capslockiller/origin-of-memory/releases)
+[![.NET 9](https://img.shields.io/badge/.NET-9.0-512BD4)](https://dotnet.microsoft.com/)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+
 Persistent memory for Claude Code sessions, kept as plain Markdown in an Obsidian vault.
 
 `oom` is a single .NET 9 console executable. It hooks into Claude Code, summarises each session into a daily log, compiles the daily logs into concept notes, and injects the relevant memory back at the start of the next session. Summaries are produced by the `claude` CLI on the same machine; nothing else is called.
+
+## How it works
+
+1. **Session start** — `context` prints today's log, the knowledge index and the companion files into the session as additional context.
+2. **During the session** — `nudge` counts prompts and periodically asks the session to record what it learned.
+3. **Session end / compaction** — `flush` summarises the transcript with the fast model and appends a block to `daily/YYYY-MM-DD.md`.
+4. **Every few hours** — `sweep` finds transcripts that changed on disk and flushes the ones the hooks missed.
+5. **Evenings** — `compile` folds the daily logs into `knowledge/` concept notes with the smart model and rebuilds the root map.
+6. **On request** — `retrieve` or the MCP tools search the notes with BM25 and return a bounded excerpt.
+
+Every file it writes is Markdown you can read and edit; the SQLite state is a cache that can be deleted at any time.
+
+## Requirements
+
+- Windows 10/11
+- .NET 9 SDK
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) with the `claude` CLI on `PATH`
+- An Obsidian vault, or any folder of Markdown files
 
 ## Install
 
@@ -62,11 +85,14 @@ oom [--vault <path>] <command>
 - `<companionDir>/` — hand-written files injected at session start (Core, Last-Session, Threads, Journal)
 - `.oom/` — `oom.json` and `vault.json`
 
-## Tests
+## Development
 
 ```
+dotnet build Oom.sln -c Release
 dotnet test Oom.sln -c Release
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made and [SECURITY.md](SECURITY.md) for reporting a vulnerability.
 
 ## License
 
