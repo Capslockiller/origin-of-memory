@@ -70,4 +70,4 @@ dotnet test Oom.sln -c Release
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE). Anyone may use, change and share it for noncommercial purposes; commercial use is not permitted.
+[PolyForm Noncommercial 1.0.0](LICENSE). Anyone may use, change and share it for noncommercial purposes. Commercial use requires a separate commercial license from Odena Studio: odenastudio@gmail.com.
