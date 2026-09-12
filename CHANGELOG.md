@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.1 — 2026-09-12
+
+### Fixed
+- Hook commands are written with forward slashes and carry `--vault <path>`. Claude Code runs hooks through bash on machines where bash is the shell; a backslash path was swallowed there and none of the four hooks ever ran (Y-309). Re-run `oom --vault <vault> install` to rewrite them.
+- `--help` lists what each command does.
+
 ## 3.0.0 — 2026-09-12
 
 A smaller program with no history attached. Everything the owner had not asked for was removed, then every line of prose in the repository was deleted and rewritten from zero.
