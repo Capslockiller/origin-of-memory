@@ -268,8 +268,12 @@ internal static class Program
                 continue;
             }
 
-            var result = compile.Run(Path.GetFileName(daily), File.ReadAllText(daily, Utf8), run.Text);
-            Console.WriteLine($"derleme {Path.GetFileName(daily)}: {result.Status} · {result.WrittenPaths.Count} not");
+            var name = Path.GetFileName(daily);
+            var result = compile.Run(name, File.ReadAllText(daily, Utf8), run.Text);
+            state.WriteDailyIngest(name, result.Status, now, result.Reason);
+            Console.WriteLine(string.IsNullOrWhiteSpace(result.Reason)
+                ? $"derleme {name}: {result.Status} · {result.WrittenPaths.Count} not"
+                : $"derleme {name}: {result.Status} · {result.WrittenPaths.Count} not · {result.Reason}");
         }
 
         return 0;

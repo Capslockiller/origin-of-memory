@@ -24,7 +24,7 @@ public sealed record RunResult(string Text, string? Error, string Backend, strin
 public sealed record ProcessRequest(string FileName, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment, string StandardInput);
 public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError, bool StandardInputClosed, bool TimedOut = false);
 public sealed record SummaryValidation(bool Accepted, string Normalized, string? RejectionPath);
-public sealed record CompileResult(string Status, IReadOnlyList<string> WrittenPaths, bool IndexCurrent, bool SourceIngested, string? QuarantinePath = null);
+public sealed record CompileResult(string Status, IReadOnlyList<string> WrittenPaths, bool IndexCurrent, bool SourceIngested, string? QuarantinePath = null, string? Reason = null);
 public sealed record CompileDecision(bool ShouldCompile, string Reason);
 public sealed record Note(string Name, string Title, IReadOnlyList<string> Aliases, IReadOnlyList<string> Tags, IReadOnlyList<string> Sources, DateOnly Created, DateOnly Updated, string Body);
 public sealed record SearchHit(string Name, double Score, string Text, string Source, DateTimeOffset Timestamp, bool Superseded = false);

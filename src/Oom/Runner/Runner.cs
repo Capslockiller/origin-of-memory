@@ -12,6 +12,7 @@ public sealed class Runner
     private const string SmartModel = "claude-sonnet-5";
     private const string ClaudeBackend = "claude";
     private const string RecursionGuard = "OOM_INVOKED_BY";
+    private const int FailureDetailCap = 500;
 
     private static readonly TimeSpan FastTimeout = TimeSpan.FromSeconds(240);
     private static readonly TimeSpan SmartTimeout = TimeSpan.FromSeconds(900);
@@ -179,7 +180,7 @@ public sealed class Runner
         var request = BuildClaudeRequest(prompt, model, vault);
         var result = RunProcess(request, tier is ModelTier.Fast ? FastTimeout : SmartTimeout);
         if (result.TimedOut || result.ExitCode != 0)
-            return UnknownAttempt(string.Empty, $"claude: çıkış {result.ExitCode} {result.StandardError}".Trim(), ClaudeBackend, model, operationId, attemptId, attemptNumber);
+            return UnknownAttempt(string.Empty, FailureDetail(result), ClaudeBackend, model, operationId, attemptId, attemptNumber);
 
         try
         {
@@ -199,6 +200,20 @@ public sealed class Runner
             return UnknownAttempt(result.StandardOutput, null, ClaudeBackend, model, operationId, attemptId, attemptNumber);
         }
     }
+
+    private static string FailureDetail(ProcessResult result)
+    {
+        var detail = new StringBuilder("claude: çıkış ").Append(result.ExitCode);
+        if (result.TimedOut)
+            detail.Append(" (zaman aşımı)");
+        var error = result.StandardError.Trim();
+        detail.Append('\n').Append("stderr: ").Append(error.Length == 0 ? "(boş)" : Clip(error));
+        var output = result.StandardOutput.Trim();
+        detail.Append('\n').Append("stdout: ").Append(output.Length == 0 ? "(boş)" : Clip(output));
+        return detail.ToString();
+    }
+
+    private static string Clip(string text) => text.Length <= FailureDetailCap ? text : text[..FailureDetailCap] + "…";
 
     private static TokenUsage? ReadClaudeUsage(JsonElement root)
     {

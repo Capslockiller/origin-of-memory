@@ -89,10 +89,10 @@ public sealed class Compile
         var gated = _guards.Gate(modelOutput, Direction.Out, ComponentKind.Compile);
         RecordBoundary(dailyName, gated);
         if (gated.Refused)
-            return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, gated.Findings));
+            return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, gated.Findings), GuardReason(gated.Findings));
 
         if (!gated.Text.Contains(DoneMarker, StringComparison.Ordinal))
-            return new CompileResult("retry", [], false, false);
+            return new CompileResult("retry", [], false, false, null, $"model çıktısında '{DoneMarker}' imi yok");
 
         IReadOnlyDictionary<string, string> files;
         try
@@ -103,7 +103,7 @@ public sealed class Compile
                 var note = _guards.Gate(body, Direction.Out, ComponentKind.Compile);
                 RecordBoundary(dailyName, note);
                 if (note.Refused)
-                    return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, note.Findings));
+                    return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, note.Findings), GuardReason(note.Findings));
                 _notes.Validate(_notes.Parse(path, note.Text));
             }
         }
@@ -357,10 +357,13 @@ public sealed class Compile
     {
         var next = attempts + 1;
         if (next < MaxAttempts)
-            return new CompileResult("rejected", [], false, false);
+            return new CompileResult("rejected", [], false, false, null, reason);
         _notifier?.Notify($"{dailyName} derlenemedi ve park edildi: {reason}");
-        return new CompileResult("parked", [], false, false);
+        return new CompileResult("parked", [], false, false, null, reason);
     }
+
+    private static string GuardReason(IReadOnlyList<string> findings)
+        => "muhafız reddi: " + string.Join(", ", findings);
 
     private void RecordBoundary(string dailyName, GateResult gated)
     {

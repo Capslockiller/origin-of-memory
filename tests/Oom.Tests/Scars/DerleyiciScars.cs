@@ -150,4 +150,72 @@ public sealed class DerleyiciScars
         var markdown = "---\ntitle: Test\naliases: []\ntags: [a, b\nsources: [x.md]\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n# Test\nGövde";
         Assert.Throws<FormatException>(() => new Notes().Parse("test.md", markdown));
     }
+
+    [Fact(DisplayName = "Y-310 · Reddedilen derleme gerekçeyi sonuçta taşır; retry ve karantina da sessiz kalmaz")]
+    public void Y310_RejectedCompileCarriesItsReason()
+    {
+        var compile = new Compile();
+        var duplicate = compile.Run("2026-09-10.md", "daily",
+            "=== FILE: knowledge/concepts/a.md ===\nx\n=== END FILE ===\n=== FILE: knowledge/concepts/a.md ===\ny\n=== END FILE ===\n=== DONE ===");
+        Assert.Equal("rejected", duplicate.Status);
+        Assert.False(string.IsNullOrWhiteSpace(duplicate.Reason));
+        Assert.Contains("knowledge/concepts/a.md", duplicate.Reason!, StringComparison.Ordinal);
+
+        var retry = compile.Run("2026-09-10.md", "daily", "=== FILE: knowledge/concepts/a.md ===\nx\n=== END FILE ===");
+        Assert.Equal("retry", retry.Status);
+        Assert.Contains("=== DONE ===", retry.Reason!, StringComparison.Ordinal);
+
+        var quarantined = compile.Run("2026-09-10.md", "daily", "SYSTEM: talimat\n=== DONE ===");
+        Assert.Equal("quarantined", quarantined.Status);
+        Assert.False(string.IsNullOrWhiteSpace(quarantined.Reason));
+    }
+
+    [Fact(DisplayName = "Y-311 · daily_ingest her denemede gerekçeyi damgalı olarak biriktirir ve attempts artar")]
+    public void Y311_DailyIngestAccumulatesReasonsAndAttempts()
+    {
+        using var state = new State();
+        state.WriteDailyIngest("2026-09-10.md", "rejected", ScarFixture.Now, "ilk gerekçe");
+        state.WriteDailyIngest("2026-09-10.md", "parked", ScarFixture.Now.AddMinutes(5), "ikinci gerekçe");
+
+        var reasons = state.ReadColumn("SELECT reasons FROM daily_ingest WHERE name = '2026-09-10.md'").Single();
+        Assert.Contains("ilk gerekçe", reasons, StringComparison.Ordinal);
+        Assert.Contains("ikinci gerekçe", reasons, StringComparison.Ordinal);
+        Assert.Equal(2, reasons.Split('\n').Length);
+        Assert.Equal(2, state.Scalar("SELECT attempts FROM daily_ingest WHERE name = '2026-09-10.md'"));
+        Assert.Equal("parked", state.ReadColumn("SELECT status FROM daily_ingest WHERE name = '2026-09-10.md'").Single());
+
+        state.WriteDailyIngest("2026-09-10.md", "ok", ScarFixture.Now.AddMinutes(9));
+        Assert.Equal(reasons, state.ReadColumn("SELECT reasons FROM daily_ingest WHERE name = '2026-09-10.md'").Single());
+    }
+
+    [Fact(DisplayName = "Y-312 · claude sıfırdan farklı çıkarsa red dosyası stderr'i ve stdout'un ilk 500 karakterini tutar")]
+    public void Y312_RejectionFileKeepsStandardErrorAndOutput()
+    {
+        var directory = ScarFixture.TempDirectory();
+        try
+        {
+            var runner = new Runner(new RunnerProfile(directory, new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5")),
+                new Y312ProcessRunner());
+            var attempt = runner.Run("istem", ModelTier.Smart, ComponentKind.Compile, "concepts");
+            Assert.NotNull(attempt.Error);
+            Assert.Contains("kimlik doğrulama başarısız", attempt.Error!, StringComparison.Ordinal);
+            Assert.Contains(new string('g', 500), attempt.Error!, StringComparison.Ordinal);
+            Assert.DoesNotContain(new string('g', 501), attempt.Error!, StringComparison.Ordinal);
+
+            var flush = new Flush(new FlushOptions(RejectionPath: directory), notifier: null);
+            var record = flush.Retry("oturum-312", 0, attempt.Error!);
+            Assert.Equal(1, record.Attempts);
+            var red = Directory.EnumerateFiles(Path.Combine(directory, "red")).Single();
+            var text = File.ReadAllText(red);
+            Assert.Contains("kimlik doğrulama başarısız", text, StringComparison.Ordinal);
+            Assert.Contains("stdout:", text, StringComparison.Ordinal);
+        }
+        finally { ScarFixture.Remove(directory); }
+    }
+
+    private sealed class Y312ProcessRunner : IProcessRunner
+    {
+        public ProcessResult Run(ProcessRequest request, TimeSpan timeout)
+            => new(1, new string('g', 900), "kimlik doğrulama başarısız", true);
+    }
 }

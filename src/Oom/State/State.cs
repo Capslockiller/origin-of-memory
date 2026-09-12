@@ -156,9 +156,17 @@ public sealed partial class State : IDisposable
         Write("INSERT INTO sweep_stamps(path, mtime, size, outcome) VALUES ($p, $m, $s, $o) ON CONFLICT(path) DO UPDATE SET mtime = $m, size = $s, outcome = $o",
             ("$p", path), ("$m", mtime), ("$s", size), ("$o", outcome));
 
-    public void WriteDailyIngest(string name, string status, DateTimeOffset ts) =>
-        Write("INSERT INTO daily_ingest(name, status, ts) VALUES ($n, $s, $t) ON CONFLICT(name) DO UPDATE SET status = $s, ts = $t",
-            ("$n", name), ("$s", status), ("$t", Stamp(ts)));
+    public void WriteDailyIngest(string name, string status, DateTimeOffset ts, string? reason = null)
+    {
+        var stamped = string.IsNullOrWhiteSpace(reason) ? string.Empty : $"[{Stamp(ts)}] {reason}";
+        Write("INSERT INTO daily_ingest(name, status, attempts, reasons, ts) VALUES ($n, $s, 1, $r, $t) " +
+              "ON CONFLICT(name) DO UPDATE SET status = $s, ts = $t, " +
+              "attempts = COALESCE(daily_ingest.attempts, 0) + 1, " +
+              "reasons = CASE WHEN $r = '' THEN daily_ingest.reasons " +
+              "WHEN COALESCE(daily_ingest.reasons, '') = '' THEN $r " +
+              "ELSE daily_ingest.reasons || char(10) || $r END",
+            ("$n", name), ("$s", status), ("$r", stamped), ("$t", Stamp(ts)));
+    }
 
     public void Dispose() => _connection.Dispose();
 
