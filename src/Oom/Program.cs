@@ -400,7 +400,7 @@ internal static class Program
     private static bool IsOurs(JsonNode entry, string executable) =>
         entry["hooks"] is JsonArray commands
         && commands.Any(hook => hook?["command"]?.GetValue<string>() is { } text
-            && text.Contains(executable, StringComparison.OrdinalIgnoreCase));
+            && text.Replace('\\', '/').Contains(executable.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
 
     private static int RunNudge(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {

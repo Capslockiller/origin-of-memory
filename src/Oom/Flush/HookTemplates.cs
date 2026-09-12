@@ -60,5 +60,9 @@ public static class HookTemplates
         return DetachedProcess.Start(executablePath, arguments, Path.GetTempPath());
     }
 
-    private static string Quote(string path) => path.Contains(' ', StringComparison.Ordinal) ? $"\"{path}\"" : path;
+    private static string Quote(string path)
+    {
+        var forward = path.Replace('\\', '/');
+        return forward.Contains(' ', StringComparison.Ordinal) ? $"\"{forward}\"" : forward;
+    }
 }
