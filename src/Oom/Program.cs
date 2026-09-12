@@ -729,18 +729,18 @@ internal static class Program
     private static void PrintUsage()
     {
         Console.WriteLine("""
-            oom [--vault <yol>] <komut>
+            oom [--vault <path>] <command>
 
-              context [--json]
-              retrieve --query <soru> [--json] [--top N] [--batch <dosya>]
-              nudge [--session <id>]
-              flush [--session <id>] [--reason <sebep>]
-              sweep [--dry-run]
-              compile [--dry-run]
-              doctor [--fix] [--json] [--quiet]
-              save "<metin>" | --session-json
-              mcp
-              install [--uninstall]
+              context [--json]                                   print the session-start memory block
+              nudge [--session <id>]                             count prompts, remind the session to record
+              flush [--session <id>] [--reason <r>]              summarise one session into daily/
+              sweep [--dry-run]                                  flush every changed transcript under sweep.roots
+              compile [--dry-run]                                fold daily/ into knowledge/ concept notes
+              retrieve --query <q> [--json] [--top N] [--batch <f>]   BM25 search over the notes
+              doctor [--fix] [--json] [--quiet]                  health table
+              save "<text>" | --session-json                     append a record to today's daily
+              mcp                                                read-only MCP server over stdio
+              install [--uninstall]                              write .oom/ and the four hooks in .claude/settings.json
             """);
     }
 }
