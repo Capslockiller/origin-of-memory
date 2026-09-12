@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>oom</AssemblyName>
-    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <!-- D1: .NET 10 LTS hedef; SDK kurulunca tek satir degisir -->
     <!-- No single-file, self-contained or trimmed publish. The installer that copied the running
          executable into the vault is gone, so the one thing those properties bought — an exe that

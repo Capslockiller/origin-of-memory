@@ -258,6 +258,14 @@ public sealed partial class State : IDisposable
         return Convert.ToInt64(command.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
     }
 
+    /// <summary>The last 7-day coverage the sweep measured, as (covered, total); null until a sweep has run.</summary>
+    public (int Covered, int Total)? LastCoverage()
+    {
+        var detail = Text("SELECT detail FROM health WHERE component = 'sweep' AND code = 'kapsama' ORDER BY ts DESC LIMIT 1");
+        var match = detail is null ? null : System.Text.RegularExpressions.Regex.Match(detail, @"(\d+)/(\d+)");
+        return match is { Success: true } ? (int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture), int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture)) : null;
+    }
+
     private void Write(string sql, params (string Name, object Value)[] parameters) => Text(sql, parameters);
 
     private string? Text(string sql, params (string Name, object Value)[] parameters)

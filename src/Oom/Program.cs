@@ -269,7 +269,7 @@ internal static class Program
 
         var health = new Doctor(null, moment => Snapshot(moment, vault, settings, state), null).Check(now);
         var loud = health.Items.Where(item => item.Level is not HealthLevel.Info).ToArray();
-        Console.WriteLine($"doctor: kapsama {health.Coverage:P0} · ret {health.RejectionRate:P0} · {loud.Length} uyarı");
+        Console.WriteLine($"doctor: kapsama {Doctor.CoverageText(health.Coverage)} · ret {health.RejectionRate:P0} · {loud.Length} uyarı");
         return 0;
     }
 
@@ -365,7 +365,7 @@ internal static class Program
         foreach (var item in result.Items)
             Console.WriteLine($"{item.Component,-12} {Level(item.Level),-8} {item.Code,-22} {Short(item.Key),-14} {item.Detail}{(item.Stale ? " (eski)" : string.Empty)}");
 
-        Console.WriteLine($"kapsama {result.Coverage:P0} · ret {result.RejectionRate:P0} · bekleyen {result.Pending}");
+        Console.WriteLine($"kapsama {Doctor.CoverageText(result.Coverage)} · ret {result.RejectionRate:P0} · bekleyen {result.Pending}");
         return 0;
     }
 
@@ -541,17 +541,19 @@ internal static class Program
             .. HealthLedger.Read().Where(o => reach.Level != HealthLevel.Info || o.Item.Component != "hooks" || o.Item.Code != "hook-failed" || o.Item.Key != reach.Key)
         ];
 
-        // Coverage is no longer persisted: the `coverage` table is gone and the sweep computes its
-        // reconciliation in memory for its own summary line. Doctor reports 1.0 rather than a number
-        // read out of a table nobody writes any more.
+        // Coverage comes from the last `kapsama` row the sweep wrote to `health`; before any sweep has
+        // run it is NaN, and doctor says "ölçülmedi" instead of inventing a number (Kurallar 6).
+        var window = state?.LastCoverage();
+        var coverage = window is null ? double.NaN : window.Value.Total == 0 ? 1.0 : (double)window.Value.Covered / window.Value.Total;
         return new DoctorSnapshot(observations,
-            1.0,
+            coverage,
             flushes == 0 ? 0.0 : (double)rejected / flushes,
             Pending(vault, state).Count,
             (int)Count("SELECT COUNT(*) FROM retry_queue WHERE attempts >= 5"),
             (int)Count("SELECT COUNT(*) FROM retry_queue"),
             (int)Count("SELECT COUNT(*) FROM quarantine"),
-            Math.Max(0, invalid));
+            Math.Max(0, invalid),
+            window?.Total ?? 0);
     }
 
     /// <summary>`doctor --fix` (spec 6.8): idempotent repairs of what the machine can repair alone.</summary>
