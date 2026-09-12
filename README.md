@@ -67,3 +67,7 @@ oom [--vault <path>] <command>
 ```
 dotnet test Oom.sln -c Release
 ```
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE). Anyone may use, change and share it for noncommercial purposes; commercial use is not permitted.
