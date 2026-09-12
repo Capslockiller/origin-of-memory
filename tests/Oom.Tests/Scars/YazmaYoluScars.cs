@@ -237,4 +237,82 @@ public sealed class YazmaYoluScars
         }
     }
 
+    [Fact(DisplayName = "Y-305 · Dilim kipi bekleyen turların yalnızca son dilimini alır")]
+    public void Y305_SliceModeTakesOnlyLastSlice()
+    {
+        var flush = new Flush(new FlushOptions(Mode: "dilim", SliceTurns: 30));
+        var session = ScarFixture.Session("dilim-100", 100);
+
+        var ranges = flush.PlanRanges(session, -1, 30, 15_000);
+
+        Assert.Single(ranges);
+        Assert.Equal(70, ranges[0].Start);
+        Assert.Equal(99, ranges[0].End);
+        Assert.Equal(30, ranges[0].Turns.Count);
+
+        var result = flush.FlushSession(session, string.Empty, FlushReason.Sweep);
+
+        Assert.Equal(FlushOutcome.Ok, result.Outcome);
+        Assert.Equal(99, result.Cursor - 1);
+        Assert.Equal(30, result.Turns);
+    }
+
+    [Fact(DisplayName = "Y-306 · Tam kipi ilk otuz bekleyen turu değişmeden planlar")]
+    public void Y306_FullModeKeepsLegacyRanges()
+    {
+        var ranges = new Flush(new FlushOptions(Mode: "tam")).PlanRanges(ScarFixture.Session("tam-100", 100), -1, 30, 15_000);
+
+        Assert.Equal(4, ranges.Count);
+        Assert.Equal(0, ranges[0].Start);
+        Assert.Equal(29, ranges[0].End);
+        Assert.Equal(30, ranges[0].Turns.Count);
+    }
+
+    [Fact(DisplayName = "Y-307 · Dilim kipi alt ajan transkriptlerini tarama adayı saymaz")]
+    public void Y307_SliceModeSkipsSubagentTranscripts()
+    {
+        var vault = Path.Combine(AppContext.BaseDirectory, "scar-dilim-" + Guid.NewGuid().ToString("N")[..8]);
+        var root = Path.Combine(vault, "projects");
+        Directory.CreateDirectory(Path.Combine(root, "subagents"));
+        var session = ScarFixture.Session("ana", 4);
+        File.WriteAllText(Path.Combine(root, "ana.jsonl"), ScarFixture.TranscriptJsonl(session), new System.Text.UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(root, "subagents", "x.jsonl"), ScarFixture.TranscriptJsonl(session), new System.Text.UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(root, "agent-abc.jsonl"), ScarFixture.TranscriptJsonl(session), new System.Text.UTF8Encoding(false));
+
+        try
+        {
+            var settings = OomSettings.Defaults(vault) with { Sweep = new SweepSettings(8, 8, 3, 20, [root]) };
+
+            var sliced = new SweepRun(vault, settings with { Flush = new FlushSettings("dilim", 30) }, new Flush()).Discover();
+            var full = new SweepRun(vault, settings with { Flush = new FlushSettings("tam", 30) }, new Flush()).Discover();
+
+            Assert.Equal(["ana"], sliced.Select(candidate => candidate.SessionId).Order());
+            Assert.Equal(["agent-abc", "ana", "x"], full.Select(candidate => candidate.SessionId).Order());
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    [Fact(DisplayName = "Y-308 · Bilinmeyen flush kipi uyarı üretir ve dilime düşer")]
+    public void Y308_UnknownFlushModeWarnsAndFallsBack()
+    {
+        var vault = ScarFixture.TempDirectory();
+        Directory.CreateDirectory(Path.Combine(vault, ".oom"));
+        File.WriteAllText(Path.Combine(vault, ".oom", "oom.json"), "{\"flush\": {\"mode\": \"yanlis\"}}", new System.Text.UTF8Encoding(false));
+
+        try
+        {
+            var settings = OomSettings.Load(vault);
+
+            Assert.Equal("dilim", settings.Flush.Mode);
+            Assert.Equal(30, settings.Flush.SliceTurns);
+            Assert.Contains("flush.mode: yanlis", settings.UnknownKeys);
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
 }

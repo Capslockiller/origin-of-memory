@@ -13,7 +13,9 @@ public sealed record FlushOptions(
     int MaxAttempts = 5,
     string? VaultPath = null,
     string? RawChannelPath = null,
-    string? RejectionPath = null);
+    string? RejectionPath = null,
+    string Mode = "tam",
+    int SliceTurns = 30);
 
 public sealed class Flush
 {
@@ -109,6 +111,9 @@ public sealed class Flush
             .Where(turn => turn.Index > lastTurnIndex && IsSummarizable(turn))
             .OrderBy(turn => turn.Index)
             .ToList();
+
+        if (string.Equals(_options.Mode, "dilim", StringComparison.Ordinal) && _options.SliceTurns > 0 && pending.Count > _options.SliceTurns)
+            pending = [.. pending.TakeLast(_options.SliceTurns)];
 
         var budgeted = new List<Turn>();
         var used = 0;
@@ -324,7 +329,7 @@ public sealed class Flush
         state.Attempts = 0;
         state.LastError = null;
         _store.Save(state);
-        return new FlushResult(outcome, state.Cursor + 1, dailyPath, summary);
+        return new FlushResult(outcome, state.Cursor + 1, dailyPath, summary, null, range.End - range.Start + 1);
     }
 
     private void RecordBoundary(string sessionId, GateResult gated)

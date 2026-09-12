@@ -6,6 +6,8 @@ namespace Oom.Contracts;
 
 public sealed record SweepSettings(int EveryHours, int SinceHours, int MinTurns, int MaxSessionsPerRun, IReadOnlyList<string> Roots);
 
+public sealed record FlushSettings(string Mode, int SliceTurns);
+
 public sealed record ClaudeSettings(string Fast, string Smart);
 
 public sealed record BackendSettings(ClaudeSettings Claude);
@@ -25,11 +27,19 @@ public sealed record OomSettings(
     IReadOnlyList<ExtensionSettings> Extensions)
 {
     public static readonly string[] KnownKeys =
-        ["backend", "retrieveMode", "sweep", "compile", "context", "retrieve", "mcp", "extensions", "nudgeEvery", "reflectionMinPrompts"];
+        ["backend", "retrieveMode", "sweep", "compile", "context", "retrieve", "mcp", "extensions", "nudgeEvery", "reflectionMinPrompts", "flush"];
 
     public int NudgeEvery { get; init; } = 15;
 
+    public FlushSettings Flush { get; init; } = new(DefaultFlushMode, DefaultSliceTurns);
+
     public int ReflectionMinPrompts { get; init; } = 5;
+
+    public const string DefaultFlushMode = "dilim";
+
+    public const int DefaultSliceTurns = 30;
+
+    private static readonly string[] FlushModes = ["dilim", "tam"];
 
     private static readonly UTF8Encoding Utf8 = new(false);
 
@@ -76,6 +86,7 @@ public sealed record OomSettings(
                 totalChars = defaults.Retrieve.TotalChars
             },
             mcp = new { enabled = defaults.McpEnabled },
+            flush = new { mode = defaults.Flush.Mode, sliceTurns = defaults.Flush.SliceTurns },
             nudgeEvery = defaults.NudgeEvery,
             reflectionMinPrompts = defaults.ReflectionMinPrompts,
             extensions = Array.Empty<object>()
@@ -91,6 +102,7 @@ public sealed record OomSettings(
 
         try
         {
+            var warnings = new List<string>();
             using var document = JsonDocument.Parse(File.ReadAllText(path, Utf8).TrimStart('﻿'));
             var root = document.RootElement;
             return new OomSettings(
@@ -103,7 +115,8 @@ public sealed record OomSettings(
                 Flag(Section(root, "mcp"), "enabled", defaults.McpEnabled),
                 ReadExtensions(root))
             {
-                UnknownKeys = Unknown(root),
+                Flush = ReadFlush(Section(root, "flush"), defaults.Flush, warnings),
+                UnknownKeys = [.. Unknown(root), .. warnings],
                 NudgeEvery = Number(root, "nudgeEvery", defaults.NudgeEvery),
                 ReflectionMinPrompts = Number(root, "reflectionMinPrompts", defaults.ReflectionMinPrompts)
             };
@@ -127,6 +140,18 @@ public sealed record OomSettings(
         Number(element, "minTurns", fallback.MinTurns),
         Number(element, "maxSessionsPerRun", fallback.MaxSessionsPerRun),
         [.. Strings(element, "roots", fallback.Roots).Select(Expand)]);
+
+    private static FlushSettings ReadFlush(JsonElement element, FlushSettings fallback, List<string> warnings)
+    {
+        var mode = Text(element, "mode", fallback.Mode);
+        if (!FlushModes.Contains(mode, StringComparer.Ordinal))
+        {
+            warnings.Add($"flush.mode: {mode}");
+            mode = DefaultFlushMode;
+        }
+
+        return new FlushSettings(mode, Number(element, "sliceTurns", fallback.SliceTurns));
+    }
 
     private static CompileOptions ReadCompile(JsonElement element, CompileOptions fallback) => new(
         Number(element, "eveningHour", fallback.EveningHour),

@@ -568,7 +568,7 @@ internal static class Program
 
     private static Flush MakeFlush(string vault, OomSettings settings, State? state)
     {
-        var options = new FlushOptions(MinTurns: settings.Sweep.MinTurns, VaultPath: vault, RejectionPath: state?.WorkDirectory);
+        var options = new FlushOptions(MinTurns: settings.Sweep.MinTurns, VaultPath: vault, RejectionPath: state?.WorkDirectory, Mode: settings.Flush.Mode, SliceTurns: settings.Flush.SliceTurns);
         return new Flush(options, null, MakeRunner(vault, settings), null, null, state);
     }
 

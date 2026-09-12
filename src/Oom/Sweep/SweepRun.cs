@@ -33,6 +33,8 @@ public sealed class SweepRun
         _temporaryProjectPrefix = NonWord.Replace(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar), "-");
     }
 
+    private bool SlicingMode => string.Equals(_settings.Flush.Mode, "dilim", StringComparison.Ordinal);
+
     public IReadOnlyList<SweepCandidate> Discover()
     {
         var candidates = new List<SweepCandidate>();
@@ -41,6 +43,9 @@ public sealed class SweepRun
             foreach (var path in Enumerate(root))
             {
                 if (_flush.IsMechanismTranscript(path, string.Empty) || IsMechanismProject(root, path))
+                    continue;
+
+                if (SlicingMode && SourceClassifier.IsSubagentTranscript(path))
                     continue;
 
                 var info = new FileInfo(path);
@@ -116,7 +121,7 @@ public sealed class SweepRun
             var outcome = Name(result.Outcome);
             if (!dryRun)
             {
-                _state?.RecordFlush(now, session.Id, "sweep", outcome, session.Turns.Count, characters, result.Summary is null ? "extractive" : "runner");
+                _state?.RecordFlush(now, session.Id, "sweep", outcome, result.Turns, characters, result.Summary is null ? "extractive" : "runner");
                 if (result.Outcome is not FlushOutcome.Locked)
                     Write(candidate, outcome, dryRun);
             }
@@ -210,7 +215,7 @@ public sealed class SweepRun
     private FlushOutcome Plan(Session session, IReadOnlyDictionary<string, int> anchors)
     {
         var cursor = anchors.GetValueOrDefault(session.Id, -1);
-        var ranges = _flush.PlanRanges(session, cursor, 30, 15_000);
+        var ranges = _flush.PlanRanges(session, cursor, Math.Max(1, _settings.Flush.SliceTurns), 15_000);
         if (ranges.Count == 0)
             return FlushOutcome.NoNewTurns;
 
