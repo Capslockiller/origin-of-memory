@@ -11,6 +11,9 @@ public static class CompilePrompt
 {
     private const string Begin = "--- BEGIN UNTRUSTED DATA ---";
     private const string End = "--- END UNTRUSTED DATA ---";
+    internal const string HubHeading = "hub: alanına yalnız şu kimliklerden birini yaz; kapsamı en yakın olanı seç:";
+    internal const string TagHeading = "tags: alanını yalnız şu sözlükten seç, aralarından 2-5 etiket kullan:";
+    internal const string TagRule = "Sözlüğün adlandıramadığı bir kavram için en çok bir tane sözlük dışı etiket eklenebilir.";
 
     private static readonly string[] Rules =
     [
@@ -22,7 +25,7 @@ public static class CompilePrompt
         "… (her not için bir blok) …",
         "=== DONE ===",
         "Slug ASCII kebab-case olmalı, alt dizin yok: yol tam olarak knowledge/concepts/<slug>.md.",
-        "Her not şu frontmatter ile başlar ve altı alan da zorunludur:",
+        "Her not şu frontmatter ile başlar ve sekiz alan da zorunludur:",
         "---",
         "title: <Türkçe başlık>",
         "aliases: [<takma ad>, <takma ad>]",
@@ -30,6 +33,8 @@ public static class CompilePrompt
         "sources: [<daily dosya adı>]",
         "created: YYYY-MM-DD",
         "updated: YYYY-MM-DD",
+        "type: concept",
+        "hub: <aşağıdaki hub kimliklerinden biri>",
         "---",
         "Gövde: '# <başlık>', 2–4 cümlelik çekirdek, '## Önemli Noktalar' (3–5 madde),",
         "'## Detaylar', '## İlgili Kavramlar' (en az iki [[wikilink]], her biri bir gerekçe cümlesiyle),",
@@ -40,10 +45,28 @@ public static class CompilePrompt
     ];
 
     public static CompilePlan Build(string dailyName, string dailyText, string rootMap, string registry)
+        => Build(dailyName, dailyText, rootMap, registry, null, null);
+
+    public static CompilePlan Build(string dailyName, string dailyText, string rootMap, string registry,
+        IReadOnlyList<string>? hubLines, IReadOnlyList<string>? tagVocabulary)
     {
         var builder = new StringBuilder();
         foreach (var rule in Rules)
             builder.Append(rule).Append('\n');
+
+        if (hubLines is { Count: > 0 })
+        {
+            builder.Append(HubHeading).Append('\n');
+            foreach (var line in hubLines)
+                builder.Append("- ").Append(line).Append('\n');
+        }
+
+        if (tagVocabulary is { Count: > 0 })
+        {
+            builder.Append(TagHeading).Append('\n');
+            builder.Append(string.Join(", ", tagVocabulary)).Append('\n');
+            builder.Append(TagRule).Append('\n');
+        }
 
         Fence(builder, "KÖK HARİTA", rootMap);
         Fence(builder, "KAYIT DEFTERİ", registry);

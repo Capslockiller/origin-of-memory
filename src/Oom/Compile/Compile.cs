@@ -53,8 +53,8 @@ public sealed class Compile
         _fileOperations = fileOperations ?? new VaultFileOperations();
         _notifier = notifier;
         _guards = guards ?? new Guards();
-        _notes = notes ?? new Notes();
-        _rootMap = rootMap ?? new RootMap(vaultRoot, _notes, files: _fileOperations);
+        _rootMap = rootMap ?? new RootMap(vaultRoot, notes, files: _fileOperations);
+        _notes = notes ?? new Notes(_rootMap.HubIds, _rootMap.TagVocabulary());
         _retrieve = retrieve ?? new Retrieve(new RetrieveOptions(VaultPath: vaultRoot, IndexPath: Path.Combine(_stateRoot, "state.db")));
         _bridge = bridge ?? new Bridge(vaultRoot, _rootMap, _fileOperations);
         _settings = CompileSettings.Load(vaultRoot);

@@ -6,7 +6,9 @@ namespace Oom.Contracts;
 
 public sealed class Notes
 {
-    private static readonly string[] RequiredKeys = ["title", "aliases", "tags", "sources", "created", "updated"];
+    private static readonly string[] RequiredKeys = ["title", "aliases", "tags", "sources", "created", "updated", "type", "hub"];
+    private static readonly string[] LegacyKeys = ["title", "aliases", "tags", "sources", "created", "updated"];
+    public const string ConceptType = "concept";
     private static readonly Regex KeyLine = new(@"^(?<key>[A-Za-z_][A-Za-z0-9_-]*):(?<value>.*)$", RegexOptions.Compiled);
     private static readonly Regex Slug = new(@"^[a-z0-9]+(?:-[a-z0-9]+)*$", RegexOptions.Compiled);
     private static readonly Regex HtmlComment = new(@"<!--.*?-->", RegexOptions.Compiled | RegexOptions.Singleline);
@@ -16,6 +18,20 @@ public sealed class Notes
     private const string FrontmatterFence = "---";
 
     private readonly TurkishFold _fold = new();
+    private readonly HashSet<string> _hubIds;
+    private readonly HashSet<string> _vocabulary;
+
+    public Notes() : this(null, null)
+    {
+    }
+
+    public Notes(IReadOnlyList<string>? hubIds, IReadOnlyList<string>? tagVocabulary = null)
+    {
+        _hubIds = new HashSet<string>(hubIds ?? [], StringComparer.Ordinal);
+        _vocabulary = new HashSet<string>(tagVocabulary ?? [], StringComparer.OrdinalIgnoreCase);
+    }
+
+    public static IReadOnlyList<string> SchemaKeys => RequiredKeys;
 
     public Note Parse(string path, string text)
     {
@@ -41,7 +57,7 @@ public sealed class Notes
             throw new FormatException($"{name}: frontmatter kapanmıyor.");
 
         var fields = ReadFields(name, lines[1..end]);
-        foreach (var key in RequiredKeys)
+        foreach (var key in LegacyKeys)
         {
             if (!fields.ContainsKey(key))
                 throw new FormatException($"{name}: '{key}' alanı eksik.");
@@ -59,7 +75,9 @@ public sealed class Notes
             ReadList(name, fields, "sources"),
             ReadDate(name, fields, "created"),
             ReadDate(name, fields, "updated"),
-            body);
+            body,
+            fields.ContainsKey("type") ? ReadScalar(name, fields, "type") : null,
+            fields.ContainsKey("hub") ? ReadScalar(name, fields, "hub") : null);
     }
 
     public Note Validate(Note note)
@@ -93,7 +111,30 @@ public sealed class Notes
         if (withReason < 2)
             throw new FormatException($"{note.Name}: '{RelatedHeading}' en az iki gerekçeli [[wikilink]] ister.");
 
+        if (note.Type is { Length: > 0 } type && !string.Equals(type, ConceptType, StringComparison.Ordinal))
+            throw new FormatException($"{note.Name}: 'type' yalnız '{ConceptType}' olabilir, '{type}' yazılmış.");
+
+        if (note.Hub is { Length: > 0 } hub && _hubIds.Count > 0 && !_hubIds.Contains(hub))
+            throw new FormatException($"{note.Name}: 'hub' bilinmeyen bir hub kimliği: '{hub}'. İzinli kimlikler: {string.Join(", ", _hubIds.Order(StringComparer.Ordinal))}.");
+
+        foreach (var warning in TagWarnings(note))
+            HealthLedger.Record(warning, SystemClock.Instance.Now);
+
         return note;
+    }
+
+    public IReadOnlyList<HealthItem> TagWarnings(Note note)
+    {
+        ArgumentNullException.ThrowIfNull(note);
+        if (_vocabulary.Count == 0)
+            return [];
+
+        var outside = note.Tags.Where(tag => !_vocabulary.Contains(tag)).ToArray();
+        if (outside.Length <= 1)
+            return [];
+
+        return [new HealthItem("notes", HealthLevel.Warning, "etiket-sozluk-disi", note.Name,
+            $"Sözlük dışı {outside.Length} etiket: {string.Join(", ", outside)} — en çok bir tane olabilir.")];
     }
 
     public string IndexableText(Note note)

@@ -421,8 +421,10 @@ internal static class Program
     private static CompilePlan Plan(Compile compile, string vault, string daily, IReadOnlyList<Note> corpus, string rootMap)
     {
         var body = File.ReadAllText(daily, Utf8);
-        var hubs = new RootMap(vault).Assign(body);
-        return CompilePrompt.Build(Path.GetFileName(daily), body, rootMap, compile.BuildRegistry(corpus, hubs));
+        var map = new RootMap(vault);
+        var hubs = map.Assign(body);
+        return CompilePrompt.Build(Path.GetFileName(daily), body, rootMap, compile.BuildRegistry(corpus, hubs),
+            map.HubLines, map.TagVocabulary(corpus));
     }
 
     private static DoctorSnapshot Snapshot(DateTimeOffset now, string vault, OomSettings settings, State? state)
@@ -450,6 +452,7 @@ internal static class Program
             .. settings.LoadError is null ? Array.Empty<DoctorObservation>() : [new DoctorObservation(
                 new HealthItem("config", HealthLevel.Error, "hata", "json",
                     $"oom.json okunamadı, varsayılanlar kullanılıyor — {settings.LoadError}"), now)],
+            .. Doctor.VaultSchema(vault, Corpus(vault), new RootMap(vault).CatchAllHub).Select(item => new DoctorObservation(item, now)),
             .. HealthLedger.Read().Where(o => reach.Level != HealthLevel.Info || o.Item.Component != "hooks" || o.Item.Code != "hook-failed" || o.Item.Key != reach.Key)
         ];
 

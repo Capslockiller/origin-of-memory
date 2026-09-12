@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
 
@@ -17,6 +18,7 @@ public sealed record DoctorSnapshot(
 
 public sealed class Doctor
 {
+    private static readonly Regex WikiLinkTarget = new(@"\[\[(?<target>[^\]\|]+)(?:\|[^\]]*)?\]\]", RegexOptions.Compiled);
     private static readonly string[] RequiredHooks = ["SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact"];
     private readonly IClock clock;
     private readonly Func<DateTimeOffset, DoctorSnapshot> probe;
@@ -46,6 +48,67 @@ public sealed class Doctor
         AddCount(items, "quarantine", "quarantine", snapshot.Quarantine, HealthLevel.Warning, $"Karantina: {snapshot.Quarantine}");
         AddCount(items, "notes", "invalid-frontmatter", snapshot.InvalidFrontmatter, HealthLevel.Error, $"Geçersiz frontmatter: {snapshot.InvalidFrontmatter}");
         return new DoctorResult(items, snapshot.Coverage, snapshot.RejectionRate, snapshot.Pending, 0);
+    }
+
+    public static IReadOnlyList<HealthItem> VaultSchema(string vault, IReadOnlyList<Note> corpus, string catchAll)
+    {
+        ArgumentNullException.ThrowIfNull(vault);
+        ArgumentNullException.ThrowIfNull(corpus);
+
+        var linked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Collect(string owner, string text)
+        {
+            foreach (Match match in WikiLinkTarget.Matches(text))
+            {
+                var target = match.Groups["target"].Value.Trim();
+                var slug = target.Split('/')[^1].Trim();
+                if (slug.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                    slug = slug[..^3];
+                if (slug.Length > 0 && !string.Equals(slug, owner, StringComparison.OrdinalIgnoreCase))
+                    linked.Add(slug);
+            }
+        }
+
+        foreach (var note in corpus)
+            Collect(Path.GetFileNameWithoutExtension(note.Name), note.Body);
+
+        var hubDirectory = Path.Combine(vault, "knowledge", "hubs");
+        if (Directory.Exists(hubDirectory))
+            foreach (var file in Directory.EnumerateFiles(hubDirectory, "*.md", SearchOption.TopDirectoryOnly))
+                try
+                {
+                    Collect(string.Empty, File.ReadAllText(file));
+                }
+                catch (IOException)
+                {
+                }
+
+        var orphans = corpus.Count(note => !linked.Contains(Path.GetFileNameWithoutExtension(note.Name)));
+        var hubless = corpus.Count(note => string.IsNullOrWhiteSpace(note.Hub) || string.Equals(note.Hub, catchAll, StringComparison.Ordinal));
+        var schemaless = corpus.Count(note => string.IsNullOrWhiteSpace(note.Type) || string.IsNullOrWhiteSpace(note.Hub));
+
+        var dailyDirectory = Path.Combine(vault, "daily");
+        var dailies = 0;
+        if (Directory.Exists(dailyDirectory))
+            foreach (var file in Directory.EnumerateFiles(dailyDirectory, "*.md", SearchOption.TopDirectoryOnly))
+                try
+                {
+                    if (File.ReadLines(file).FirstOrDefault()?.TrimStart('\uFEFF').Trim() != "---")
+                        dailies++;
+                }
+                catch (IOException)
+                {
+                }
+
+        return
+        [
+            Item("vault", orphans == 0 ? HealthLevel.Info : HealthLevel.Warning, "yetim-kavram", orphans.ToString(),
+                $"Hiçbir kavram ya da hub'dan bağ almayan kavram: {orphans}/{corpus.Count}"),
+            Item("vault", hubless == 0 ? HealthLevel.Info : HealthLevel.Warning, "hub-siz", hubless.ToString(),
+                $"'hub' alanı eksik ya da '{catchAll}' olan kavram: {hubless}/{corpus.Count}"),
+            Item("vault", dailies + schemaless == 0 ? HealthLevel.Info : HealthLevel.Warning, "sema-disi", (dailies + schemaless).ToString(),
+                $"Şema dışı: frontmatter'sız {dailies} daily, 'type'/'hub' eksik {schemaless} kavram")
+        ];
     }
 
     public DoctorResult Fix()

@@ -11,12 +11,15 @@ public sealed class RootMap
 {
     private const int IndexCharacterCap = 4_000;
     private const int SummaryCap = 80;
+    private const int VocabularyCap = 40;
+    private const string RelatedHeading = "## İlgili";
 
     private readonly string _vault;
     private readonly Notes _notes;
     private readonly TurkishFold _fold;
     private readonly IFileOperations _files;
     private HubConfiguration? _configuration;
+    private IReadOnlyList<string>? _vocabulary;
 
     public RootMap() : this(LaneCVaultPaths.ResolveVault())
     {
@@ -30,10 +33,43 @@ public sealed class RootMap
         _files = files ?? new VaultFileOperations();
     }
 
+    public string CatchAllHub => Configuration.CatchAll;
+
+    public IReadOnlyList<string> HubIds => [.. Configuration.Hubs.Select(hub => hub.Id)];
+
+    public IReadOnlyList<string> HubLines => [.. Configuration.Hubs.Select(hub => hub.Id + " — " + hub.Scope)];
+
+    public IReadOnlyList<string> TagVocabulary(IReadOnlyList<Note>? corpus = null)
+    {
+        if (_vocabulary is not null)
+            return _vocabulary;
+
+        var allowed = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tag in Configuration.Hubs.SelectMany(hub => hub.Tags))
+            if (tag.Length > 0 && seen.Add(tag))
+                allowed.Add(tag);
+
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tag in (corpus ?? LoadCorpus()).SelectMany(note => note.Tags))
+        {
+            if (tag.Length == 0)
+                continue;
+            counts.TryGetValue(tag, out var count);
+            counts[tag] = count + 1;
+        }
+
+        foreach (var tag in counts.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
+                     .Select(pair => pair.Key).Where(tag => seen.Add(tag)).Take(VocabularyCap))
+            allowed.Add(tag);
+
+        return _vocabulary = allowed;
+    }
+
     public string Regenerate()
     {
         var configuration = Configuration;
-        var corpus = LoadCorpus();
+        var corpus = Migrate(configuration, LoadCorpus());
         var buckets = configuration.Hubs.ToDictionary(hub => hub.Id, _ => new List<Note>(), StringComparer.Ordinal);
         foreach (var note in corpus)
             foreach (var id in HubsFor(configuration, note.Title + "\n" + note.Body, note.Tags))
@@ -91,9 +127,70 @@ public sealed class RootMap
         }
     }
 
+    private IReadOnlyList<Note> Migrate(HubConfiguration configuration, IReadOnlyList<Note> corpus)
+    {
+        var migrated = new List<Note>(corpus.Count);
+        foreach (var note in corpus)
+        {
+            var hub = note.Hub;
+            var needsHub = string.IsNullOrWhiteSpace(hub) || !configuration.Hubs.Any(entry => string.Equals(entry.Id, hub, StringComparison.Ordinal));
+            var needsType = !string.Equals(note.Type, "concept", StringComparison.Ordinal);
+            if (!needsHub && !needsType)
+            {
+                migrated.Add(note);
+                continue;
+            }
+
+            hub = needsHub ? HubsFor(configuration, note.Title + "\n" + note.Body, note.Tags)[0] : hub!;
+            var path = Path.Combine(_vault, "knowledge", "concepts", Path.GetFileName(note.Name));
+            if (!File.Exists(path))
+            {
+                migrated.Add(note with { Type = "concept", Hub = hub });
+                continue;
+            }
+
+            try
+            {
+                LaneCVaultPaths.WriteAtomic(path, Rewrite(LaneCVaultPaths.ReadText(path), hub), _files);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+            }
+
+            migrated.Add(note with { Type = "concept", Hub = hub, Body = HubLinked(note.Body, hub) });
+        }
+
+        return migrated;
+    }
+
+    internal static string Rewrite(string text, string hub)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
+        if (lines.Count == 0 || lines[0].Trim() != "---")
+            return text;
+
+        var end = lines.FindIndex(1, line => line.Trim() == "---");
+        if (end < 0)
+            return text;
+
+        var front = lines.GetRange(1, end - 1);
+        front.RemoveAll(line => line.StartsWith("type:", StringComparison.Ordinal) || line.StartsWith("hub:", StringComparison.Ordinal));
+        front.Add("type: concept");
+        front.Add("hub: " + hub);
+        var body = HubLinked(string.Join('\n', lines.GetRange(end + 1, lines.Count - end - 1)).Trim('\n'), hub);
+        return "---\n" + string.Join('\n', front) + "\n---\n" + body + "\n";
+    }
+
+    private static string HubLinked(string body, string hub)
+    {
+        if (body.Contains("Hub: [[hubs/", StringComparison.Ordinal) || !body.Contains(RelatedHeading, StringComparison.Ordinal))
+            return body;
+        return body.TrimEnd('\n') + "\n\nHub: [[hubs/" + hub + "]]";
+    }
+
     private static string BuildHubFile(HubDefinition hub, IReadOnlyList<Note> notes)
     {
-        var builder = new StringBuilder();
+        var builder = new StringBuilder("---\ntype: hub\n---\n");
         builder.Append("# ").Append(hub.Name).Append("\n\n").Append(hub.Scope).Append("\n\n");
         builder.Append("| Kavram | Özet | Güncellendi |\n| --- | --- | --- |\n");
         foreach (var note in notes.OrderBy(note => note.Name, StringComparer.Ordinal))

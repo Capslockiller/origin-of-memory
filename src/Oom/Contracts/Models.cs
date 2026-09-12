@@ -26,7 +26,7 @@ public sealed record ProcessResult(int ExitCode, string StandardOutput, string S
 public sealed record SummaryValidation(bool Accepted, string Normalized, string? RejectionPath);
 public sealed record CompileResult(string Status, IReadOnlyList<string> WrittenPaths, bool IndexCurrent, bool SourceIngested, string? QuarantinePath = null, string? Reason = null);
 public sealed record CompileDecision(bool ShouldCompile, string Reason);
-public sealed record Note(string Name, string Title, IReadOnlyList<string> Aliases, IReadOnlyList<string> Tags, IReadOnlyList<string> Sources, DateOnly Created, DateOnly Updated, string Body);
+public sealed record Note(string Name, string Title, IReadOnlyList<string> Aliases, IReadOnlyList<string> Tags, IReadOnlyList<string> Sources, DateOnly Created, DateOnly Updated, string Body, string? Type = null, string? Hub = null);
 public sealed record SearchHit(string Name, double Score, string Text, string Source, DateTimeOffset Timestamp, bool Superseded = false);
 public sealed record RetrieveResult(IReadOnlyList<SearchHit> Hits, string Output, int ExitCode = 0);
 public sealed record ContextResult(string Text, IReadOnlyList<string> Sections, TimeSpan Elapsed);

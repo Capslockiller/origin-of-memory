@@ -201,7 +201,9 @@ public sealed class Flush
         return new SummaryValidation(true, string.Join('\n', normalized).Trim(), null);
     }
 
-    public string AppendDaily(string existing, string block, string sessionId)
+    public string AppendDaily(string existing, string block, string sessionId) => AppendDaily(existing, block, sessionId, null);
+
+    public string AppendDaily(string existing, string block, string sessionId, DateOnly? day)
     {
         lock (DailyLock)
         {
@@ -210,7 +212,10 @@ public sealed class Flush
                 return text;
 
             if (text.Trim().Length == 0)
-                text = $"# Günlük Log: {_clock.Now:yyyy-MM-dd}\n\n## Oturumlar\n";
+            {
+                var date = (day ?? DateOnly.FromDateTime(_clock.Now.DateTime)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                text = $"---\ntype: daily\ndate: {date}\nsource: oom\n---\n# Günlük Log: {date}\n\n## Oturumlar\n";
+            }
 
             if (!text.EndsWith('\n'))
                 text += "\n";
@@ -317,7 +322,7 @@ public sealed class Flush
             var block = ComposeBlock(session, range, reason, summary, eventTime);
             dailyPath = DailyPath(eventTime);
             var existing = File.Exists(dailyPath) ? File.ReadAllText(dailyPath) : string.Empty;
-            var updated = AppendDaily(existing, block, session.Id);
+            var updated = AppendDaily(existing, block, session.Id, DateOnly.FromDateTime(eventTime.DateTime));
             var directory = Path.GetDirectoryName(dailyPath);
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);
