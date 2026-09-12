@@ -36,6 +36,22 @@ internal static class CodexParser
                     sessionStarted ??= Timestamp(payload, "timestamp") ?? outerTimestamp;
                     continue;
                 }
+
+                sessionStarted ??= outerTimestamp;
+
+                if (outerType == "response_item")
+                {
+                    if (payloadType != "message") continue;
+                    var messageRole = String(payload, "role");
+                    if (messageRole is not ("user" or "assistant")) continue;
+                    var body = Content(payload);
+                    if (string.IsNullOrWhiteSpace(body)) continue;
+                    if (messageRole == "user" && body.TrimStart()[0] == '<') continue;
+                    var position = Integer(root, "ordinal") ?? Integer(root, "index") ?? turns.Count;
+                    turns.Add(new Turn(position, messageRole, "text", body, outerTimestamp ?? sessionStarted ?? DateTimeOffset.UnixEpoch.AddTicks(position)));
+                    continue;
+                }
+
                 if (outerType != "event_msg") continue;
 
                 sessionId ??= String(payload, "session_id");
@@ -48,7 +64,7 @@ internal static class CodexParser
         }
 
         if (string.IsNullOrWhiteSpace(sessionId) || turns.Count == 0)
-            throw new FormatException("Codex rollout oturum kimliği ve en az bir event_msg metin turu içermelidir.");
+            throw new FormatException("Codex rollout oturum kimliği ve en az bir metin turu içermelidir.");
         var ordered = turns.OrderBy(turn => turn.Index).ThenBy(turn => turn.Timestamp).ToArray();
         return new Session(sessionId, "codex", ordered, sessionStarted ?? ordered.Min(turn => turn.Timestamp));
     }
@@ -61,6 +77,19 @@ internal static class CodexParser
         if (role is not ("user" or "assistant") || kind != "text" || string.IsNullOrWhiteSpace(text)) return;
         var index = Integer(root, "index") ?? turns.Count;
         turns.Add(new Turn(index, role, kind, text, Timestamp(root, "timestamp") ?? DateTimeOffset.UnixEpoch.AddTicks(index)));
+    }
+
+    private static string? Content(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("content", out var content)) return String(payload, "text");
+        if (content.ValueKind == JsonValueKind.String) return content.GetString();
+        if (content.ValueKind != JsonValueKind.Array) return null;
+        var blocks = content.EnumerateArray()
+            .Where(block => block.ValueKind == JsonValueKind.Object && String(block, "type") is "text" or "input_text" or "output_text")
+            .Select(block => String(block, "text"))
+            .Where(value => !string.IsNullOrWhiteSpace(value));
+        var joined = string.Join("\n", blocks);
+        return joined.Length == 0 ? null : joined;
     }
 
     private static IEnumerable<string> Lines(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal)

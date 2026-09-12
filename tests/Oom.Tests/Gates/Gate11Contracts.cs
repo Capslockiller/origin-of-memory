@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -164,6 +165,38 @@ public sealed class Gate11Contracts
         Assert.Equal("codex", session.Source);
         Assert.Equal(2, session.Turns.Count);
         Assert.Equal(["user", "assistant"], session.Turns.Select(turn => turn.Role));
+        Assert.Equal(new[] { "merhaba", "merhaba Master Mind" }, session.Turns.Select(turn => turn.Text));
+        Assert.Equal(SampleStart, session.StartedAt);
+    }
+
+    [Fact(DisplayName = "Y-320 · Gerçek Codex rollout biçiminde response_item turları okunur, developer ve enjekte bloklar dışarıda kalır")]
+    public void Y320CodexRealShapeParsesResponseItems()
+    {
+        var session = CodexParser.Parse(GateFixture.Sample("codex-real-shape.jsonl"));
+
+        Assert.Equal("01a09772-81ab-7ff3-aef6-bd8a09fac45c", session.Id);
+        Assert.Equal("codex", session.Source);
+        Assert.Equal(4, session.Turns.Count);
+        Assert.Equal(new[] { "user", "assistant", "user", "assistant" }, session.Turns.Select(turn => turn.Role));
+        Assert.Equal(new[] { 7, 9, 10, 11 }, session.Turns.Select(turn => turn.Index));
+        Assert.Equal("Ilk satir kullanici sorusu.\nIkinci satir ayni soruya ait.", session.Turns[0].Text);
+        Assert.All(session.Turns, turn => Assert.Equal("text", turn.Kind));
+        foreach (var excluded in new[] { "gelistirici", "recommended_plugins", "Enjekte edilen" })
+            Assert.DoesNotContain(session.Turns, turn => turn.Text.Contains(excluded, StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(DateTimeOffset.Parse("2026-09-13T09:00:00.000Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), session.StartedAt);
+        Assert.Equal(DateTimeOffset.Parse("2026-09-13T09:00:01.000Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind), session.Turns[0].Timestamp);
+    }
+
+    [Fact(DisplayName = "Y-321 · Eski Codex event_msg biçimi ayrıştırılmaya devam eder")]
+    public void Y321CodexLegacyEventMessageFormatStillParses()
+    {
+        var session = CodexParser.Parse(GateFixture.Sample("codex-fixed.jsonl"));
+
+        Assert.Equal("codex-fixed", session.Id);
+        Assert.Equal("codex", session.Source);
+        Assert.Equal(2, session.Turns.Count);
+        Assert.Equal(new[] { "user", "assistant" }, session.Turns.Select(turn => turn.Role));
         Assert.Equal(new[] { "merhaba", "merhaba Master Mind" }, session.Turns.Select(turn => turn.Text));
         Assert.Equal(SampleStart, session.StartedAt);
     }
