@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.2 — 2026-09-12
+
+### Changed
+- The runner calls `claude` with the user's own login. The separate `.oom/claude-config` directory is gone; it needed its own `/login` after every fresh install and, without one, every summary failed with exit code 1 (Y-011).
+
 ## 3.0.1 — 2026-09-12
 
 ### Fixed
