@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.0.3 — 2026-09-13
+
+### Added
+- A clock on every prompt: `nudge` prints the time, when the session started, the gap since the last message and the prompt count; `context` prints when the last session ended.
+- Daily notes start with frontmatter (`type: daily`, `date`, `source`). Concept notes carry `type: concept` and `hub`; `doctor --fix` migrates existing concepts and appends the hub link. Hub files carry `type: hub`.
+- The compile prompt lists the hub ids and a tag vocabulary (hub-config tags plus the forty most frequent); more than one tag outside it is a health warning.
+- `doctor` reports orphan concepts, concepts without a hub, and notes outside the schema.
+- Compile keeps the reason a daily was rejected; a failed `claude` call records its stdout and stderr.
+
+### Fixed
+- Codex rollouts in the current `response_item` format parse; developer and injected blocks are skipped. Until now every Codex session was unreadable to sweep.
+- The hub configuration lives at `.oom/hub-config.json`; without it every concept fell into the catch-all hub.
+- The nudge reminder is English. `sessions` gained `last_prompt_ts`; an older state database is set aside and rebuilt.
+
 ## 3.0.2 — 2026-09-12
 
 ### Changed
