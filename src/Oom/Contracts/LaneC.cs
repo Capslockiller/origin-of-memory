@@ -1,1 +1,0 @@
-namespace Oom.Contracts;
