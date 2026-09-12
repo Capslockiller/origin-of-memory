@@ -223,4 +223,43 @@ public sealed class SadeScars
         [.. Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories)
             .Select(path => File.Exists(path) ? $"{path}:{new FileInfo(path).Length}" : path)
             .Order(StringComparer.Ordinal)];
+
+    [Fact(DisplayName = "Y-304 · Eski şemalı state.db göç edilmez: kenara alınır, yenisi sıfırdan kurulur, eski dosya silinmez")]
+    public void OlderShapeIsRetiredNotMigrated()
+    {
+        var root = Directory.CreateTempSubdirectory("oom-scar-y304-").FullName;
+        try
+        {
+            var path = Path.Combine(root, "state.db");
+            using (var old = new SqliteConnection($"Data Source={path}"))
+            {
+                old.Open();
+                using var ddl = old.CreateCommand();
+                ddl.CommandText = "CREATE TABLE sessions(session_id TEXT PRIMARY KEY, transcript_path TEXT, last_turn_index INTEGER, last_flush_ts TEXT); INSERT INTO sessions VALUES ('s-eski', 'x', 3, 't'); PRAGMA user_version = 5;";
+                ddl.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            using (var state = new State(null, null, path))
+            {
+                Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'prompt_count'"));
+                Assert.Equal(0, state.Scalar("SELECT COUNT(*) FROM sessions"));
+                Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM health WHERE code = 'eski-sema'"));
+            }
+            SqliteConnection.ClearAllPools();
+
+            var retired = Directory.GetFiles(root, "state.db.eski-*").Where(f => !f.EndsWith("-wal") && !f.EndsWith("-shm")).ToArray();
+            Assert.Single(retired);
+            using var check = new SqliteConnection($"Data Source={retired[0]};Mode=ReadOnly");
+            check.Open();
+            using var count = check.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM sessions";
+            Assert.Equal(1L, count.ExecuteScalar());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

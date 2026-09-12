@@ -87,6 +87,7 @@ Bu defter testlerin `DisplayName`'lerinden üretilir ve Y-125 bağı iki yönlü
 | Y-301 | kanca | Last-Session.md'ye dokunulmadan kapanan uzun oturum hiçbir iz bırakmıyordu: sessionend flush'ı bir `hafiza/yansima-borcu` satırı yazar, bir sonraki `context` onu [Bildirim]'in başında basar ve satırı düşürür | SadeScars.Y301_UntouchedCompanionAfterALongSessionLeavesExactlyOneReflectionDebtRow | yeşil |
 | Y-302 | durum-deposu | Şema merdiveni, `user_version` damgası, yedek-doğrula-göç ve görünümler gitti: state.db silinebilir bir önbellektir, sonraki açılış on tabloyu tek bir `CREATE TABLE IF NOT EXISTS` kümesiyle sıfırdan kurar | SadeScars.Y302_DeletedStateFileIsRebuiltFromScratchOnTheNextOpen | yeşil |
 | Y-303 | kurulum | Kurulum tek kapsama indi: yalnız `<vault>\.oom\` dosyaları ve proje `settings.json` içindeki dört kanca. Kancalar birleştirilerek yazılır, `--uninstall` yalnız o dördünü düşürür ve vault dışında hiçbir yol açılmaz | SadeScars.Y303_ProjectScopeInstallTouchesNothingOutsideTheVault | yeşil |
+| Y-304 | durum-deposu | Eski şemalı `state.db` (merdiven damgası ya da `prompt_count`suz `sessions`) göç edilmez: `state.db.eski-<ts>` diye kenara alınır, silinmez, yenisi sıfırdan kurulur ve `health`'e `eski-sema` satırı düşer. |
 
 ## Sınıf başına durum
 

@@ -340,9 +340,18 @@ internal static class StateStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var connection = new SqliteConnection($"Data Source={path};Cache=Shared");
         connection.Open();
+        var retired = RetireOlderShape(ref connection, path);
         try
         {
             Provision(connection, persistent: true);
+            if (retired is not null)
+            {
+                using var note = connection.CreateCommand();
+                note.CommandText = "INSERT INTO health(ts, component, level, code, key, detail) VALUES ($ts, 'state', 'Info', 'eski-sema', 'state.db', $d)";
+                note.Parameters.AddWithValue("$ts", DateTimeOffset.Now.ToString("O"));
+                note.Parameters.AddWithValue("$d", $"Eski şemalı durum dosyası kenara alındı, yenisi sıfırdan kuruldu: {retired}");
+                note.ExecuteNonQuery();
+            }
             return connection;
         }
         catch (SqliteException error)
@@ -354,6 +363,34 @@ internal static class StateStore
                 $"durum veritabanı açılamadı: {path} — {error.Message}. " +
                 "Dosya silinip yeniden kurulabilir. Teşhis: oom doctor", error);
         }
+    }
+
+    /// <summary>
+    /// The contract is "delete the file and the next open rebuilds it" — so a file written by an
+    /// older build (a ladder stamp in <c>user_version</c>, or a <c>sessions</c> table without the
+    /// columns this build creates) is not migrated: it is renamed to <c>state.db.eski-&lt;ts&gt;</c>
+    /// next to itself, never deleted, and a fresh file takes its place. Returns the retired path.
+    /// </summary>
+    private static string? RetireOlderShape(ref SqliteConnection connection, string path)
+    {
+        using (var probe = connection.CreateCommand())
+        {
+            probe.CommandText = "PRAGMA user_version";
+            var stamped = Convert.ToInt64(probe.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture) != 0;
+            probe.CommandText = "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'prompt_count'";
+            var current = Convert.ToInt64(probe.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture) == 1;
+            if (!stamped && (current || !TableExists(connection, "sessions")))
+                return null;
+        }
+        connection.Dispose();
+        SqliteConnection.ClearPool(new SqliteConnection($"Data Source={path};Cache=Shared"));
+        var retired = $"{path}.eski-{DateTimeOffset.Now:yyyyMMdd-HHmmss}";
+        File.Move(path, retired);
+        foreach (var side in new[] { "-wal", "-shm" })
+            if (File.Exists(path + side)) File.Move(path + side, retired + side);
+        connection = new SqliteConnection($"Data Source={path};Cache=Shared");
+        connection.Open();
+        return retired;
     }
 
     internal static bool TableExists(SqliteConnection connection, string table)
