@@ -565,7 +565,6 @@ public sealed class Retrieve
         command.ExecuteNonQuery();
     }
 
-
     private static string Trim(string text, int limit)
     {
         if (limit <= 0)

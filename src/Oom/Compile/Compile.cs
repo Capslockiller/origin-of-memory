@@ -5,9 +5,6 @@ using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
 
-/// <summary>One row of the <c>locks</c> table (machine, pid, timestamp) as compile reads it.</summary>
-public sealed record CompileLock(string Machine, int Pid, DateTimeOffset Timestamp);
-
 /// <summary>
 /// Compile (spec 6.5): turns a daily into concept notes in text mode. The model never
 /// touches the file system; every path, guard and publication decision lives here.
@@ -19,7 +16,6 @@ public sealed class Compile
     private const int RegistryLineCap = 400;
     private const int RegistryRecentCap = 50;
     private const int CandidateCeiling = 40;
-    private const int StaleLockMinutes = 120;
     private const int MaxAttempts = 3;
 
     private static readonly Regex ConceptPath = new(@"^knowledge/concepts/[a-z0-9-]+\.md$", RegexOptions.CultureInvariant);
@@ -335,17 +331,7 @@ public sealed class Compile
             body.ToString());
     }
 
-    /// <summary>A lock row older than two hours whose owning process is gone is taken over (spec 6.5-1).</summary>
-    internal static string ResolveLock(CompileLock? existing, DateTimeOffset now, Func<int, bool> processAlive)
-    {
-        if (existing is null)
-            return "ok";
-        if (now - existing.Timestamp >= TimeSpan.FromMinutes(StaleLockMinutes) && !processAlive(existing.Pid))
-            return "warn:stale-lock";
-        return "skip:locked";
-    }
-
-    /// <summary>The file transcript, path-validated first so that one bad path rejects everything.</summary>
+        /// <summary>The file transcript, path-validated first so that one bad path rejects everything.</summary>
     internal IReadOnlyDictionary<string, string> ParseFiles(string modelOutput)
     {
         ValidateOutputPaths(modelOutput);
@@ -511,15 +497,15 @@ public sealed class Compile
                 }
                 catch (AbandonedMutexException)
                 {
-                    // The previous holder died without releasing: the same take-over the
-                    // stale lock row describes, one level down (spec 6.5-1).
+                    // The previous holder died without releasing: this run takes the mutex over.
                 }
                 return new CompileRunLock(mutex);
             }
             catch (Exception error) when (error is UnauthorizedAccessException or IOException or NotSupportedException)
             {
             }
-        // No named mutex available on this machine; the locks table stays the only gate.
+        // No named mutex available on this machine; the run proceeds ungated rather than
+        // refusing to compile at all.
         return new CompileRunLock(null);
     }
 
