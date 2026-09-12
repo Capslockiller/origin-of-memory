@@ -40,7 +40,7 @@ public sealed class Doctor
             observation.Item with { Stale = now - observation.ObservedAt > TimeSpan.FromHours(24) }).ToList();
         items.Add(double.IsNaN(snapshot.Coverage)
             ? Item("doctor", HealthLevel.Warning, "coverage", "7d", "Son 7 gün kapsama ölçülmedi: oom sweep henüz koşmadı")
-            : Item("doctor", snapshot.Coverage >= .90 ? HealthLevel.Info : HealthLevel.Warning, "coverage", "7d", $"Son 7 gün kapsama: {snapshot.Coverage:P1}"));
+            : Item("doctor", snapshot.Coverage >= .95 ? HealthLevel.Info : snapshot.WindowTotal < 5 ? HealthLevel.Warning : HealthLevel.Error, "coverage", "7d", $"Son 7 gün kapsama: {snapshot.Coverage:P1}"));
         AddMetric(items, "rejection-rate", snapshot.RejectionRate <= .03, $"Son 7 gün ret: {snapshot.RejectionRate:P1}");
         AddCount(items, "daily", "pending", snapshot.Pending, HealthLevel.Warning, $"Bekleyen daily: {snapshot.Pending}");
         AddCount(items, "daily", "parked", snapshot.Parked, HealthLevel.Error, $"Park edilmiş daily: {snapshot.Parked}");
