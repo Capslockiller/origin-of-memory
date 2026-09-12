@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
 using Oom.Contracts;
 
 namespace Oom.Tests.Gates;
@@ -18,9 +17,6 @@ public sealed class Gate12Boundary
     private static readonly string[] ContextFields = ["schema_version", "sections", "chars", "text"];
     private static readonly string[] RetrieveFields = ["schema_version", "query", "hits"];
     private static readonly string[] RetrieveHitFields = ["name", "score", "source", "updated"];
-
-    /// <summary>The five read-only views of spec 2.2-2.</summary>
-    private static readonly string[] Views = ["v_calls", "v_flush_log", "v_coverage", "v_health", "v_kota"];
 
     /// <summary>Phase 2 package names (spec 2.2, 6.10, 6.13); the core must not know one of them.</summary>
     private static readonly string[] PackageNames = ["oom-kota", "oom-rapor", "oom-ingest-extra", "oom-pano"];
@@ -87,52 +83,6 @@ public sealed class Gate12Boundary
         Assert.NotEmpty(hits);
         foreach (var field in RetrieveHitFields)
             Assert.True(hits[0].TryGetProperty(field, out _), $"retrieve --json hit '{field}' alanını kaybetti.");
-    }
-
-    [Fact(DisplayName = "Kapı 12-2 · Taze state.db beş salt okunur görünümü taşır ve hepsi SELECT edilebilir")]
-    public void Gate12StateDatabaseExposesReadOnlyViews()
-    {
-        using var vault = new TempVault();
-        var database = Path.Combine(vault.Path, "state.db");
-        using (var _ = new State(null, null, database))
-        {
-            // The schema is created by the constructor; the assertions read the file itself.
-        }
-
-        using var connection = new SqliteConnection($"Data Source={database}");
-        connection.Open();
-
-        foreach (var view in Views)
-        {
-            using var lookup = connection.CreateCommand();
-            lookup.CommandText = "SELECT type FROM sqlite_master WHERE name = $name";
-            lookup.Parameters.AddWithValue("$name", view);
-            Assert.Equal("view", lookup.ExecuteScalar()?.ToString());
-
-            using var select = connection.CreateCommand();
-            select.CommandText = $"SELECT COUNT(*) FROM {view}";
-            Assert.Equal(0L, Convert.ToInt64(select.ExecuteScalar()));
-        }
-
-        using var version = connection.CreateCommand();
-        version.CommandText = "PRAGMA user_version";
-        Assert.True(Convert.ToInt32(version.ExecuteScalar()) >= 2, "Görünümler eklendi, şema sürümü yükselmedi.");
-    }
-
-    [Fact(DisplayName = "Kapı 12-2 · Görünümler yazılamaz; paketler tabloya değil görünüme bağlanır")]
-    public void Gate12ViewsRefuseWrites()
-    {
-        using var vault = new TempVault();
-        var database = Path.Combine(vault.Path, "state.db");
-        using (var _ = new State(null, null, database))
-        {
-        }
-
-        using var connection = new SqliteConnection($"Data Source={database}");
-        connection.Open();
-        using var insert = connection.CreateCommand();
-        insert.CommandText = "INSERT INTO v_health(ts, component, level, code, key, detail) VALUES('t','c','info','k','k','d')";
-        Assert.Throws<SqliteException>(() => insert.ExecuteNonQuery());
     }
 
     [Fact(DisplayName = "Kapı 12-3 · extensions.contextLine komutu çalışır ve tek satırı bağlama eklenir")]

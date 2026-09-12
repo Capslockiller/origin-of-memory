@@ -432,7 +432,7 @@ internal static class Program
             var kept = new JsonArray();
             if (hooks[registration.Event] is JsonArray existing)
                 foreach (var entry in existing)
-                    if (entry is not null && !entry.ToJsonString().Contains(executable, StringComparison.OrdinalIgnoreCase))
+                    if (entry is not null && !IsOurs(entry, executable))
                         kept.Add(entry.DeepClone());
 
             if (!uninstalling)
@@ -470,6 +470,18 @@ internal static class Program
         if (!File.Exists(path))
             File.WriteAllText(path, content, Utf8);
     }
+
+    /// <summary>
+    /// Whether one <c>settings.json</c> hook entry is a registration of THIS executable. The
+    /// command strings are read out of the tree rather than matched against the entry's serialized
+    /// JSON, because a Windows path is escaped there (<c>C:\\oom.exe</c>) and never contains its
+    /// own spelling — so the substring test silently matched nothing and <c>--uninstall</c> left
+    /// every hook it was asked to remove exactly where it was.
+    /// </summary>
+    private static bool IsOurs(JsonNode entry, string executable) =>
+        entry["hooks"] is JsonArray commands
+        && commands.Any(hook => hook?["command"]?.GetValue<string>() is { } text
+            && text.Contains(executable, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The UserPromptSubmit hook. It counts, and every <c>nudgeEvery</c> prompts it reminds the

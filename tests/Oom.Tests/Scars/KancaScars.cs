@@ -101,7 +101,7 @@ public sealed class KancaScars
     [Fact(DisplayName = "Y-051 · Açılışta enjekte edilen bölüm listesi belgeyle birebir eşleşir")]
     public void Y051_ContextSectionsMatchDocumentedList()
     {
-        var expected = new[] { "Bildirim", "Son Oturum", "Aktif Threadler", "Kurallar", "Düzeltmeler", "Son Journal", "Durum", "Bilgi Tabanı — İndeks", "Bugünün Logu" };
+        var expected = new[] { "Bildirim", "Son Oturum", "Aktif Threadler", "Kurallar", "Düzeltmeler", "Son Journal", "Bilgi Tabanı — İndeks", "Bugünün Logu" };
         var result = new Context().Build("fixture-vault", ScarFixture.Now);
         Assert.Equal(expected, result.Sections);
     }

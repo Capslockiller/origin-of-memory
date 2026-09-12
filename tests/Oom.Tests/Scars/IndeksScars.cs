@@ -318,10 +318,12 @@ public sealed class IndeksScars
                     Assert.Equal(1L, (long)flush.ExecuteScalar()!); // Yabancı satıra dokunulmamalı.
                 }
 
-                using (var version = connection.CreateCommand())
+                using (var owner = connection.CreateCommand())
                 {
-                    version.CommandText = "PRAGMA user_version";
-                    Assert.Equal(5L, Convert.ToInt64(version.ExecuteScalar())); // Dosya hâlâ sahibi tarafından damgalı.
+                    // Şema sürümü diye bir şey kalmadı; sahiplik damgası, sahibin tablolarının
+                    // yerinde durması. sessions hiçbir getirim yolunun yaratmayacağı bir tablodur.
+                    owner.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'";
+                    Assert.Equal(1L, (long)owner.ExecuteScalar()!);
                 }
             }
 

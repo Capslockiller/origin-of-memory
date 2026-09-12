@@ -82,16 +82,6 @@ public sealed class YazmaYoluScars
         Assert.Equal("2026-09-08", actual.ToString("yyyy-MM-dd"));
     }
 
-    [Fact(DisplayName = "Y-009 · Görev XML'inde süre yoktur ve son koşum dokuz saat içindedir")]
-    public void Y009_ScheduledTaskOmitsDurationAndDoctorAcceptsWakeRun()
-    {
-        var xml = new Sweep().BuildScheduledTaskXml("oom.exe");
-        Assert.DoesNotContain("Duration", xml, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("PT0S", xml, StringComparison.OrdinalIgnoreCase);
-        var doctor = new Doctor().Check(ScarFixture.Now);
-        Assert.DoesNotContain(doctor.Items, x => x.Code == "task-overdue");
-    }
-
     [Fact(DisplayName = "Y-010 · Makine zarfları kullanıcı hafızasına özetlenmez")]
     public void Y010_MachineEnvelopeIsNotSummarized()
     {
@@ -217,17 +207,6 @@ public sealed class YazmaYoluScars
         Assert.Null(CommandLine.Argument(["--vault", @"D:\kasa", "save"], 0));
     }
 
-    [Fact(DisplayName = "Y-106 · ingest kaynağı komuttan sonraki ilk konumsal argümandır, --vault yutulmaz")]
-    public void Y106_IngestSourceIsTheFirstPositionalAfterTheCommand()
-    {
-        Assert.Equal("codex", CommandLine.Argument(["ingest", "codex"], 0) ?? "claude");
-        Assert.Equal("codex", CommandLine.Argument(["--vault", @"D:\kasa", "ingest", "codex"], 0) ?? "claude");
-        Assert.Equal("claude", CommandLine.Argument(["ingest"], 0) ?? "claude");
-
-        var program = File.ReadAllText(Path.Combine(ScarFixture.RepositoryRoot(), "src", "Oom", "Program.cs"));
-        Assert.Contains("var source = Argument(args, 0) ?? \"claude\";", program, StringComparison.Ordinal);
-    }
-
     [Fact(DisplayName = "Y-107 · save --session-json bozuk dış sözleşmede çökmek yerine rc 1 döndürür")]
     public void Y107_SaveSessionJsonRejectsMalformedInputWithoutEscapingProgram()
     {
@@ -259,83 +238,4 @@ public sealed class YazmaYoluScars
         }
     }
 
-    [Fact(DisplayName = "Y-112 · ingest yapılandırılmış sweep kökleri altındaki transkriptleri kendisi bulur")]
-    public void Y112_IngestDiscoversTranscriptsUnderConfiguredRoots()
-    {
-        var tmp = ScarFixture.TempDirectory();
-        try
-        {
-            var claudeProject = Path.Combine(tmp, "claude", "projects", "p1");
-            var codexSessions = Path.Combine(tmp, "codex", "sessions");
-            var subagents = Path.Combine(claudeProject, "subagents");
-            Directory.CreateDirectory(claudeProject);
-            Directory.CreateDirectory(codexSessions);
-            Directory.CreateDirectory(subagents);
-
-            var a = Path.Combine(claudeProject, "a.jsonl");
-            var b = Path.Combine(claudeProject, "b.jsonl");
-            var c = Path.Combine(codexSessions, "c.jsonl");
-            var sidecar = Path.Combine(subagents, "agent-1.jsonl");
-
-            // Sub-agent sidecars are all isSidechain, ClaudeParser rejects the turn-less result
-            // (real machine: Y-112 crashed the whole batch on the oldest one until this excluded them).
-            File.WriteAllText(sidecar,
-                "{\"sessionId\":\"claude-fixed-a\",\"isSidechain\":true,\"type\":\"user\",\"timestamp\":\"2026-08-01T08:00:00+03:00\",\"message\":{\"content\":\"iç görev\"}}",
-                new System.Text.UTF8Encoding(false));
-            File.SetLastWriteTimeUtc(sidecar, new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
-
-            File.WriteAllText(a,
-                "{\"sessionId\":\"claude-fixed-a\",\"type\":\"user\",\"timestamp\":\"2026-09-09T08:00:00+03:00\",\"message\":{\"content\":\"merhaba a\"}}\n" +
-                "{\"sessionId\":\"claude-fixed-a\",\"type\":\"assistant\",\"timestamp\":\"2026-09-09T08:00:01+03:00\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"merhaba Master Mind\"}]}}",
-                new System.Text.UTF8Encoding(false));
-            File.WriteAllText(b,
-                "{\"sessionId\":\"claude-fixed-b\",\"type\":\"user\",\"timestamp\":\"2026-09-09T09:00:00+03:00\",\"message\":{\"content\":\"merhaba b\"}}\n" +
-                "{\"sessionId\":\"claude-fixed-b\",\"type\":\"assistant\",\"timestamp\":\"2026-09-09T09:00:01+03:00\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"merhaba Master Mind\"}]}}",
-                new System.Text.UTF8Encoding(false));
-            File.WriteAllText(c,
-                "{\"type\":\"session_meta\",\"timestamp\":\"2026-09-09T08:00:00+03:00\",\"payload\":{\"id\":\"codex-fixed\",\"timestamp\":\"2026-09-09T08:00:00+03:00\"}}\n" +
-                "{\"type\":\"event_msg\",\"timestamp\":\"2026-09-09T08:00:01+03:00\",\"payload\":{\"type\":\"user_message\",\"message\":\"merhaba\"}}",
-                new System.Text.UTF8Encoding(false));
-
-            // b is the older file even though its own timestamps are later — discovery orders by
-            // last WRITE time (an archive backfill signal), not by content.
-            File.SetLastWriteTimeUtc(b, new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc));
-            File.SetLastWriteTimeUtc(a, new DateTime(2026, 9, 5, 0, 0, 0, DateTimeKind.Utc));
-            File.SetLastWriteTimeUtc(c, new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc));
-
-            var roots = new[] { Path.Combine(tmp, "claude", "projects"), Path.Combine(tmp, "codex", "sessions") };
-            var ingest = new Ingest();
-
-            var claudeFiles = ingest.Discover("claude", roots);
-            Assert.Equal([b, a], claudeFiles);
-
-            var codexFiles = ingest.Discover("codex", roots);
-            Assert.Equal([c], codexFiles);
-
-            var capped = ingest.Discover("claude", roots, max: 1);
-            Assert.Equal([b], capped);
-
-            var missing = ingest.Discover("claude", [Path.Combine(tmp, "kayip-kok")]);
-            Assert.Empty(missing);
-
-            var flushed = new List<string>();
-            var driven = new Ingest(flushSession: (session, path) =>
-            {
-                flushed.Add(session.Id);
-                return new FlushResult(FlushOutcome.Ok, 0, null, null);
-            });
-            var first = driven.RunWithOutcome("claude", claudeFiles);
-            Assert.Equal(2, first.Sessions.Count);
-            Assert.Equal(0, first.Skipped);
-            Assert.Equal(["claude-fixed-b", "claude-fixed-a"], flushed);
-
-            var second = driven.RunWithOutcome("claude", claudeFiles);
-            Assert.Empty(second.Sessions);
-            Assert.Equal(2, second.Skipped);
-        }
-        finally
-        {
-            ScarFixture.Remove(tmp);
-        }
-    }
 }

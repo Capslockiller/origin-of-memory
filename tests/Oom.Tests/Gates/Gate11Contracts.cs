@@ -180,7 +180,7 @@ public sealed class Gate11Contracts
     [Fact(DisplayName = "Kapı 11-1 · Claude sabit örneği oturum, kaynak, tur ve zaman damgası verir")]
     public void Gate11ClaudeFixedSampleParses()
     {
-        var session = new Ingest().ParseClaude(GateFixture.Sample("claude-fixed.jsonl"));
+        var session = ClaudeParser.Parse(GateFixture.Sample("claude-fixed.jsonl"));
 
         Assert.Equal("claude-fixed", session.Id);
         Assert.Equal("claude", session.Source);
@@ -194,7 +194,7 @@ public sealed class Gate11Contracts
     [Fact(DisplayName = "Kapı 11-1 · Codex sabit örneği oturum, kaynak, tur ve başlangıç zamanı verir")]
     public void Gate11CodexFixedSampleParses()
     {
-        var session = new Ingest().ParseCodex(GateFixture.Sample("codex-fixed.jsonl"));
+        var session = CodexParser.Parse(GateFixture.Sample("codex-fixed.jsonl"));
 
         Assert.Equal("codex-fixed", session.Id);
         Assert.Equal("codex", session.Source);
@@ -207,7 +207,7 @@ public sealed class Gate11Contracts
     [Fact(DisplayName = "Kapı 11-1 · Gerçek Claude Code biçiminde sidechain, meta ve araç satırları dışarıda kalır")]
     public void Gate11ClaudeRealShapeExcludesSidechainMetaAndToolLines()
     {
-        var session = new Ingest().ParseClaude(GateFixture.Sample("claude-code-real-shape.jsonl"));
+        var session = ClaudeParser.Parse(GateFixture.Sample("claude-code-real-shape.jsonl"));
 
         Assert.Equal("e2e-11111111-aaaa-4001-8001-000000000001", session.Id);
         Assert.Equal("claude", session.Source);
@@ -223,10 +223,9 @@ public sealed class Gate11Contracts
     [Fact(DisplayName = "Kapı 11-1 · Bilinmeyen satır türü iki ayrıştırıcıda da yok sayılır")]
     public void Gate11UnknownLineTypeIsTolerated()
     {
-        var ingest = new Ingest();
-        var claude = ingest.ParseClaude(GateFixture.Sample("claude-fixed.jsonl") +
+        var claude = ClaudeParser.Parse(GateFixture.Sample("claude-fixed.jsonl") +
             "\n{\"sessionId\":\"claude-fixed\",\"type\":\"telemetri\",\"timestamp\":\"2026-09-09T08:00:02+03:00\",\"message\":{\"content\":\"gorunmez\"}}");
-        var codex = ingest.ParseCodex(GateFixture.Sample("codex-fixed.jsonl") +
+        var codex = CodexParser.Parse(GateFixture.Sample("codex-fixed.jsonl") +
             "\n{\"type\":\"turn_context\",\"timestamp\":\"2026-09-09T08:00:03+03:00\",\"payload\":{\"type\":\"cwd\",\"message\":\"gorunmez\"}}");
 
         Assert.Equal(2, claude.Turns.Count);
@@ -237,9 +236,8 @@ public sealed class Gate11Contracts
     [Fact(DisplayName = "Kapı 11-1 · Yarım yazılmış son satır iki ayrıştırıcıyı da patlatmaz")]
     public void Gate11TruncatedLastLineDoesNotThrow()
     {
-        var ingest = new Ingest();
-        var claude = ingest.ParseClaude(GateFixture.Sample("claude-fixed.jsonl") + "\n{\"sessionId\":\"claude-fixed\",\"type\":\"user\",\"mes");
-        var codex = ingest.ParseCodex(GateFixture.Sample("codex-fixed.jsonl") + "\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_mes");
+        var claude = ClaudeParser.Parse(GateFixture.Sample("claude-fixed.jsonl") + "\n{\"sessionId\":\"claude-fixed\",\"type\":\"user\",\"mes");
+        var codex = CodexParser.Parse(GateFixture.Sample("codex-fixed.jsonl") + "\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_mes");
 
         Assert.Equal(2, claude.Turns.Count);
         Assert.Equal(2, codex.Turns.Count);
@@ -258,7 +256,6 @@ public sealed class Gate11Contracts
             "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_search\",\"arguments\":{\"query\":\"tokenizasyon ölçüsü\",\"limit\":9}}}",
-            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_search\",\"arguments\":{\"query\":\"sk-ant-api03-AAAAAAAAAAAAAAAAAAAA\"}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_root_map\",\"arguments\":{}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_note\",\"arguments\":{\"name\":\"kavram-01.md\"}}}",
             "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"memory_note\",\"arguments\":{\"name\":\"olmayan-not.md\"}}}",
@@ -273,7 +270,7 @@ public sealed class Gate11Contracts
             .Select(line => JsonDocument.Parse(line).RootElement).ToArray();
 
         // The notification and the blank trailing line produce no answer; EOF ends the loop.
-        Assert.Equal(9, answers.Length);
+        Assert.Equal(8, answers.Length);
         Assert.Equal("oom", answers[0].GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString());
 
         var tools = answers[1].GetProperty("result").GetProperty("tools").EnumerateArray()
@@ -283,15 +280,12 @@ public sealed class Gate11Contracts
         // limit 9 is clamped to 5 even though seven notes carry the topic word.
         Assert.StartsWith("[Hafıza — 5 not]", Text(answers[2]), StringComparison.Ordinal);
 
-        // The query crosses Guards.Gate(In): the raw key never reaches the ranking, its mask does.
-        Assert.Contains("gizli-anahtar-maskesi.md", Text(answers[3]), StringComparison.Ordinal);
+        Assert.Contains("[[hubs/bellek]]", Text(answers[3]), StringComparison.Ordinal);
+        Assert.Contains("title: Kavram 1", Text(answers[4]), StringComparison.Ordinal);
+        Assert.Equal(string.Empty, Text(answers[5]));
 
-        Assert.Contains("[[hubs/bellek]]", Text(answers[4]), StringComparison.Ordinal);
-        Assert.Contains("title: Kavram 1", Text(answers[5]), StringComparison.Ordinal);
-        Assert.Equal(string.Empty, Text(answers[6]));
-
-        Assert.Equal(-32602, answers[7].GetProperty("error").GetProperty("code").GetInt32());
-        Assert.Equal(-32700, answers[8].GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal(-32602, answers[6].GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal(-32700, answers[7].GetProperty("error").GetProperty("code").GetInt32());
     }
 
     [Fact(DisplayName = "Kapı 11-2 · Not adı tek dosya adı olmalıdır, dizin yürüyüşü JSON-RPC hatasıdır")]

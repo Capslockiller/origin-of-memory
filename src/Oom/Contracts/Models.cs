@@ -36,8 +36,6 @@ public sealed record RunResult(string Text, string? Error, string Backend, strin
 }
 public sealed record ProcessRequest(string FileName, IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment, string StandardInput);
 public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError, bool StandardInputClosed, bool TimedOut = false);
-public sealed record LocalRequest(bool Stream, double Temperature, bool Think, int MaxTokens, string Model, string Prompt);
-public sealed record CallTiming(string Temperature, long? LoadMs, long? PromptEvaluationMs, long? GenerationMs);
 public sealed record SummaryValidation(bool Accepted, string Normalized, string? RejectionPath);
 public sealed record CompileResult(string Status, IReadOnlyList<string> WrittenPaths, bool IndexCurrent, bool SourceIngested, string? QuarantinePath = null);
 public sealed record CompileDecision(bool ShouldCompile, string Reason);
@@ -47,21 +45,16 @@ public sealed record RetrieveResult(IReadOnlyList<SearchHit> Hits, string Output
 public sealed record ContextResult(string Text, IReadOnlyList<string> Sections, TimeSpan Elapsed);
 public sealed record HealthItem(string Component, HealthLevel Level, string Code, string Key, string Detail, bool Stale = false);
 public sealed record DoctorResult(IReadOnlyList<HealthItem> Items, double Coverage, double RejectionRate, int Pending, int ExitCode = 0);
-public sealed record NotificationResult(bool ToastSent, bool ContextQueued, string Text);
-public sealed record QuotaWindow(string Name, double? UsedPercent, DateTimeOffset? ResetsAt, DateTimeOffset? ObservedAt, string Status, string? Resolution = null);
-public sealed record QuotaResult(IReadOnlyList<QuotaWindow> Windows, string Band, IReadOnlyList<HealthItem> Warnings);
 public sealed record UsageRecord(string MessageId, string Owner, DateTimeOffset Timestamp, long InputTokens, long OutputTokens, long CacheReadTokens);
 public sealed record UsageSummary(long InputTokens, long OutputTokens, long CacheReadTokens, IReadOnlyDictionary<string, long> CacheReadByOwner);
 public sealed record StateStats(long Bytes, int FlushLogs, int HealthRows);
 public sealed record HookStart(string SessionId, int ProcessId, DateTimeOffset Timestamp, bool Duplicate, string Context);
 public sealed record HookState(string SessionId, int PromptCount, DateTimeOffset StartedAt);
-public sealed record InstallResult(bool Success, IReadOnlyList<string> WrittenPaths, IReadOnlyList<string> Registrations, string? Error = null);
 public sealed record CheckpointResult(bool Written, bool Verified, string? Error = null);
 public sealed record BenchmarkResult(double EpisodicTop3, double RecallAt3, double RecallAt5, double HallucinationRate, IReadOnlyDictionary<string, double> Metrics);
 public sealed record IngressRecord(string Id, DateTimeOffset ReceivedAt, string Status, string? StandardErrorPath);
 public sealed record ReconciliationResult(IReadOnlyList<IngressRecord> Overdue, IReadOnlyList<IngressRecord> Completed);
 public sealed record RetryRecord(string SessionId, int Attempts, DateTimeOffset NextAt, bool Parked, int Notifications);
-public sealed record LockResult(bool Acquired, string Outcome, string MachineIdentity);
 public sealed record VerifyResult(IReadOnlyList<string> Missing, IReadOnlyList<string> Extra, int ExitCode);
 public sealed record PublicationResult(bool Atomic, bool RolledBack, bool SourcePending, IReadOnlyList<string> VisibleNotes);
 public sealed record WaitResult(bool Completed, int Attempts, int ExitCode, string Error);

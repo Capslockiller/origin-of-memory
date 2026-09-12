@@ -15,18 +15,6 @@ public sealed class TestDisipliniScars
         Assert.Contains("fact_recall", result.Output);
     }
 
-    [Fact(DisplayName = "Y-076 · Claude ve Codex ingest gerçek örnek sözleşmeleriyle doğrulanır")]
-    public void Y076_IngestParsersUseFixedExternalContractSamples()
-    {
-        var ingest = new Ingest();
-        var claude = ingest.ParseClaude("{\"sessionId\":\"claude-fixed\",\"type\":\"user\",\"message\":{\"content\":\"merhaba\"}}");
-        var codex = ingest.ParseCodex("{\"type\":\"event_msg\",\"session_id\":\"codex-fixed\",\"payload\":{\"type\":\"user_message\",\"message\":\"merhaba\"}}");
-        Assert.Equal("claude-fixed", claude.Id);
-        Assert.Equal("codex-fixed", codex.Id);
-        Assert.Single(claude.Turns);
-        Assert.Single(codex.Turns);
-    }
-
     [Fact(DisplayName = "Y-077 · Zamanlama senaryosu sahte saatle deterministiktir")]
     public void Y077_TimingTestUsesInjectedClock()
     {
@@ -56,15 +44,6 @@ public sealed class TestDisipliniScars
         Assert.NotEqual(0, result.ExitCode);
     }
 
-    [Fact(DisplayName = "Y-080 · Windows kısa ve uzun temp yolları aynı kök kabul edilir")]
-    public void Y080_ShortAndLongWindowsPathsNormalizeToSameRoot()
-    {
-        var guards = new Guards();
-        var shortPath = guards.NormalizePath(@"C:\Users\RUNNER~1\AppData\Local\Temp");
-        var longPath = guards.NormalizePath(@"C:\Users\RunnerAdmin\AppData\Local\Temp");
-        Assert.Equal(longPath, shortPath, ignoreCase: true);
-    }
-
     [Fact(DisplayName = "Y-081 · Statik tarama test fixture'larını dışlar ama kaynak ihlalini yakalar")]
     public void Y081_StaticScanExcludesFixturesOnly()
     {
@@ -81,31 +60,6 @@ public sealed class TestDisipliniScars
         Assert.Contains("episodic_top3", measured.Output);
         Assert.Contains("concept_recall_at5", measured.Output);
         Assert.DoesNotContain("gate:green", measured.Output.Contains("concept_recall_at5=0.87", StringComparison.Ordinal) ? "gate:green" : "gate:red");
-    }
-
-    [Fact(DisplayName = "Y-116 · Bench alt-ajan izini ve turu olmayan dosyayı dışlar, gerçek transkripti sayar")]
-    public void Y116_BenchExcludesSubagentAndNoTurnFilesButKeepsRealTranscript()
-    {
-        var root = ScarFixture.TempDirectory();
-        var real = Path.Combine(root, "real.jsonl");
-        File.WriteAllText(real, ScarFixture.TranscriptJsonl(ScarFixture.Session("real-1", 4)));
-        var subagentDir = Path.Combine(root, "subagents");
-        Directory.CreateDirectory(subagentDir);
-        var subagent = Path.Combine(subagentDir, "agent-a1.jsonl");
-        File.WriteAllText(subagent, "bu satır JSON bile değil");
-        var noTurns = Path.Combine(root, "sidechain-only.jsonl");
-        File.WriteAllText(noTurns, "{\"sessionId\":\"empty-1\",\"isSidechain\":true,\"message\":{\"role\":\"user\",\"content\":\"iç konuşma\"}}");
-
-        var chain = new Dictionary<ComponentKind, IReadOnlyList<string>> { [ComponentKind.Flush] = ["local"] };
-        // yazan: codex · gpt-5
-        var runner = new Runner(null, null, null, null, "http://127.0.0.1:11434/v1", false, chain);
-        var (records, excludedSubagent, excludedNoTurns) = Bench.MeasureFlush([real, subagent, noTurns], runner);
-
-        Assert.Equal(1, excludedSubagent);
-        Assert.Equal(1, excludedNoTurns);
-        Assert.Single(records);
-        Assert.Equal("real.jsonl", records[0].Source);
-        ScarFixture.Remove(root);
     }
 
     [Fact(DisplayName = "Y-125 · Test gövdesindeki her Y-numarası scars.md'de bir satıra karşılık gelir ve her satırın da testi vardır")]

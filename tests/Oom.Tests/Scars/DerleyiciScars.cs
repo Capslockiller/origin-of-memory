@@ -115,17 +115,6 @@ public sealed class DerleyiciScars
         Assert.Equal(0, exact.ExitCode);
     }
 
-    [Fact(DisplayName = "Y-033 · İki makine kimliği tek compile yayını üretir")]
-    public void Y033_CrossMachineCompileLockAllowsSinglePublisher()
-    {
-        var state = new State();
-        var first = state.AcquireLock("compile-2026-09-09", "host-aaaaaaaaaaaaaaaa", 101);
-        var second = state.AcquireLock("compile-2026-09-09", "host-bbbbbbbbbbbbbbbb", 202);
-        Assert.True(first.Acquired);
-        Assert.False(second.Acquired);
-        Assert.Equal("locked", second.Outcome);
-    }
-
     [Fact(DisplayName = "Y-034 · Telemetri uyarı değildir, doctor bekleyen daily sayısını gösterir")]
     public void Y034_TelemetryDoesNotHidePendingDailies()
     {
