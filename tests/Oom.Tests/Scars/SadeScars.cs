@@ -26,7 +26,7 @@ public sealed class SadeScars
             var envelope = Nudge.Envelope(Nudge.Reminder(15));
             var additional = JsonDocument.Parse(envelope).RootElement
                 .GetProperty("hookSpecificOutput").GetProperty("additionalContext").GetString();
-            Assert.Equal("[Hafıza] 15. mesaj. Oturum sonunda 🔮 850-Companion/Last-Session.md ve Threads.md güncellemeyi unutma.", additional);
+            Assert.Equal("[Memory] prompt 15. Before the session ends, update 🔮 850-Companion/Last-Session.md and Threads.md.", additional);
 
             Assert.Equal(string.Empty, Nudge.Envelope(null));
         }
@@ -270,8 +270,8 @@ public sealed class SadeScars
             for (var prompt = 3; prompt <= 15; prompt++)
                 every.Add(Nudge.Lines(state, fresh, start.AddMinutes(prompt), every: 15));
 
-            Assert.All(every.Take(12), line => Assert.DoesNotContain("[Hafıza]", line, StringComparison.Ordinal));
-            Assert.Equal("[Hafıza] 15. mesaj. Oturum sonunda 🔮 850-Companion/Last-Session.md ve Threads.md güncellemeyi unutma.",
+            Assert.All(every.Take(12), line => Assert.DoesNotContain("[Memory]", line, StringComparison.Ordinal));
+            Assert.Equal("[Memory] prompt 15. Before the session ends, update 🔮 850-Companion/Last-Session.md and Threads.md.",
                 every[^1].Split('\n')[1]);
             Assert.StartsWith("[Zaman] ", every[^1], StringComparison.Ordinal);
             Assert.True(every[^1].Split('\n')[0].Length < 120);

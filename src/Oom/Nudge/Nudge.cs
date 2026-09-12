@@ -6,7 +6,7 @@ namespace Oom.Contracts;
 public static class Nudge
 {
     public static string Reminder(int promptCount) =>
-        $"[Hafıza] {promptCount}. mesaj. Oturum sonunda 🔮 850-Companion/Last-Session.md ve Threads.md güncellemeyi unutma.";
+        $"[Memory] prompt {promptCount}. Before the session ends, update 🔮 850-Companion/Last-Session.md and Threads.md.";
 
     public const string ReflectionDebt =
         "[Hafıza] Geçen oturum 🔮 850-Companion/Last-Session.md güncellenmeden kapandı — yansıma borcu.";
