@@ -43,7 +43,6 @@ public sealed class SurecIsletmeScars
         Assert.DoesNotContain(result.Items, x => x.Code == "uncovered-session");
     }
 
-    // yazan: codex · gpt-5
     [Fact(DisplayName = "Y-109 · Main son çare olarak istisnayı rc 1'e çevirir ve WER kutusunu kapatır")]
     public void Y109_MainCatchesUnhandledExceptionAndDisablesWerDialog()
     {

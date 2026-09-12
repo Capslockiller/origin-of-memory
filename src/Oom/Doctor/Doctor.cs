@@ -1,4 +1,3 @@
-// yazan: codex · gpt-5
 using System.Text.Json;
 
 namespace Oom.Contracts;
@@ -14,7 +13,7 @@ public sealed record DoctorSnapshot(
     int QueueLength = 0,
     int Quarantine = 0,
     int InvalidFrontmatter = 0,
-    int WindowTotal = 0); // Y-118: the 7-day population size — a small one is "uyarı", never "hata".
+    int WindowTotal = 0);
 
 public sealed class Doctor
 {
@@ -30,7 +29,6 @@ public sealed class Doctor
         this.repair = repair ?? (() => { });
     }
 
-    /// <summary>Coverage for a summary line: a percentage once measured, "ölçülmedi" before the first sweep.</summary>
     public static string CoverageText(double coverage) => double.IsNaN(coverage) ? "ölçülmedi" : coverage.ToString("P0", System.Globalization.CultureInfo.CurrentCulture);
 
     public DoctorResult Check(DateTimeOffset now)
@@ -40,7 +38,7 @@ public sealed class Doctor
             observation.Item with { Stale = now - observation.ObservedAt > TimeSpan.FromHours(24) }).ToList();
         items.Add(double.IsNaN(snapshot.Coverage)
             ? Item("doctor", HealthLevel.Warning, "coverage", "7d", "Son 7 gün kapsama ölçülmedi: oom sweep henüz koşmadı")
-            : Item("doctor", snapshot.Coverage >= .95 ? HealthLevel.Info : snapshot.WindowTotal < 5 ? HealthLevel.Warning : HealthLevel.Error, "coverage", "7d", $"Son 7 gün kapsama: {snapshot.Coverage:P1}")); // hata yalnız gerçek popülasyon üzerinde; sakin hafta uyarı.
+            : Item("doctor", snapshot.Coverage >= .95 ? HealthLevel.Info : snapshot.WindowTotal < 5 ? HealthLevel.Warning : HealthLevel.Error, "coverage", "7d", $"Son 7 gün kapsama: {snapshot.Coverage:P1}"));
         AddMetric(items, "rejection-rate", snapshot.RejectionRate <= .03, $"Son 7 gün ret: {snapshot.RejectionRate:P1}");
         AddCount(items, "daily", "pending", snapshot.Pending, HealthLevel.Warning, $"Bekleyen daily: {snapshot.Pending}");
         AddCount(items, "daily", "parked", snapshot.Parked, HealthLevel.Error, $"Park edilmiş daily: {snapshot.Parked}");
@@ -84,25 +82,15 @@ public sealed class Doctor
         return items;
     }
 
-    /// <summary>
-    /// The name-set comparison, delegated to <see cref="IndexVerifier"/> — doctor has no private copy
-    /// of the rule any more (Y-032 still measures this signature).
-    /// </summary>
     public VerifyResult VerifyIndex(IReadOnlyList<string> corpus, IReadOnlyList<string> index) =>
         IndexVerifier.Compare(corpus, index);
 
-    /// <summary>
-    /// "Is the index sound?", asked of the index itself. This is the same verifier
-    /// <see cref="Retrieve.Build"/> grades its own rebuild with, called through the same entry point:
-    /// doctor and the builder cannot disagree, because there is only one of them.
-    /// </summary>
     public VerifyResult VerifyIndex(Retrieve retrieve)
     {
         ArgumentNullException.ThrowIfNull(retrieve);
         return retrieve.VerifyIndex();
     }
 
-    /// <summary>One health item carrying the verifier's verdict, for a normal <see cref="Check"/>.</summary>
     public HealthItem IndexHealth(Retrieve retrieve)
     {
         var verdict = VerifyIndex(retrieve);
@@ -139,11 +127,6 @@ public sealed class Doctor
             .. HealthLedger.Read()
         ], 1.0, 0.0, 1);
 
-    /// <summary>
-    /// The same resolver the flush path uses (Y-103/Y-073): doctor must answer "can this machine
-    /// start claude?" the way <see cref="Runner.BuildClaudeRequest"/> asks it, not by a fixed
-    /// sentence. A machine carrying only <c>claude.cmd</c> is reachable; a bare name is not.
-    /// </summary>
     public HealthItem CheckClaudeReachability(string pathValue)
     {
         var resolved = new Runner().ResolveExecutable("claude", pathValue);

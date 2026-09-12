@@ -3,15 +3,10 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-/// <summary>Hub definition read from <c>hub-config.json</c>; the array order is the root map order (spec 7).</summary>
 internal sealed record HubDefinition(string Id, string Name, string Scope, IReadOnlyList<string> Tags, IReadOnlyList<string> TitleKeys);
 
 internal sealed record HubConfiguration(string CatchAll, IReadOnlyList<HubDefinition> Hubs);
 
-/// <summary>
-/// RootMap (spec 7): regenerates <c>knowledge/index.md</c>, the hub files and
-/// <c>knowledge/index-full.md</c>, and maps a daily body onto hub ids.
-/// </summary>
 public sealed class RootMap
 {
     private const int IndexCharacterCap = 4_000;
@@ -35,7 +30,6 @@ public sealed class RootMap
         _files = files ?? new VaultFileOperations();
     }
 
-    /// <summary>Rewrites the root map, every hub file and the full table; returns the root map text.</summary>
     public string Regenerate()
     {
         var configuration = Configuration;
@@ -53,11 +47,9 @@ public sealed class RootMap
         return index;
     }
 
-    /// <summary>Maps a daily body onto hub ids through folded tag and title-key matching (spec 6.5-3).</summary>
     public IReadOnlyList<string> Assign(string dailyText)
         => HubsFor(Configuration, dailyText ?? string.Empty, []);
 
-    /// <summary>Hub membership for one note; used by the compile dedupe registry.</summary>
     internal IReadOnlyList<string> HubsForNote(Note note)
         => HubsFor(Configuration, note.Title + "\n" + note.Body, note.Tags);
 
@@ -110,7 +102,6 @@ public sealed class RootMap
         return builder.ToString();
     }
 
-    /// <summary>Full table (spec 7): rows are updated in place, the existing row order is kept.</summary>
     private void WriteFullTable(IReadOnlyList<Note> corpus)
     {
         var path = Path.Combine(_vault, "knowledge", "index-full.md");
@@ -144,7 +135,6 @@ public sealed class RootMap
         LaneCVaultPaths.WriteAtomic(path, builder.ToString(), _files);
     }
 
-    /// <summary>Concept corpus, non-recursive (scar Y-028); invalid frontmatter is skipped, not fatal (spec 6.4).</summary>
     private IReadOnlyList<Note> LoadCorpus()
     {
         var directory = Path.Combine(_vault, "knowledge", "concepts");
@@ -164,7 +154,6 @@ public sealed class RootMap
         return corpus;
     }
 
-    /// <summary>Hub configuration, read once per instance (spec 7).</summary>
     private HubConfiguration Configuration => _configuration ??= LoadConfiguration();
 
     private HubConfiguration LoadConfiguration()

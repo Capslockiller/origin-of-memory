@@ -4,20 +4,12 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-/// <summary>
-/// Shared vault and state locations for the compile side (spec 4 and 8). No path is
-/// hard-coded: the vault comes from <c>.oom/vault.json</c>, the state root from
-/// %LOCALAPPDATA%. Every text boundary uses UTF-8 without BOM (spec 3).
-/// </summary>
 internal static class LaneCVaultPaths
 {
     internal static readonly UTF8Encoding Utf8 = new(false);
 
-    /// <summary>Vault root from the nearest <c>.oom/vault.json</c>; a local workspace when unconfigured.</summary>
     internal static string ResolveVault()
     {
-        // The one vault the process was told about (`--vault`, or vault.json next to the exe)
-        // wins, so compile and retrieve never disagree about which vault they are serving.
         if (VaultPaths.ReadVault() is { Length: > 0 } declared)
             return declared;
 
@@ -46,19 +38,11 @@ internal static class LaneCVaultPaths
         }
     }
 
-    /// <summary>%LOCALAPPDATA%\oom\&lt;vault-hash&gt; — state, backup and logs live outside the synced vault (D9).</summary>
     internal static string StateRoot(string vault) => Path.Combine(LocalAppData(), "oom", Hash(vault));
 
     internal static string Hash(string value)
         => Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(value.TrimEnd(Path.DirectorySeparatorChar))), 0, 8).ToLowerInvariant();
 
-    /// <summary>
-    /// Where state roots live. <c>OOM_LOCALAPPDATA</c> overrides the real profile — a test seam,
-    /// and the only one: a suite that measures what a command writes has to be able to point the
-    /// state root at a fixture, or it is measuring the owner's real profile. The doctor scan
-    /// already read this variable and the state root did not, so the two could disagree about
-    /// where state lives; they read it in one place now.
-    /// </summary>
     private static string LocalAppData()
     {
         if (Environment.GetEnvironmentVariable("OOM_LOCALAPPDATA") is { Length: > 0 } redirected)
@@ -67,7 +51,6 @@ internal static class LaneCVaultPaths
         return string.IsNullOrEmpty(local) ? Path.Combine(Path.GetTempPath(), "oom-local") : local;
     }
 
-    /// <summary>Temp file + replace, five attempts 200 ms apart (scar 10.1 #24: sync and antivirus share violations).</summary>
     internal static void WriteAtomic(string path, string content, IFileOperations operations)
     {
         var directory = Path.GetDirectoryName(path);
@@ -103,7 +86,6 @@ internal static class LaneCVaultPaths
     internal static string ReadText(string path) => File.ReadAllText(path, Utf8).TrimStart('﻿');
 }
 
-/// <summary>Real <see cref="IFileOperations"/>: Windows <c>File.Replace</c> is the atomic publication primitive.</summary>
 internal sealed class VaultFileOperations : IFileOperations
 {
     public void Replace(string source, string destination) => File.Replace(source, destination, null);

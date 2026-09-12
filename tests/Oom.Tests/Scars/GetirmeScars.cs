@@ -7,7 +7,6 @@ namespace Oom.Tests.Scars;
 
 public sealed class GetirmeScars
 {
-    // yazan: claude · opus-5
     [Fact(DisplayName = "Y-141 · Sorgu yolu FTS indeksinden geçer, indeks cevabı değiştirmez")]
     public void Y141_QueryAndHookGenerateCandidatesThroughTheIndex()
     {
@@ -18,10 +17,6 @@ public sealed class GetirmeScars
             Concepts(vault);
             const string prompt = "Panel güvenlik kapısı nasıl çalışıyor?";
 
-            // `Retrieve.Candidates` shipped with a full-text statement, documented bm25 weights and
-            // no caller anywhere in src/: connected in the scar suite, dead in production. These two
-            // instances differ in exactly one option — whether an index path exists — so the pair
-            // measures what the index changed rather than asserting that it changed nothing.
             var scanner = new Retrieve(new RetrieveOptions(VaultPath: vault));
             var indexed = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
             indexed.Build();
@@ -32,14 +27,9 @@ public sealed class GetirmeScars
             Assert.Equal("corpus-scan:no-index", scanner.CandidateSource);
             Assert.Equal("fts", indexed.CandidateSource);
             Assert.NotEmpty(served.Hits);
-            // Candidate generation moved; scoring did not. The statistics stay whole-corpus, so a
-            // narrowed run has to reproduce the scanned run name for name and score for score — the
-            // one assertion that keeps "wired to the index" from silently meaning "ranked differently".
             Assert.Equal(scanned.Hits.Select(hit => hit.Name), served.Hits.Select(hit => hit.Name));
             Assert.Equal(scanned.Hits.Select(hit => hit.Score), served.Hits.Select(hit => hit.Score));
 
-            // An index that no longer describes the corpus is a fall-back, never a stale answer: the
-            // note added after the build is ranked, and the path says out loud that it scanned.
             File.WriteAllText(Path.Combine(vault, "knowledge", "concepts", "panel-guvenlik-kapisi-eki.md"),
                 Frontmatter("Panel güvenlik kapısı eki") + "Panel güvenlik kapısı ek bilgisi");
             var stale = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
@@ -70,8 +60,6 @@ public sealed class GetirmeScars
     [Fact(DisplayName = "Y-035 · Güncel düzeltme aranır ve eski kavram top üçe giremez")]
     public void Y035_CorrectionLayerOutranksStaleConcept()
     {
-        // The vault is the fixture's own: v0's failure was population, not ranking, so the test
-        // needs a hand layer on disk to prove the correction is indexed at all.
         var vault = ScarFixture.RetrievalVault();
         try
         {
@@ -81,7 +69,6 @@ public sealed class GetirmeScars
             Assert.Equal("correction", result.Hits[0].Source);
             Assert.Contains(result.Hits, hit => hit.Text.Contains("20 Eylül", StringComparison.Ordinal));
             Assert.DoesNotContain(result.Hits.Take(3), hit => hit.Text.Contains("13 Eylül", StringComparison.Ordinal));
-            // The retired concept does not come back on a deeper query either.
             Assert.DoesNotContain(retrieve.Query("Speaking sınavı ücreti nedir?", "retrieval-35b", 5).Hits,
                 hit => hit.Name == "speaking-sinavi-tarihi.md");
         }

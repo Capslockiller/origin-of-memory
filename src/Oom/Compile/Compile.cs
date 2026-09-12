@@ -5,10 +5,6 @@ using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
 
-/// <summary>
-/// Compile (spec 6.5): turns a daily into concept notes in text mode. The model never
-/// touches the file system; every path, guard and publication decision lives here.
-/// </summary>
 public sealed class Compile
 {
     private const string DoneMarker = "=== DONE ===";
@@ -66,28 +62,6 @@ public sealed class Compile
 
     public CompileResult Run(string dailyName, string dailyText, string modelOutput) => Run(dailyName, dailyText, modelOutput, 0);
 
-    /// <summary>
-    /// Y-127: compile's send boundary. <see cref="CompilePrompt"/> renders the root map, the
-    /// dedupe registry and the whole daily body, and the daily body is summarised conversation
-    /// — every credential the owner ever pasted into a session lands in it. That text went to
-    /// the smart model untouched while the model's reply was guarded twice on the way back, so
-    /// the vault was protected and the boundary was not. The chain now runs on the prompt
-    /// before the runner sees it, exactly as flush does (Y-126).
-    ///
-    /// Refusal on the way out: there is none, and that is deliberate. Compile is the one
-    /// component whose gate can refuse, because compile turns text into files — but nothing
-    /// on this path becomes a file. A directive-shaped line in the owner's own daily would
-    /// otherwise quarantine his compile run before the model ever saw it, every evening, with
-    /// no way out but editing the daily. The decision about whether this daily may become
-    /// notes is still taken where it belongs, on admission: the gate on the model's reply and
-    /// the gate on each note body below are untouched, and the daily is fenced as untrusted
-    /// data in the prompt either way. So <see cref="Direction.Egress"/> redacts and sends.
-    /// </summary>
-    /// <param name="purpose">
-    /// The call-ledger tag. It is a parameter only so <c>oom bench</c> can route its leg (c)
-    /// through this same boundary without its measurement calls being filed as production
-    /// compiles; every shipped compile leaves it at <c>concepts</c>.
-    /// </param>
     public RunResult Send(Runner runner, CompilePlan plan, string purpose = "concepts")
     {
         ArgumentNullException.ThrowIfNull(runner);
@@ -99,19 +73,12 @@ public sealed class Compile
         return runner.Run(outbound.Text, ModelTier.Smart, ComponentKind.Compile, purpose);
     }
 
-    /// <summary>
-    /// One compile run over a single daily. All-or-nothing: unless every note passes the
-    /// note validator and the guard chain, and unless the root map and the search index are
-    /// rebuilt, nothing is published and the daily stays unconsumed (scars Y-029, Y-030).
-    /// </summary>
     public CompileResult Run(string dailyName, string dailyText, string modelOutput, int attempts)
     {
         ArgumentNullException.ThrowIfNull(dailyName);
         ArgumentNullException.ThrowIfNull(dailyText);
         ArgumentNullException.ThrowIfNull(modelOutput);
 
-        // A source that carries an unmeasured fallback backend at normal confidence never
-        // reaches the compiler at all, so it is checked before the run lock is taken (Y-016).
         if (!IsPromotable(dailyText))
             return new CompileResult("low-confidence", [], false, false);
 
@@ -119,8 +86,6 @@ public sealed class Compile
         if (runLock is null)
             return new CompileResult("skip:locked", [], false, false);
 
-        // The guard chain runs before anything is parsed or promoted: a directive-shaped
-        // reply quarantines the whole run rather than only warning about it (Y-027).
         var gated = _guards.Gate(modelOutput, Direction.Out, ComponentKind.Compile);
         RecordBoundary(dailyName, gated);
         if (gated.Refused)
@@ -156,10 +121,6 @@ public sealed class Compile
         return new CompileResult("ok", publication.VisibleNotes, true, true);
     }
 
-    /// <summary>
-    /// Evening hour <em>or</em> a successful compile at least <c>minIntervalHours</c> ago; a fresh
-    /// install has no interval to fall back on and waits for the evening (scar Y-093).
-    /// </summary>
     public CompileDecision MaybeCompile(DateTimeOffset now, DateTimeOffset? lastSuccess, bool hasPending)
     {
         if (!hasPending)
@@ -173,11 +134,6 @@ public sealed class Compile
             : new CompileDecision(false, "skip:early");
     }
 
-    /// <summary>
-    /// Every <c>=== FILE: … ===</c> path in the reply. One path outside
-    /// <c>knowledge/concepts/&lt;slug&gt;.md</c> — a subdirectory, a traversal or an absolute
-    /// path — rejects the whole output (scars Y-026, Y-028).
-    /// </summary>
     public IReadOnlyList<string> ValidateOutputPaths(string modelOutput)
     {
         ArgumentNullException.ThrowIfNull(modelOutput);
@@ -198,12 +154,6 @@ public sealed class Compile
         return paths;
     }
 
-    /// <summary>
-    /// Bounded dedupe registry for the prompt (spec 6.5-3, scar Y-016 of the v0 list): the
-    /// concepts of the hubs this daily touches plus the fifty most recently updated notes,
-    /// at most 400 <c>name | aliases</c> lines. When it is cut, the first line says so; the
-    /// ceiling is never raised to silence the warning.
-    /// </summary>
     public string BuildRegistry(IReadOnlyList<Note> notes, IReadOnlyList<string> assignedHubs)
     {
         ArgumentNullException.ThrowIfNull(notes);
@@ -226,11 +176,6 @@ public sealed class Compile
         return builder.ToString();
     }
 
-    /// <summary>
-    /// Duplicate/update candidates for an incoming note. The search covers the whole local
-    /// corpus — the 400-line prompt registry is a prompt budget, never the decision set
-    /// (scar Y-025): an exact title/alias dictionary pass plus a bounded overlap ranking.
-    /// </summary>
     public IReadOnlyList<string> SelectCandidates(Note incoming, IReadOnlyList<Note> corpus)
     {
         ArgumentNullException.ThrowIfNull(incoming);
@@ -261,12 +206,6 @@ public sealed class Compile
         ];
     }
 
-    /// <summary>
-    /// Atomic publication (spec 6.5-6): temp file plus <c>File.Replace</c>, previous versions
-    /// into <c>backup/&lt;run&gt;/</c>, then the root map and the search index. If any step
-    /// fails everything is rolled back and the daily stays pending — a half-written run must
-    /// never consume its source (scars Y-029, Y-030).
-    /// </summary>
     public PublicationResult Publish(string dailyName, IReadOnlyDictionary<string, string> files, bool failDuringRebuild)
     {
         ArgumentNullException.ThrowIfNull(dailyName);
@@ -306,11 +245,6 @@ public sealed class Compile
         return new PublicationResult(true, false, false, written);
     }
 
-    /// <summary>
-    /// An approved correction updates the note that carries the stale claim and stamps it with
-    /// a <c>Güncelleme (YYYY-MM-DD)</c> line; a second, contradicting note is never opened and
-    /// the invalidated claim does not survive in the body (spec 7, scar Y-022).
-    /// </summary>
     public Note ApplyCorrection(Note stale, Note replacement, string source)
     {
         ArgumentNullException.ThrowIfNull(stale);
@@ -331,7 +265,6 @@ public sealed class Compile
             body.ToString());
     }
 
-        /// <summary>The file transcript, path-validated first so that one bad path rejects everything.</summary>
     internal IReadOnlyDictionary<string, string> ParseFiles(string modelOutput)
     {
         ValidateOutputPaths(modelOutput);
@@ -365,7 +298,6 @@ public sealed class Compile
         return files;
     }
 
-    /// <summary>An unmeasured fallback backend may not enter the compiler at normal confidence (scar Y-016).</summary>
     private static bool IsPromotable(string dailyText)
     {
         var backend = Field(dailyText, "fallback_backend");
@@ -430,14 +362,6 @@ public sealed class Compile
         return new CompileResult("parked", [], false, false);
     }
 
-    /// <summary>
-    /// Y-127: a mask is only a guard if someone can see it afterwards, and the two directions
-    /// are different events. <see cref="Direction.Egress"/> means a credential in the daily was
-    /// about to leave the machine inside the compile prompt — warning level, and a named
-    /// notification. Admission means one came back in the model's reply and was kept out of the
-    /// published note — informational. Same masking, different row, so <c>oom doctor</c> does
-    /// not read the near-miss and the routine case as one thing.
-    /// </summary>
     private void RecordBoundary(string dailyName, GateResult gated)
     {
         var masked = gated.Findings.Where(finding => finding is "secret" or "pii").ToArray();
@@ -469,7 +393,6 @@ public sealed class Compile
         return path;
     }
 
-    /// <summary>The compile log is written by oom, never by the model (spec 6.5-7).</summary>
     private void AppendLog(string dailyName, IReadOnlyList<string> written)
     {
         var path = Path.Combine(_vault, "knowledge", "log.md");
@@ -497,15 +420,12 @@ public sealed class Compile
                 }
                 catch (AbandonedMutexException)
                 {
-                    // The previous holder died without releasing: this run takes the mutex over.
                 }
                 return new CompileRunLock(mutex);
             }
             catch (Exception error) when (error is UnauthorizedAccessException or IOException or NotSupportedException)
             {
             }
-        // No named mutex available on this machine; the run proceeds ungated rather than
-        // refusing to compile at all.
         return new CompileRunLock(null);
     }
 
@@ -576,7 +496,6 @@ public sealed class Compile
     }
 }
 
-/// <summary>The <c>compile</c> block of <c>oom.json</c> (spec 4.1) with the spec defaults.</summary>
 internal sealed record CompileSettings(int EveningHour, int MinIntervalHours, int MaxDailiesPerRun)
 {
     internal static CompileSettings Load(string vaultRoot)

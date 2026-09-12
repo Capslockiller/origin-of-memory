@@ -6,23 +6,15 @@ using Oom.Contracts;
 
 namespace Oom;
 
-/// <summary>
-/// The single entry point (spec 5). It stays thin on purpose: it resolves the vault, reads
-/// <c>oom.json</c> (spec 4.1), applies the recursion guard and hands the work to the
-/// component that owns it, configured. No behaviour lives here.
-/// </summary>
 internal static class Program
 {
     private const string RecursionGuard = "OOM_INVOKED_BY";
 
-    /// <summary>An extension line is a status line, not a report: one line, and a short one (spec 2.2-4).</summary>
     private const int ExtensionLineChars = 200;
 
-    /// <summary>SessionStart waits for no extension: a slow command is dropped, not endured.</summary>
     private static readonly TimeSpan ExtensionTimeout = TimeSpan.FromSeconds(5);
     private static readonly UTF8Encoding Utf8 = new(false);
 
-    /// <summary>Commands a hook may trigger; inside an oom-invoked process they are silent (scar 10.1 #19).</summary>
     private static readonly string[] GuardedCommands = ["context", "retrieve", "nudge", "flush", "sweep", "compile"];
 
     private const uint SEM_FAILCRITICALERRORS = 0x0001;
@@ -33,13 +25,6 @@ internal static class Program
 
     private static int Main(string[] args) => Main(args, Dispatch);
 
-    /// <summary>
-    /// Y-109: a crash that reaches here would otherwise pop the Windows Error Reporting box
-    /// ("oom.exe - Uygulama Hatası") in front of whoever is running the hook. The dialog is
-    /// disabled at process start and any exception the dispatcher does not handle itself is
-    /// turned into a one-line stderr message and rc 1 — never a WER prompt, never a stack dump.
-    /// The dispatcher is a parameter so the test can inject a broken one without crashing xunit.
-    /// </summary>
     private static int Main(string[] args, Func<string[], int> dispatch)
     {
         if (OperatingSystem.IsWindows())
@@ -61,8 +46,6 @@ internal static class Program
         Console.OutputEncoding = Utf8;
         TrySetInputEncoding();
 
-        // The global --vault option (spec 4): the published exe runs against any vault without
-        // being copied into it. Without it the vault is vault.json next to the executable.
         VaultPaths.UseVault(Value(args, "--vault"));
 
         var command = Command(args);
@@ -75,11 +58,9 @@ internal static class Program
         if (GuardedCommands.Contains(command) && Environment.GetEnvironmentVariable(RecursionGuard) is { Length: > 0 })
             return 0;
 
-        // A vault that cannot be read is reported, never guessed: an unconfigured executable
-        // that silently used the current directory printed an empty but successful context.
         if (VaultPaths.ReadVault() is not { } vault)
         {
-            Console.Error.WriteLine("vault bulunamadı: --vault <yol> verin ya da oom.exe yanına vault.json koyun — oom doctor");
+            Console.Error.WriteLine("vault: yok");
             return 1;
         }
 
@@ -111,10 +92,9 @@ internal static class Program
 
             case "mcp":
             {
-                // stdio JSON-RPC 2.0, read-only, alive only while the client holds stdin open (spec 6.9).
                 if (!settings.McpEnabled)
                 {
-                    Console.Error.WriteLine("mcp kapalı: oom.json içindeki mcp.enabled false");
+                    Console.Error.WriteLine("mcp: kapalı");
                     return 1;
                 }
 
@@ -134,16 +114,9 @@ internal static class Program
         }
     }
 
-    /// <summary>
-    /// The SessionStart block (spec 6.2, 7). Called from the hook it answers in the hook's own
-    /// JSON envelope; called by hand or by a phase 2 package it prints the block or <c>--json</c>.
-    /// </summary>
     private static int Announce(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
         var hook = HookPayload.Read(ReadStandardInput());
-        // `context` runs on every SessionStart. It creates no state root (Y-161): the handle below
-        // is a write handle ONLY when the database already exists, because the one write this
-        // command makes is the removal of a reflection-debt row it has just printed.
         using var state = OpenStateForUpdate();
         var options = settings.Context with { PendingNotification = state?.TakeReflectionDebt() };
         var result = new Context(options).Build(vault, now);
@@ -159,11 +132,6 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>
-    /// `retrieve --query` and `--batch`. Retrieval is on demand: the hook that used to guess at
-    /// the prompt and inject on the owner's behalf is gone, and with it the whole gate, so both
-    /// remaining entry points share one ranking and one renderer (Y-038).
-    /// </summary>
     private static int RunRetrieve(string[] args, string vault, OomSettings settings)
     {
         var top = ReadInt(args, "--top") ?? settings.Retrieve.Top;
@@ -186,12 +154,6 @@ internal static class Program
         return result.ExitCode;
     }
 
-    /// <summary>
-    /// The courtesy write path (spec 6.1, 6.3). A hook has 15 seconds and a summary takes
-    /// minutes, so the hook process reads the payload, re-launches itself detached and returns;
-    /// the detached child does the work. The child carries <c>--detached</c>, never the
-    /// recursion guard, which would make it exit before it started.
-    /// </summary>
     private static int RunFlush(string[] args, string vault, OomSettings settings)
     {
         var detached = args.Contains("--detached");
@@ -205,7 +167,7 @@ internal static class Program
             var child = DetachedProcess.Start(Executable(),
                 ["flush", "--detached", "--vault", vault, "--session", session, "--transcript", transcript, "--reason", reason],
                 Path.GetTempPath());
-            Console.Error.WriteLine(child == 0 ? "flush başlatılamadı — oom doctor" : $"flush ayrıldı: {child}");
+            Console.Error.WriteLine(child == 0 ? "flush: başlatılamadı" : $"flush ayrıldı: {child}");
             return 0;
         }
 
@@ -218,11 +180,6 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>
-    /// The other half of <c>nudge</c> (see <see cref="Nudge"/>): a session long enough to be worth
-    /// reflecting on that closed without its <c>Last-Session.md</c> being written leaves one health
-    /// row, and the next <c>context</c> opens with it and removes it.
-    /// </summary>
     internal static void RecordReflectionDebt(State state, string vault, OomSettings settings, string sessionId)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
@@ -235,7 +192,6 @@ internal static class Program
         state.WriteHealthConcurrently([new HealthItem("hafiza", HealthLevel.Warning, "yansima-borcu", sessionId, Nudge.ReflectionDebt)]);
     }
 
-    /// <summary>The authoritative write path (spec 6.3): discovery, the single write function, reconciliation.</summary>
     private static int RunSweep(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
         var dryRun = args.Contains("--dry-run");
@@ -256,8 +212,6 @@ internal static class Program
         if (dryRun)
             return 0;
 
-        // The FTS5 index over knowledge/concepts is rebuilt at the end of the run; the rebuild
-        // is skipped when the concept manifest digest is unchanged (spec 6.4).
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         ReportIndex(MakeRetrieve(vault, settings, settings.Retrieve.Top).Build());
         Console.WriteLine($"indeks: {System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0} ms");
@@ -273,16 +227,6 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>
-    /// `compile --dry-run` prints the plan and calls nothing; a real compile builds the spec
-    /// 6.5-3 prompt, asks the smart tier and hands the file transcript to <see cref="Compile"/>.
-    /// </summary>
-    /// <remarks>
-    /// Y-128: <paramref name="modelRunner"/> is the one seam the scar suite needs. The send it
-    /// guards is the shipped one, so the regression that proves it gated has to drive this
-    /// method rather than <see cref="Compile.Send"/> directly — Y-127 already proves the
-    /// boundary works and proved nothing about whether the executable crosses it.
-    /// </remarks>
     internal static int RunCompile(string[] args, string vault, OomSettings settings, DateTimeOffset now, Runner? modelRunner = null)
     {
         using var state = OpenState();
@@ -303,13 +247,13 @@ internal static class Program
                                   $"kök harita={plan.RootMapChars} · daily={plan.DailyChars} · istem={plan.PromptChars} karakter");
             }
 
-            Console.WriteLine($"backend: claude {settings.Backend.Claude.Smart} — model çağrısı yapılmadı");
+            Console.WriteLine($"backend: claude {settings.Backend.Claude.Smart}");
             return 0;
         }
 
         if (pending.Length == 0)
         {
-            Console.WriteLine("derleme atlandı: bekleyen daily yok");
+            Console.WriteLine("derleme: atlandı");
             return 0;
         }
 
@@ -317,11 +261,6 @@ internal static class Program
         foreach (var daily in pending)
         {
             var plan = Plan(compile, vault, daily, corpus, rootMap);
-            // Y-128: the model call belongs to Compile, not to the dispatcher. It sat here
-            // because Compile.Run takes the model's reply as an argument, so the component
-            // looked like a pure function with the call outside it — and that is exactly how
-            // the egress gate ended up tested and dead: Compile.Send existed, and the shipped
-            // `oom compile` still handed plan.Prompt to the runner unmasked.
             var run = compile.Send(runner, plan);
             if (!string.IsNullOrEmpty(run.Error))
             {
@@ -336,11 +275,8 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>The health table of spec 6.8; the exit code is always 0.</summary>
     private static int Health(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
-        // `doctor --fix` repairs, so it opens the write handle and provisions the root; a plain
-        // `doctor` only measures and must not mint a root just by being pointed at a vault (Y-161).
         var fixing = args.Contains("--fix");
         using var state = fixing ? OpenState() : OpenStateForReading();
         var doctor = new Doctor(null,
@@ -392,14 +328,6 @@ internal static class Program
         return written.Written ? 0 : 1;
     }
 
-    /// <summary>
-    /// Project-scope install, and there is no other scope. It writes two things and nothing else:
-    /// <c>&lt;vault&gt;\.oom\</c> with its descriptor and a default <c>oom.json</c>, and the four
-    /// hooks into <c>&lt;vault&gt;\.claude\settings.json</c> pointing at the executable that is
-    /// running right now. No shared user settings, no Claude Desktop entry, no scheduled task, no
-    /// shortcut, no Event Log source — every one of those was a single machine-wide registration
-    /// that a second vault's install silently took away from the first.
-    /// </summary>
     internal static int RunInstall(string[] args, string vault)
     {
         var uninstalling = args.Contains("--uninstall");
@@ -420,12 +348,10 @@ internal static class Program
         }
         catch (JsonException error)
         {
-            Console.Error.WriteLine($"kurulum yapılmadı: {settingsPath} okunamadı — {error.Message}");
+            Console.Error.WriteLine($"kurulum: {settingsPath}: {error.Message}");
             return 1;
         }
 
-        // Merge, never replace: an unrelated hook the owner registered himself is copied through
-        // untouched, and only entries naming THIS executable are rewritten or removed.
         var hooks = root["hooks"] as JsonObject ?? [];
         foreach (var registration in HookTemplates.Build(executable))
         {
@@ -460,8 +386,8 @@ internal static class Program
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
         File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", Utf8);
         Console.WriteLine(uninstalling
-            ? $"kaldırma tamam: kancalar {settingsPath} dosyasından düşürüldü"
-            : $"kurulum tamam (kapsam: proje): {oom} · {settingsPath}");
+            ? $"kaldırma: {settingsPath}"
+            : $"kurulum: {oom} · {settingsPath}");
         return 0;
     }
 
@@ -471,22 +397,11 @@ internal static class Program
             File.WriteAllText(path, content, Utf8);
     }
 
-    /// <summary>
-    /// Whether one <c>settings.json</c> hook entry is a registration of THIS executable. The
-    /// command strings are read out of the tree rather than matched against the entry's serialized
-    /// JSON, because a Windows path is escaped there (<c>C:\\oom.exe</c>) and never contains its
-    /// own spelling — so the substring test silently matched nothing and <c>--uninstall</c> left
-    /// every hook it was asked to remove exactly where it was.
-    /// </summary>
     private static bool IsOurs(JsonNode entry, string executable) =>
         entry["hooks"] is JsonArray commands
         && commands.Any(hook => hook?["command"]?.GetValue<string>() is { } text
             && text.Contains(executable, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>
-    /// The UserPromptSubmit hook. It counts, and every <c>nudgeEvery</c> prompts it reminds the
-    /// owner to write the companion layer; it never decides what the model should remember.
-    /// </summary>
     private static int RunNudge(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
         _ = vault;
@@ -506,11 +421,6 @@ internal static class Program
         return CompilePrompt.Build(Path.GetFileName(daily), body, rootMap, compile.BuildRegistry(corpus, hubs));
     }
 
-    /// <summary>
-    /// <paramref name="state"/> is <c>null</c> when a read-only <c>doctor</c> found no database.
-    /// "No state" is then a row in the health table, not a crash and not a reason to create the
-    /// root: every count reads zero and the missing file is named out loud (Y-161).
-    /// </summary>
     private static DoctorSnapshot Snapshot(DateTimeOffset now, string vault, OomSettings settings, State? state)
     {
         long Count(string sql) => state is null ? 0 : state.Scalar(sql);
@@ -519,7 +429,6 @@ internal static class Program
         var rejected = Count("SELECT COUNT(*) FROM flush_log WHERE outcome IN ('retry','parked')");
         var invalid = Concepts(vault).Count - Corpus(vault).Count;
         var database = VaultPaths.StateDatabase();
-        // Y-113: a live reachability read supersedes a stale hook-failed ledger row for the same file.
         var reach = new Doctor().CheckClaudeReachability(Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
         List<DoctorObservation> observations =
         [
@@ -534,15 +443,12 @@ internal static class Program
             Observe(now, "sweep", "flush-log", "rows", $"{flushes} flush_log satırı"),
             .. settings.UnknownKeys.Select(key => new DoctorObservation(
                 new HealthItem("config", HealthLevel.Warning, "unknown-key", key, $"oom.json içinde bilinmeyen anahtar: {key}"), now)),
-            // Kurallar: fail loud. A vault whose oom.json cannot be parsed runs on the defaults, and the owner has to be told that, not left to guess why sweep.roots looks wrong.
             .. settings.LoadError is null ? Array.Empty<DoctorObservation>() : [new DoctorObservation(
                 new HealthItem("config", HealthLevel.Error, "hata", "json",
                     $"oom.json okunamadı, varsayılanlar kullanılıyor — {settings.LoadError}"), now)],
             .. HealthLedger.Read().Where(o => reach.Level != HealthLevel.Info || o.Item.Component != "hooks" || o.Item.Code != "hook-failed" || o.Item.Key != reach.Key)
         ];
 
-        // Coverage comes from the last `kapsama` row the sweep wrote to `health`; before any sweep has
-        // run it is NaN, and doctor says "ölçülmedi" instead of inventing a number (Kurallar 6).
         var window = state?.LastCoverage();
         var coverage = window is null ? double.NaN : window.Value.Total == 0 ? 1.0 : (double)window.Value.Covered / window.Value.Total;
         return new DoctorSnapshot(observations,
@@ -556,7 +462,6 @@ internal static class Program
             window?.Total ?? 0);
     }
 
-    /// <summary>`doctor --fix` (spec 6.8): idempotent repairs of what the machine can repair alone.</summary>
     private static void Repair(string vault, OomSettings settings, State state)
     {
         Directory.CreateDirectory(Path.Combine(state.WorkDirectory, "logs"));
@@ -566,10 +471,6 @@ internal static class Program
         ReportIndex(MakeRetrieve(vault, settings, settings.Retrieve.Top).Build());
     }
 
-    /// <summary>
-    /// The one extension point of spec 2.2-4: a package may add a single context line. The
-    /// lines go in front of the closing sentence, which stays the last line of the block (spec 7).
-    /// </summary>
     internal static string WithExtensions(string text, OomSettings settings, string vault)
     {
         if (settings.Extensions.Count == 0)
@@ -584,13 +485,6 @@ internal static class Program
         return index < 0 ? text + lines : text[..index] + lines + text[index..];
     }
 
-    /// <summary>
-    /// Runs one extension. <c>contextLine</c> is a command, not a literal (spec 2.2-4): it is
-    /// run once with a short timeout and only its first line is taken. A command that is
-    /// missing, fails, times out or prints nothing adds nothing at all - SessionStart is the
-    /// one block the owner cannot work around, so an extension may never break it. The child
-    /// carries the recursion guard, so an extension that shells back into oom stops there.
-    /// </summary>
     private static string ExtensionLine(ExtensionSettings extension, string vault)
     {
         var command = SplitCommand(extension.ContextLine);
@@ -611,17 +505,6 @@ internal static class Program
             if (string.IsNullOrEmpty(line))
                 return string.Empty;
 
-            // The owner configures WHICH command runs; he does not configure what it prints.
-            // Whatever comes back is injected into every session's prompt, immediately before
-            // the closing sentence - the most instruction-weighted position in the block - so
-            // it crosses the same egress gate as anything else this machine hands to a model.
-            //
-            // A directive-shaped line drops the extension entirely instead of being masked.
-            // Masking a credential still leaves a usable status line; an extension trying to
-            // instruct the model has nothing left worth keeping, and this method already drops
-            // an extension that is missing, fails, times out or prints nothing. The drop is
-            // announced in the block itself: this surface has no health row of its own, and a
-            // redaction nobody can see is indistinguishable from no guard at all (Y-160).
             var gated = new Guards().Gate(line, Direction.Egress, ComponentKind.Context);
             if (gated.Findings.Contains("directive"))
                 return $"[{extension.Name}] (uzanti satiri gonderim kapisinda dusuruldu: directive)\n";
@@ -637,7 +520,6 @@ internal static class Program
         }
     }
 
-    /// <summary>Splits a configured command line into executable and arguments, honouring quotes.</summary>
     private static string[] SplitCommand(string command)
     {
         var parts = new List<string>();
@@ -671,82 +553,46 @@ internal static class Program
         return [.. parts];
     }
 
-    /// <summary>
-    /// The per-note and total character budgets of spec 6.4 size the injection block, not the
-    /// ranking: a caller that asks for five notes gets five, not the three that 4.500 characters
-    /// happen to hold.
-    /// </summary>
     private static Retrieve MakeRetrieve(string vault, OomSettings settings, int top) => new(settings.Retrieve with
     {
         Top = top,
         TotalChars = Math.Max(settings.Retrieve.TotalChars, top * settings.Retrieve.PerNoteChars),
         VaultPath = vault,
-        // Naming the index file creates nothing (Y-161): `retrieve` and `mcp` only read it, and
-        // `Retrieve.Build()` — the write side, reached from sweep and `doctor --fix` — provisions
-        // the directory itself when it actually rebuilds.
         IndexPath = VaultPaths.StateDatabase()
     });
 
     private static Runner MakeRunner(string vault, OomSettings settings) =>
         new(new RunnerProfile(vault, ClaudeConfigDirectory(vault), settings.Backend.Claude));
 
-    /// <summary>
-    /// The <c>CLAUDE_CONFIG_DIR</c> the summarising child gets: the vault's own <c>.oom</c>, so the
-    /// child cannot inherit the owner's hooks, skills or plan mode (Y-011). Nothing is copied into
-    /// it — credential isolation, which used to duplicate the session credential, is gone.
-    /// </summary>
     private static string ClaudeConfigDirectory(string vault) => Path.Combine(vault, ".oom", "claude-config");
 
     private static Flush MakeFlush(string vault, OomSettings settings, State? state)
     {
-        // The rejection channel lives in the state root; the lossless raw channel stays in
-        // memory here, so no run of this build duplicates a transcript onto disk.
         var options = new FlushOptions(MinTurns: settings.Sweep.MinTurns, VaultPath: vault, RejectionPath: state?.WorkDirectory);
         return new Flush(options, null, MakeRunner(vault, settings), null, null, state);
     }
 
-    /// <summary>
-    /// The write path. The state root is created because this command is going to write into it,
-    /// and it says so here rather than as a side effect of asking where the file lives (Y-161).
-    /// </summary>
     private static State OpenState() => new(null, null, VaultPaths.EnsureStateDatabase(), StateAccess.ReadWrite);
 
-    /// <summary>
-    /// The read path: the vault's state database if it already exists, otherwise <c>null</c>.
-    /// Creates nothing. <c>null</c> means "no state yet" and every caller reports that — a
-    /// command that only reads may neither crash nor mint a root (Y-161).
-    /// </summary>
     private static State? OpenStateForReading() => State.OpenReadOnly();
 
-    /// <summary>
-    /// A write handle on a state database that already exists, and nothing at all when it does not.
-    /// This is what a mostly-reading command opens when it has exactly one row to remove: the write
-    /// happens, and pointing the command at an uninstalled vault still mints no state root (Y-161).
-    /// </summary>
     private static State? OpenStateForUpdate() =>
         VaultIdentity.ExistingDatabase() is { } path ? new State(null, null, path, StateAccess.ReadWrite) : null;
 
-    /// <summary>A red index is computed and then thrown away unless someone prints it.</summary>
     private static void ReportIndex(VerifyResult index)
     {
         if (index.ExitCode != 0)
-            Console.Error.WriteLine($"indeks doğrulaması düştü: eksik {index.Missing.Count}, fazla {index.Extra.Count}"
+            Console.Error.WriteLine($"indeks: eksik {index.Missing.Count}, fazla {index.Extra.Count}"
                 + (index.Missing.Count > 0 ? $" · eksik: {string.Join(", ", index.Missing.Take(5))}" : string.Empty)
                 + (index.Extra.Count > 0 ? $" · fazla: {string.Join(", ", index.Extra.Take(5))}" : string.Empty));
     }
 
-    /// <summary>
-    /// When the last compile succeeded, as far as the state file knows. The <c>compile_runs</c>
-    /// table is gone; a daily already marked <c>ingested</c> is the same evidence, read off the
-    /// table that is still written.
-    /// </summary>
     private static DateTimeOffset? LastCompile(State state)
     {
         var last = state.Scalar("SELECT COUNT(*) FROM daily_ingest WHERE status = 'ingested'");
         return last == 0 ? null : Clock.Now.AddHours(-1);
     }
 
-    /// <summary>A table that no run has created yet counts as zero, not as a doctor crash.</summary>
     private static long Rows(State state, string table)
     {
         try
@@ -779,23 +625,19 @@ internal static class Program
             }
             catch (FormatException)
             {
-                // Strict frontmatter: an invalid note is not indexed and doctor counts it.
             }
         }
 
         return parsed;
     }
 
-    /// <summary>Dailies no compile run has consumed yet; the anchor-carrying ones are the candidates.</summary>
     private static IReadOnlyList<string> Pending(string vault, State? state)
     {
         var directory = Path.Combine(vault, "daily");
         if (!Directory.Exists(directory))
             return [];
 
-        // No database means no record that anything was ingested, which is what it says: every
-        // daily counts as pending. It never means "assume they were compiled" (Y-161).
-        var ingested = (state?.ReadColumn("SELECT name FROM daily_ingest WHERE status IN ('ingested','adopted')") ?? Array.Empty<string>()) // Y-117: adopted counts as compiled too.
+        var ingested = (state?.ReadColumn("SELECT name FROM daily_ingest WHERE status IN ('ingested','adopted')") ?? Array.Empty<string>())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return [.. Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
@@ -853,10 +695,8 @@ internal static class Program
 
     private static string Short(string value) => value.Length <= 14 ? value : value[..14];
 
-    /// <summary>The first argument that is not an option and not an option's value (spec 5).</summary>
     private static string Command(string[] args) => CommandLine.Command(args);
 
-    /// <summary>The command's own positional arguments; <c>--vault &lt;path&gt;</c> is not one (Y-102).</summary>
     private static string? Argument(string[] args, int index) => CommandLine.Argument(args, index);
 
     private static string? Value(string[] args, string name) => CommandLine.Value(args, name);
@@ -864,11 +704,6 @@ internal static class Program
     private static int? ReadInt(string[] args, string name) =>
         int.TryParse(Value(args, name), out var value) ? value : null;
 
-    /// <summary>
-    /// The hook payload on stdin, when there is one (spec 6.1). The read is bounded: a hook
-    /// writes its JSON and closes the pipe at once, but a shell that hands the child an open
-    /// pipe nobody writes to would otherwise hang the command forever.
-    /// </summary>
     private static string ReadStandardInput()
     {
         if (!Console.IsInputRedirected)
@@ -880,7 +715,6 @@ internal static class Program
 
     private static IClock Clock { get; } = SystemClock.Instance;
 
-    /// <summary>UTF-8 without BOM on stdin too; a console that refuses the change is not an error.</summary>
     private static void TrySetInputEncoding()
     {
         try
@@ -889,30 +723,24 @@ internal static class Program
         }
         catch (Exception error) when (error is IOException or PlatformNotSupportedException)
         {
-            // A redirected or absent console keeps its own encoding.
         }
     }
 
     private static void PrintUsage()
     {
         Console.WriteLine("""
-            oom — Origin of Memory
+            oom [--vault <yol>] <komut>
 
-            Kullanım: oom [--vault <yol>] <komut> [seçenekler]
-
-              context [--json]                  Oturum başlangıcı bağlam bloğunu basar
+              context [--json]
               retrieve --query <soru> [--json] [--top N] [--batch <dosya>]
-                                                İstek üzerine hafıza getirir
-              nudge [--session <id>]            UserPromptSubmit kancası: mesaj sayar, hatırlatır
-              flush [--session <id>] [--reason]  Bir oturumu özetler (kancadan ayrık koşar)
-              sweep [--dry-run]                 Asıl yazma yolu: taramayı koşar
-              compile [--dry-run]               Daily'leri kavram notlarına derler
-              doctor [--fix] [--json] [--quiet] Sağlık ve onarım
-              save "<metin>" | --session-json   Daily'ye doğrudan kayıt
-              mcp                               Salt okunur MCP sunucusu (stdio JSON-RPC)
-              install [--uninstall]             Proje kapsamı kurulum: <vault>\.oom\ dosyaları ve
-                                                <vault>\.claude\settings.json içindeki dört kanca.
-                                                Makine geneli hiçbir kayıt yazılmaz.
+              nudge [--session <id>]
+              flush [--session <id>] [--reason <sebep>]
+              sweep [--dry-run]
+              compile [--dry-run]
+              doctor [--fix] [--json] [--quiet]
+              save "<metin>" | --session-json
+              mcp
+              install [--uninstall]
             """);
     }
 }

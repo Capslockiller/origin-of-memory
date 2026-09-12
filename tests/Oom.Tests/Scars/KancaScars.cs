@@ -19,9 +19,6 @@ public sealed class KancaScars
     [Fact(DisplayName = "Y-046 · Aynı saniyedeki yardımcı başlangıç asgari bağlam alır")]
     public void Y046_HelpersAreDedupedBySessionAndEventIdentity()
     {
-        // The old shape of this Fact only compared two records it had built itself and never
-        // called the hook path, so it asserted nothing about the duplicate start. It now drives
-        // Context.Start, which is where the (session id, event, identity) key lives.
         var vault = ScarFixture.CompanionVault("# Düzeltmeler\n" + new string('x', 4_000) + "\n");
         try
         {
@@ -36,7 +33,6 @@ public sealed class KancaScars
             Assert.True(repeated.Text.Length < full.Text.Length);
             Assert.True(minimal.Text.Length < full.Text.Length);
             Assert.DoesNotContain("[Hafıza — Düzeltmeler]", repeated.Text);
-            // A different second is a different identity and gets the full block again.
             var later = new HookStart(main.SessionId, 100, ScarFixture.Now.AddSeconds(1), false, string.Empty);
             Assert.Equal(full.Text.Length, context.Start(later, vault).Text.Length);
         }
@@ -84,11 +80,9 @@ public sealed class KancaScars
             var path = Path.Combine(vault, ScarFixture.CompanionDir, "Duzeltmeler.md");
             Assert.DoesNotContain(context.AuditCompanion(vault), x => x.Code == "companion-content-stale");
 
-            // Touched — a fresh mtime, byte-identical content. mtime says "current", content does not.
             File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
             Assert.Contains(context.AuditCompanion(vault), x => x.Code == "companion-content-stale" && x.Key == "Duzeltmeler.md");
 
-            // Really edited: same fresh mtime, different bytes, and the finding goes away.
             File.WriteAllText(path, "# Düzeltmeler\n- ikinci hâli\n");
             Assert.DoesNotContain(context.AuditCompanion(vault), x => x.Code == "companion-content-stale");
         }

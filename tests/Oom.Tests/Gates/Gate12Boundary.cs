@@ -3,13 +3,6 @@ using Oom.Contracts;
 
 namespace Oom.Tests.Gates;
 
-/// <summary>
-/// Acceptance gate 12 (spec 11-12), the boundary gate: the four stable interfaces of spec 2.2
-/// are the only surface a phase 2 package may bind to, so each one is measured here and the
-/// core is scanned for any knowledge of a package. The field lists below are the contract —
-/// spec 2.2 allows fields to be added, never removed or renamed, so these tests assert
-/// presence, never an exact set.
-/// </summary>
 public sealed class Gate12Boundary
 {
     private static readonly string[] DoctorFields = ["schema_version", "coverage", "rejection_rate", "pending", "exit_code", "items"];
@@ -18,7 +11,6 @@ public sealed class Gate12Boundary
     private static readonly string[] RetrieveFields = ["schema_version", "query", "hits"];
     private static readonly string[] RetrieveHitFields = ["name", "score", "source", "updated"];
 
-    /// <summary>Phase 2 package names (spec 2.2, 6.10, 6.13); the core must not know one of them.</summary>
     private static readonly string[] PackageNames = ["oom-kota", "oom-rapor", "oom-ingest-extra", "oom-pano"];
 
     [Fact(DisplayName = "Kapı 12-1 · doctor --json şema sürümünü ve söz verilen alanları taşır")]
@@ -27,8 +19,6 @@ public sealed class Gate12Boundary
         using var vault = new TempVault();
         GateFixture.WriteVault(vault.Path);
 
-        // Y-162: taramayı fikstüre yönlendir; yoksa yayımlanan doctor sahibin gerçek
-        // %LOCALAPPDATA%\oom altındaki her veritabanını açar.
         var scanRoot = Path.Combine(vault.Path, "profil");
         Directory.CreateDirectory(Path.Combine(scanRoot, "oom"));
         var run = GateFixture.RunScoped(scanRoot, "doctor", "--json", "--vault", vault.Path);
@@ -98,7 +88,6 @@ public sealed class Gate12Boundary
         var text = JsonDocument.Parse(run.StandardOutput).RootElement.GetProperty("text").GetString()!;
         Assert.Contains("[kota] kota yuzde 42", text, StringComparison.Ordinal);
 
-        // Spec 7: the closing sentence stays the last line of the block.
         Assert.EndsWith("Hafıza protokolü zorunludur.\n", text, StringComparison.Ordinal);
     }
 

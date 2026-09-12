@@ -4,14 +4,6 @@ public enum FlushReason { SessionEnd, PreCompact, Sweep, Ingest }
 public enum FlushOutcome { Ok, NoTurns, NoNewTurns, Empty, Retry, Parked, MissingTranscript, Unreadable, Locked }
 public enum ModelTier { Fast, Smart }
 public enum ComponentKind { Flush, Compile, Context, Retrieve, Sweep, Doctor, Ingest, Install }
-/// <summary>
-/// Which way text is crossing oom's boundary when the guard chain looks at it.
-/// <c>In</c> and <c>Out</c> are both <em>admission</em>: text a person hands oom
-/// (<c>In</c>) and text a model hands back (<c>Out</c>). Neither means departure, so
-/// <c>Egress</c> is a third member rather than a reuse of <c>Out</c>: it is local text
-/// on its way to an external model, the one direction where a finding means a secret
-/// nearly left the machine instead of nearly entering the vault.
-/// </summary>
 public enum Direction { In, Out, Egress }
 public enum HealthLevel { Info, Warning, Error }
 public enum UsageSourceKind { Unknown = 0, Estimate = 1, Measured = 2 }
@@ -22,11 +14,6 @@ public sealed record TurnRange(int Start, int End, IReadOnlyList<Turn> Turns, in
 public sealed record FlushResult(FlushOutcome Outcome, int Cursor, string? DailyPath, string? Summary, string? Error = null);
 public sealed record SweepOptions(int SinceHours = 8, int MinTurns = 3, int MaxSessionsPerRun = 20, int FreshSeconds = 0);
 public sealed record SweepResult(int Total, int Covered, IReadOnlyList<string> UncoveredIds, int Skipped, IReadOnlyList<FlushResult> Results);
-/// <summary>
-/// One pass of the guard chain. <c>Direction</c> is carried out of the gate, not thrown
-/// away inside it: a caller that records a finding has to be able to say whether it
-/// masked something on the way in or something that was about to leave the machine.
-/// </summary>
 public sealed record GateResult(string Text, IReadOnlyList<string> Findings, bool Refused, Direction Direction);
 public sealed record TokenUsage(long? UncachedInputTokens, long? OutputTokens, long? CacheReadTokens, long? CacheWriteTokens);
 public sealed record RunResult(string Text, string? Error, string Backend, string Model, string UsageSource = "unknown", TokenUsage? Usage = null,

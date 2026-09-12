@@ -2,22 +2,10 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-/// <summary>One user-level hook registration (Spec 6.1).</summary>
 public sealed record HookRegistration(string Event, string Command, int TimeoutSeconds);
 
-/// <summary>
-/// The four user-level <c>settings.json</c> entries. Install writes them, doctor --fix repairs
-/// them, and the duplicate detection here is the data lane D's Doctor reports (10.1 #6).
-/// </summary>
 public static class HookTemplates
 {
-    /// <summary>Builds the four registrations with an absolute exe path; no PowerShell, no Python.</summary>
-    /// <remarks>
-    /// UserPromptSubmit runs <c>nudge</c>, not <c>retrieve --hook</c>. Hook-time injection guessed
-    /// at every prompt whether the owner wanted memory and answered with a gate nobody could see;
-    /// retrieval is on demand now, and the prompt hook does the one thing a prompt hook is actually
-    /// good for — counting, and reminding.
-    /// </remarks>
     public static IReadOnlyList<HookRegistration> Build(string executablePath) =>
     [
         new("SessionStart", Quote(executablePath) + " context", 15),
@@ -26,7 +14,6 @@ public static class HookTemplates
         new("PreCompact", Quote(executablePath) + " flush --reason precompact", 15)
     ];
 
-    /// <summary>The settings.json fragment that install merges into the user-level file.</summary>
     public static string Render(string executablePath)
     {
         var hooks = Build(executablePath).ToDictionary(
@@ -45,10 +32,6 @@ public static class HookTemplates
         return JsonSerializer.Serialize(new { hooks }, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    /// <summary>
-    /// Events registered at both user and project level fire twice and write two daily blocks; the
-    /// pairs are returned as data, the report belongs to doctor.
-    /// </summary>
     public static IReadOnlyList<string> Duplicates(string userSettings, string projectSettings)
     {
         var duplicates = new List<string>();
@@ -62,13 +45,6 @@ public static class HookTemplates
         return duplicates;
     }
 
-    /// <summary>
-    /// The hook process re-launches itself detached (DETACHED_PROCESS | CREATE_NO_WINDOW) and
-    /// returns inside 200 ms; the summary is written by the child, the hook never blocks the
-    /// user. The child carries <c>--detached</c> and deliberately not <c>OOM_INVOKED_BY</c>:
-    /// the recursion guard is what makes a guarded command exit at once, so setting it on the
-    /// very child that has to do the work would silently drop every hook flush (10.1 #19).
-    /// </summary>
     public static int LaunchDetached(string executablePath, string sessionId, FlushReason reason, string? transcriptPath = null)
     {
         List<string> arguments =

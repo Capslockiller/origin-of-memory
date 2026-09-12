@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 
 namespace Oom.Contracts;
 
-/// <summary>One skipped sweep candidate, classified and counted (Y-015).</summary>
 public sealed record SweepSkip(string Path, string Reason);
 
 public sealed class Sweep
@@ -22,13 +21,8 @@ public sealed class Sweep
         _clock = clock ?? SystemClock.Instance;
     }
 
-    /// <summary>Every skipped candidate of the last run, classified by reason.</summary>
     public IReadOnlyList<SweepSkip> Skips => _skips;
 
-    /// <summary>
-    /// The authoritative write path: every session is handed to the single write function and the
-    /// run ends with a coverage reconciliation (Spec 6.3, Y-003).
-    /// </summary>
     public SweepResult Run(IReadOnlyList<Session> sessions, SweepOptions options)
     {
         _skips.Clear();
@@ -57,7 +51,6 @@ public sealed class Sweep
             results.Add(result);
             if (result.Outcome is FlushOutcome.Locked)
             {
-                // A locked session is skipped and is never stamped: the next run sees it again.
                 _skips.Add(new SweepSkip(session.Id, "locked"));
                 uncovered.Add(session.Id);
                 continue;
@@ -73,7 +66,6 @@ public sealed class Sweep
         return new SweepResult(sessions.Count, covered, uncovered, _skips.Count, results);
     }
 
-    /// <summary>Ingress without a terminal outcome inside the window is reported overdue (Y-004).</summary>
     public ReconciliationResult Reconcile(IReadOnlyList<IngressRecord> ingress, DateTimeOffset now)
     {
         var overdue = new List<IngressRecord>();
@@ -89,7 +81,6 @@ public sealed class Sweep
         return new ReconciliationResult(overdue, completed);
     }
 
-    /// <summary>A vanished transcript is searched for by session id under the roots (Y-013).</summary>
     public Session RelocateMissingTranscript(string sessionId, string stalePath, IReadOnlyDictionary<string, string> roots)
     {
         foreach (var (path, content) in roots)
@@ -106,7 +97,6 @@ public sealed class Sweep
         return new Session(sessionId, SourceOf(stalePath), [], _clock.Now);
     }
 
-    /// <summary>The age gate applies only to sources that already carry a stamp (Y-007).</summary>
     public bool ShouldProcess(DateTimeOffset modifiedAt, bool stamped, int sinceHours, DateTimeOffset now)
     {
         if (!stamped || sinceHours <= 0)
@@ -115,7 +105,6 @@ public sealed class Sweep
         return modifiedAt >= now.AddHours(-sinceHours);
     }
 
-    /// <summary>A zero window filters nothing; a positive window skips still-settling files (Y-015).</summary>
     public FreshnessResult EvaluateFreshness(DateTimeOffset modifiedAt, int freshSeconds, DateTimeOffset now)
     {
         if (freshSeconds <= 0)
@@ -126,7 +115,6 @@ public sealed class Sweep
             : new FreshnessResult(true, 0);
     }
 
-    /// <summary>Sessions stamped in this process; the durable store is <c>sweep_stamps</c>.</summary>
     private static readonly ConcurrentDictionary<string, byte> StampedSessions = new(StringComparer.Ordinal);
 
     private static bool IsCovered(FlushOutcome outcome) =>

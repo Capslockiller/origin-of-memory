@@ -6,16 +6,10 @@ using Oom.Contracts;
 
 namespace Oom.Tests.Gates;
 
-/// <summary>
-/// Everything the two gate suites need to build a world of their own: a synthetic vault under
-/// the temp directory, the fixed ingest samples the repository carries, and the published
-/// executable. Nothing here reads a real transcript, calls a model or touches a real vault.
-/// </summary>
 internal static class GateFixture
 {
     internal static readonly UTF8Encoding Utf8 = new(false);
 
-    /// <summary>The five headings a concept note needs to parse, plus a topic word per note.</summary>
     private const string RelatedSection =
         "\n## İlgili Kavramlar\n- [[kavram-01]] — aynı sentetik gövdeden türer.\n- [[kavram-02]] — aynı sentetik gövdeden türer.\n";
 
@@ -31,12 +25,6 @@ internal static class GateFixture
     internal static string Sample(string name) =>
         File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Oom", "Ingest", "Samples", name), Utf8);
 
-    /// <summary>
-    /// A whole synthetic vault: twenty concept notes, a root map and a hub config. Seven notes
-    /// carry the topic word so a search for it has more candidates than the MCP limit allows,
-    /// which is what makes the clamp observable; one note carries the secret mask token, which
-    /// is what makes the query side of <c>Guards.Gate(In)</c> observable.
-    /// </summary>
     internal static void WriteVault(string vault)
     {
         var concepts = Path.Combine(vault, "knowledge", "concepts");
@@ -64,7 +52,6 @@ internal static class GateFixture
             $"---\ntitle: {title}\naliases: [{slug}]\ntags: [bellek]\nsources: [2026-09-08.md]\ncreated: 2026-09-01\nupdated: 2026-09-08\n---\n# {title}\n{body}\n{RelatedSection}",
             Utf8);
 
-    /// <summary>The built single-file executable; the gate 12 schemas are its own output, not a library's.</summary>
     internal static string Executable()
     {
         var bin = Path.Combine(RepositoryRoot(), "src", "Oom", "bin");
@@ -81,13 +68,6 @@ internal static class GateFixture
     internal static (int ExitCode, string StandardOutput, string StandardError) Run(params string[] arguments) =>
         RunScoped(null, arguments);
 
-    /// <summary>
-    /// Y-162: <paramref name="localAppData"/> redirects the shipped binary's stray-root scan at a
-    /// fixture. Without it a test that drives `doctor` opens every database under the owner's real
-    /// profile -- one of which is corrupt and awaiting repair. A suite must not touch what it is
-    /// not measuring.
-    /// </summary>
-    /// <summary>Drives a command that reads a hook payload from stdin (Y-177).</summary>
     internal static (int ExitCode, string StandardOutput, string StandardError) RunWithInput(string standardInput, params string[] arguments) =>
         RunScoped(null, standardInput, arguments);
 
@@ -124,17 +104,9 @@ internal static class GateFixture
         return (process.ExitCode, output, error);
     }
 
-    /// <summary>
-    /// Where the executable puts a vault's state (D9). The tests recompute it so the directory
-    /// the run created under %LOCALAPPDATA% is removed again with the vault itself. This used to
-    /// hand-roll a third copy of the hash: a copy means the gate suite measured a function
-    /// production does not use, and its <see cref="Path.GetFullPath(string)"/> step was the
-    /// spelling production had already rejected — so it asks <see cref="VaultIdentity"/> instead.
-    /// </summary>
     internal static string StateRoot(string vault) => VaultIdentity.StateRoot(vault);
 }
 
-/// <summary>A temp directory that removes itself, and the state root the executable derived from it.</summary>
 internal sealed class TempVault : IDisposable
 {
     internal TempVault()
@@ -147,8 +119,6 @@ internal sealed class TempVault : IDisposable
 
     public void Dispose()
     {
-        // A pooled SQLite connection keeps the file open long after State was disposed, and a
-        // held state.db is what leaves a temp directory behind (spec: every fixture is removed).
         SqliteConnection.ClearAllPools();
         Remove(Path);
         Remove(GateFixture.StateRoot(Path));
@@ -163,16 +133,10 @@ internal sealed class TempVault : IDisposable
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            // A temp directory that will not go now is the operating system's problem, not a failure.
         }
     }
 }
 
-/// <summary>
-/// Acceptance gate 11 (spec 11-11) made measurable: both ingest parsers against the fixed
-/// samples in the repository, the three MCP tools end to end through the stdio loop with a
-/// fake client, and <c>save --session-json</c> through the normal flush path.
-/// </summary>
 public sealed class Gate11Contracts
 {
     private static readonly DateTimeOffset SampleStart = new(2026, 9, 9, 8, 0, 0, TimeSpan.FromHours(3));
@@ -269,7 +233,6 @@ public sealed class Gate11Contracts
         var answers = writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(line => JsonDocument.Parse(line).RootElement).ToArray();
 
-        // The notification and the blank trailing line produce no answer; EOF ends the loop.
         Assert.Equal(8, answers.Length);
         Assert.Equal("oom", answers[0].GetProperty("result").GetProperty("serverInfo").GetProperty("name").GetString());
 
@@ -277,7 +240,6 @@ public sealed class Gate11Contracts
             .Select(tool => tool.GetProperty("name").GetString()!).ToArray();
         Assert.Equal(new[] { "memory_search", "memory_root_map", "memory_note" }, tools);
 
-        // limit 9 is clamped to 5 even though seven notes carry the topic word.
         Assert.StartsWith("[Hafıza — 5 not]", Text(answers[2]), StringComparison.Ordinal);
 
         Assert.Contains("[[hubs/bellek]]", Text(answers[3]), StringComparison.Ordinal);
@@ -318,7 +280,6 @@ public sealed class Gate11Contracts
         }).ToArray();
         var json = JsonSerializer.Serialize(new { id, source = "web-disari", turns, startedAt = start.ToString("O") });
 
-        // No model is reachable, so the write path takes its own extractive fallback (INT lane).
         var save = new Save(flush: new Flush(new FlushOptions(VaultPath: vault.Path),
             new FixedClock(start.AddHours(1)), new Runner(null, configured: false)));
 

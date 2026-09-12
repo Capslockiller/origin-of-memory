@@ -4,7 +4,6 @@ using System.Text;
 
 namespace Oom.Contracts;
 
-/// <summary>SessionStart block settings (Spec 4.1 <c>context</c> block).</summary>
 public sealed record ContextOptions(
     string CompanionDir = "🔮 850-Companion",
     int CapChars = 16_000,
@@ -14,7 +13,6 @@ public sealed class Context
 {
     private const string TrimNote = "[not: indeks kırpıldı — oom doctor]";
 
-    // Fixed sections first, in this order; the two flexible ones are trimmed first (Spec 6.2).
     private static readonly string[] SectionNames =
     [
         "Bildirim", "Son Oturum", "Aktif Threadler", "Kurallar", "Düzeltmeler", "Son Journal",
@@ -37,10 +35,6 @@ public sealed class Context
 
     public Context(ContextOptions? options = null) => _options = options ?? new ContextOptions();
 
-    /// <summary>
-    /// Builds the SessionStart block. The same session start inside the same second gets the very
-    /// same block, so a second (helper) start costs nothing (Y-046, Y-077).
-    /// </summary>
     public ContextResult Build(string vaultPath, DateTimeOffset now)
     {
         var key = $"{vaultPath}|{now:O}";
@@ -52,8 +46,6 @@ public sealed class Context
 
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var companion = CompanionPath(vaultPath);
-        // A companion file without its heading used to print an empty section and say nothing.
-        // One stderr line per such section, and no behaviour change beyond it.
         foreach (var warning in CompanionWarnings(vaultPath))
             Console.Error.WriteLine(warning);
 
@@ -62,8 +54,6 @@ public sealed class Context
         foreach (var (section, file, lines) in CompanionFiles)
             Append(builder, Label(section), Head(companion is null ? null : Path.Combine(companion, file), lines, section));
 
-        // The two flexible bodies are trimmed, never their labels: every section of the
-        // Spec 7 contract stays present and in order even when the cap bites.
         var text = builder.ToString();
         var log = DailyTail(vaultPath, now);
         var index = ReadAll(vaultPath, Path.Combine("knowledge", "index.md"));
@@ -85,13 +75,6 @@ public sealed class Context
         return result;
     }
 
-    /// <summary>
-    /// One SessionStart per (session id, event, identity). Desktop fires a helper start inside the
-    /// same second as the main one — 16 of 87 injection records carried a duplicate <c>ts</c> — and
-    /// v0 keyed nothing, so the full block went out twice (scar Y-046). The first start of an
-    /// identity gets the full block; a repeat of that identity, and every start the hook itself
-    /// already marked a duplicate, gets the notification line alone.
-    /// </summary>
     public ContextResult Start(HookStart start, string vaultPath, string @event = "SessionStart")
     {
         ArgumentNullException.ThrowIfNull(start);
@@ -106,10 +89,6 @@ public sealed class Context
         return Build(vaultPath, start.Timestamp);
     }
 
-    /// <summary>
-    /// The hand-written companion layer is audited by content, never by mtime: a file that was
-    /// touched but not updated is reported stale (Y-050).
-    /// </summary>
     public IReadOnlyList<HealthItem> AuditCompanion(string vaultPath)
     {
         var items = new List<HealthItem>();
@@ -136,10 +115,6 @@ public sealed class Context
         return items;
     }
 
-    /// <summary>
-    /// Sections whose companion file is present but carries none of the headings <see cref="Head"/>
-    /// looks for. Such a section used to print empty and silent.
-    /// </summary>
     public IReadOnlyList<string> CompanionWarnings(string vaultPath)
     {
         var companion = CompanionPath(vaultPath);
@@ -160,7 +135,6 @@ public sealed class Context
         return warnings;
     }
 
-    /// <summary>The heading <see cref="Head"/> needs for a section; empty when it reads from the top.</summary>
     private static string Marker(string section) => section switch
     {
         "Son Oturum" => "## Session:",
@@ -169,7 +143,6 @@ public sealed class Context
         _ => string.Empty
     };
 
-    /// <summary>Gives one flexible body what is left of the budget and reports the rest.</summary>
     private static (string? Body, int Room, bool Trimmed) Fit(string? body, int room, bool trimmed)
     {
         if (body is null)

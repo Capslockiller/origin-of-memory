@@ -1,4 +1,3 @@
-// yazan: codex · gpt-5
 using Microsoft.Data.Sqlite;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
@@ -187,7 +186,6 @@ public sealed class IndeksScars
         }
     }
 
-    // yazan: claude · opus-5
     [Fact(DisplayName = "Y-140 · FTS aday kümesi, sıralayıcının puanladığı hiçbir notu düşürmez")]
     public void Y140_FtsCandidatesCoverEveryNoteTheInProcessRankerScores()
     {
@@ -195,9 +193,6 @@ public sealed class IndeksScars
         var index = Path.Combine(vault, "state.db");
         try
         {
-            // One decisive Turkish word per note over a shared filler phrase, so a probe that reaches
-            // the right note through the ranker but not through the index shows up as a set
-            // difference and not as a ranking nuance.
             WriteNote(vault, "a.md", "zümrütlü sıradan gövde", "A başlık");
             WriteNote(vault, "b.md", "kapısı sıradan gövde", "B başlık");
             WriteNote(vault, "c.md", "çalışıyor sıradan gövde", "C başlık");
@@ -206,8 +201,6 @@ public sealed class IndeksScars
 
             var indexed = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
             indexed.Build();
-            // The ranker's own answer has to come from an instance with no index, or the comparison
-            // is the FTS candidate set against itself and can never fail.
             var scanner = new Retrieve(new RetrieveOptions(VaultPath: vault));
 
             using var connection = new SqliteConnection($"Data Source={index}");
@@ -219,11 +212,6 @@ public sealed class IndeksScars
                 var candidates = indexed.Candidates(connection, probe, 50);
                 Assert.Equal("corpus-scan:no-index", scanner.CandidateSource);
                 Assert.NotEmpty(ranked);
-                // Measured before the index was built out of folded tokens: `kapısı`, `çalışıyor` and
-                // `güvenlikten` each reached their note through the ranker and returned an EMPTY FTS
-                // candidate set. unicode61 strips the diacritic and keeps the dotless i; TurkishFold
-                // keeps the diacritic and folds ı onto i (Y-044), and the five-character suffix
-                // prefixes it emits were never in the index at all.
                 Assert.Empty(ranked.Except(candidates, StringComparer.Ordinal));
             }
         }
@@ -233,14 +221,6 @@ public sealed class IndeksScars
         }
     }
 
-    /// <summary>
-    /// `Retrieve.Build()` used to call <c>Directory.CreateDirectory</c> on the index's parent
-    /// directory before opening it, which minted a state root as a side effect of merely asking to
-    /// index — one per test run, one per <c>compile</c> against a workspace that had never run
-    /// <c>oom install</c>. An existing directory is now the condition for writing an index, not
-    /// something Build brings into being; an absent one is a legitimately empty answer, not a
-    /// broken one.
-    /// </summary>
     [Fact(DisplayName = "Y-171 · İndeks kurulumu durum kökü yaratmaz")]
     public void Y171_BuildDoesNotCreateAStateRoot()
     {
@@ -255,7 +235,6 @@ public sealed class IndeksScars
 
             Assert.False(Directory.Exists(missingDirectory), "Build var olmayan dizini yaratmamalıydı.");
             Assert.False(File.Exists(index), "Build dizin yokken indeks dosyası yaratmamalıydı.");
-            // İndeksin yokluğu bozuk bir indeks değil, ölçülmüş boş bir cevaptır.
             Assert.Equal(0, before.ExitCode);
             Assert.Empty(before.Missing);
             Assert.Empty(before.Extra);
@@ -273,14 +252,6 @@ public sealed class IndeksScars
         }
     }
 
-    /// <summary>
-    /// A rebuild used to open its own connection to <c>state.db</c> and <c>DROP TABLE notes</c> /
-    /// <c>DROP TABLE notes_fts</c> before recreating them from scratch — destroying whatever the
-    /// schema owner (<c>StateStore</c>) had already put in that same file, including
-    /// <c>ix_notes_updated</c>, in a file that also carries the owner's own ledger
-    /// (<c>flush_log</c>, <c>PRAGMA user_version</c>). A rebuild now empties and refills the index
-    /// tables inside a transaction and drops nothing it does not own.
-    /// </summary>
     [Fact(DisplayName = "Y-172 · Yeniden kurulum şema sahibinin tablolarını düşürmez")]
     public void Y172_RebuildDoesNotDropTheSchemaOwnersTables()
     {
@@ -308,7 +279,6 @@ public sealed class IndeksScars
                 using (var owned = connection.CreateCommand())
                 {
                     owned.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_notes_updated'";
-                    // Şema sahibinin indeksi yeniden kurulumdan sağ çıkmalı — eski DROP TABLE altında bu 0 çıkardı.
                     Assert.Equal(1L, (long)owned.ExecuteScalar()!);
                 }
 
@@ -320,8 +290,6 @@ public sealed class IndeksScars
 
                 using (var owner = connection.CreateCommand())
                 {
-                    // Şema sürümü diye bir şey kalmadı; sahiplik damgası, sahibin tablolarının
-                    // yerinde durması. sessions hiçbir getirim yolunun yaratmayacağı bir tablodur.
                     owner.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'";
                     Assert.Equal(1L, (long)owner.ExecuteScalar()!);
                 }
@@ -337,15 +305,6 @@ public sealed class IndeksScars
         }
     }
 
-    /// <summary>
-    /// `Build()` used to trust an unchanged manifest digest completely: when the digest matched, it
-    /// skipped the rebuild, verified nothing, and returned success even though the index rows
-    /// underneath it had been tampered with by hand. `Build` now grades its own work on every call,
-    /// `VerifyIndex()` answers the identical read-only question, and <c>Doctor</c> reports the same
-    /// verdict through both its raw <see cref="VerifyResult"/> overload and its
-    /// <see cref="HealthItem"/> summary — one answer to "is the index sound", never a second opinion
-    /// that can call it clean while the first one calls it broken.
-    /// </summary>
     [Fact(DisplayName = "Y-176 · Build kendi işini doğrular; bozuk indeks kırmızı çıkar ve doctor aynı cevabı verir")]
     public void Y176_BuildVerifiesItsOwnWorkAndDoctorAgrees()
     {
@@ -368,7 +327,6 @@ public sealed class IndeksScars
             }
             SqliteConnection.ClearAllPools();
 
-            // Taze bir Retrieve: derlem diskte değişmedi, yalnızca indeks satırı kurcalandı.
             var rebuilt = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index)).Build();
             Assert.Equal(1, rebuilt.ExitCode); // Manifest aynı ama satır kurcalanmış; Build bunu görmeli.
             Assert.Equal(["bir.md"], rebuilt.Missing); // Yalnızca kurcalanan not eksik görünmeli.

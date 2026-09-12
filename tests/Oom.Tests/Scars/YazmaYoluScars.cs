@@ -186,7 +186,6 @@ public sealed class YazmaYoluScars
             Assert.Contains("karar: sandık kapandı", body);
             Assert.Contains("devir: şerit FIX", body);
 
-            // A writer that cannot verify its own write never reports success.
             var refused = new Save(checkpointWriter: _ => false).WriteCheckpoint(text, ["karar", "düzeltme", "devir"]);
             Assert.False(refused.Written);
             Assert.NotNull(refused.Error);

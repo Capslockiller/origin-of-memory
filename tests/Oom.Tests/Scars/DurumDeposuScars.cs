@@ -101,19 +101,6 @@ public sealed class DurumDeposuScars
         }
     }
 
-    /// <summary>
-    /// Y-161 · The point of the whole lane, made concrete: a unit test that calls
-    /// <c>State.OpenReadOnly</c> or <c>VaultIdentity.EnsureDatabase</c> directly proves nothing
-    /// about whether <c>Program.cs</c>'s command dispatcher actually reaches those helpers for a
-    /// given command — only running the SHIPPED <c>oom.exe</c> and watching what it does to disk
-    /// proves that. A read-only command (`context`, `retrieve`) must leave no state root behind;
-    /// a write command (`compile`, even with `--dry-run`, since `--dry-run` only suppresses the
-    /// model call and still opens the write handle) must create one.
-    ///
-    /// The whole thing runs inside a fixture profile: <c>OOM_LOCALAPPDATA</c> points the state root
-    /// at this test's own directory, so a suite that measures what a command writes writes nothing
-    /// into the owner's real <c>%LOCALAPPDATA%\oom</c> — not even a root it creates and removes again.
-    /// </summary>
     [Fact(DisplayName = "Y-161 · Yayımlanan exe: salt okunur komut durum kökü yaratmaz, yazan komut yaratır")]
     public void Y161_ShippedExecutableCreatesNoStateRootOnReadOnlyCommandsButDoesOnWrite()
     {
@@ -134,7 +121,6 @@ public sealed class DurumDeposuScars
             Assert.True(context.ExitCode == 0, $"'context --vault {vault}' çıkış kodu {context.ExitCode} döndürdü: {context.StandardError}");
             Assert.False(Directory.Exists(stateRoot), $"salt okunur 'context' komutu durum kökünü yarattı: {stateRoot}");
 
-            // No-hit sorgunun kendi çıkış kodu var; burada tek ilgilenilen şey diskte iz bırakmaması.
             var retrieve = GateFixture.RunScoped(profile, "retrieve", "--query", "tokenizasyon", "--vault", vault);
             Assert.False(Directory.Exists(stateRoot),
                 $"salt okunur 'retrieve' komutu durum kökünü yarattı: {stateRoot} (stderr: {retrieve.StandardError})");

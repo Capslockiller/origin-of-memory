@@ -2,11 +2,6 @@ using System.Text;
 
 namespace Oom.Contracts;
 
-/// <summary>
-/// Context bridge (spec 6.5-7): refreshes the marked block of the vault's <c>CLAUDE.md</c>
-/// with the current root map. Warning level — a failure never fails the compile run — and
-/// nothing outside the two markers is ever touched.
-/// </summary>
 public sealed class Bridge
 {
     private const string StartMarker = "<!-- beyin:start -->";
@@ -27,7 +22,6 @@ public sealed class Bridge
         _rootMap = rootMap ?? new RootMap(vaultRoot, files: _files);
     }
 
-    /// <summary>Returns the run outcome: <c>ok</c>, <c>skip:*</c> or <c>warn:*</c>; never throws.</summary>
     public string Refresh()
     {
         var path = Path.Combine(_vault, "CLAUDE.md");

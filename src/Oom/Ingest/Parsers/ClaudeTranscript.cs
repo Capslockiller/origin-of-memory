@@ -3,21 +3,8 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-/// <summary>What one transcript file says about itself: its session, its project and its turns.</summary>
 public sealed record TranscriptRead(string? SessionId, string? WorkingDirectory, IReadOnlyList<Turn> Turns);
 
-/// <summary>
-/// The reader for the real Claude Code <c>*.jsonl</c> transcript (spec 6.3). Claude Code writes
-/// one JSON object per line and only two of its line types are conversation: <c>user</c> and
-/// <c>assistant</c>, each carrying <c>message.role</c> and a <c>message.content</c> that is
-/// either a string or an array of blocks (<c>text</c>, <c>tool_use</c>, <c>tool_result</c>,
-/// <c>thinking</c>). Everything else on the line — <c>queue-operation</c>, <c>attachment</c>,
-/// <c>summary</c>, <c>system</c>, <c>bridge-session</c>, <c>last-prompt</c> — is bookkeeping and
-/// is skipped, as are sub-agent lines (<c>isSidechain</c>) and the machine's own injected lines
-/// (<c>isMeta</c>, tool results). The synthetic scar fixture shape (top level <c>role</c>,
-/// <c>kind</c>, <c>text</c>, <c>index</c>) is read by the same function, so one parser serves the
-/// fixtures and the real archive and exactly one file breaks when the outside format moves.
-/// </summary>
 internal static class ClaudeTranscript
 {
     private static readonly string[] EnvelopeMarkers =
@@ -45,7 +32,6 @@ internal static class ClaudeTranscript
             }
             catch (JsonException)
             {
-                // A half-written last line is normal while a session is still live.
                 continue;
             }
 
@@ -74,7 +60,6 @@ internal static class ClaudeTranscript
 
     private static string? ReadText(JsonElement root, JsonElement message)
     {
-        // The scar fixtures put the text on the line itself; Claude Code puts it in `message`.
         if (Text(root, "text") is { } direct)
             return direct;
 
@@ -90,8 +75,6 @@ internal static class ClaudeTranscript
         if (content.ValueKind is not JsonValueKind.Array)
             return null;
 
-        // Only the text blocks are summarisable: tool_use, tool_result and thinking are the
-        // machine talking to itself and never become user memory (spec 6.3-1).
         var blocks = content.EnumerateArray()
             .Where(block => block.ValueKind is JsonValueKind.Object && Text(block, "type") is "text" or "input_text" or "output_text")
             .Select(block => Text(block, "text"))

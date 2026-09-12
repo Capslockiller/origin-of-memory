@@ -9,7 +9,6 @@ internal static class ScarFixture
 {
     private const uint SEM_NOGPFAULTERRORBOX = 0x0002;
 
-    // yazan: codex · gpt-5
     [ModuleInitializer]
     internal static void DisableWindowsErrorReportingDialogs()
     {
@@ -53,7 +52,6 @@ internal static class ScarFixture
         return current?.FullName ?? throw new InvalidOperationException("Oom.sln bulunamadı.");
     }
 
-    /// <summary>A fixture directory of this run's own, outside every real profile or vault.</summary>
     internal static string TempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "oom-scar-" + Guid.NewGuid().ToString("N")[..12]);
@@ -63,12 +61,6 @@ internal static class ScarFixture
 
     internal const string CompanionDir = "🔮 850-Companion";
 
-    /// <summary>
-    /// A retrieval fixture vault of this run's own: eight concept notes plus the hand layer's
-    /// <c>Duzeltmeler.md</c>. The scars over the index (Y-035, Y-039, Y-042) used to rank against
-    /// whatever vault the machine running them happened to carry — which is none on CI, so they
-    /// asserted over an empty corpus. Here the corpus is the fixture and the assertion is real.
-    /// </summary>
     internal static string RetrievalVault()
     {
         var vault = TempDirectory();
@@ -81,8 +73,6 @@ internal static class ScarFixture
 
         var companion = Path.Combine(vault, CompanionDir);
         Directory.CreateDirectory(companion);
-        // `yerine:` names the concept this correction retires; the retired note leaves the ranking
-        // marked superseded and never reaches the injection (Y-035).
         File.WriteAllText(Path.Combine(companion, "Duzeltmeler.md"),
             "# Düzeltmeler\n\n## Speaking sınavı tarihi ve ücreti değişti\nyerine: speaking-sinavi-tarihi.md\nSpeaking sınavı tarihi 20 Eylül'e alındı, ücret 52 EUR oldu.\n",
             new UTF8Encoding(false));
@@ -103,7 +93,6 @@ internal static class ScarFixture
         ("panel-guvenlik-kapisi.md", "Panel güvenlik kapısı", "Panel güvenlik kapısı ayrı bir konudur.")
     ];
 
-    /// <summary>A companion layer of this run's own, for the audit scar (Y-050).</summary>
     internal static string CompanionVault(string body)
     {
         var vault = TempDirectory();

@@ -1,4 +1,3 @@
-// yazan: codex · gpt-5
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -33,19 +32,12 @@ public sealed class Save
         return new CheckpointResult(verified, verified, verified ? null : "Kontrol noktası yazıldıktan sonra doğrulanamadı.");
     }
 
-    /// <summary>
-    /// The CLI checkpoint path (Y-101). <see cref="WriteCheckpoint"/> on its own only proves the
-    /// text survived a round trip through memory, and <c>save</c> printed "kayıt yazıldı" over a
-    /// vault it had never opened. Here the block is appended to <c>daily\yyyy-MM-dd.md</c>, the
-    /// file is read back from disk, and the result claims a write only when the block is in it.
-    /// </summary>
     public CheckpointResult WriteCheckpointToVault(string vault, string text, IReadOnlyList<string> requiredFields, DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(vault);
         return new Save(guards, flush, block => AppendToDaily(vault, block, now)).WriteCheckpoint(text, requiredFields);
     }
 
-    /// <summary>Appends one block to the vault's daily file and verifies it by re-reading the file.</summary>
     private bool AppendToDaily(string vault, string text, DateTimeOffset now)
     {
         try
@@ -105,9 +97,6 @@ public sealed class Save
             timestamp = turn.Timestamp
         }));
         File.WriteAllText(tempPath, string.Join('\n', lines), Utf8);
-        // The external session enters the write path as itself: re-reading the hand-off file
-        // would relabel every imported session "claude" and the daily block would claim an
-        // import it never made (spec 6.10, gate 11-3).
         try { return flush.FlushSession(session with { Turns = safeTurns }, tempPath, FlushReason.Ingest); }
         finally { if (File.Exists(tempPath)) File.Delete(tempPath); }
     }

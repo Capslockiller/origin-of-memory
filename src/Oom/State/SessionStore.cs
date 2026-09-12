@@ -2,17 +2,10 @@ using System.Globalization;
 
 namespace Oom.Contracts;
 
-/// <summary>One row of <c>sessions</c> joined with its <c>retry_queue</c> row, if it has one.</summary>
 public sealed record SessionRow(string SessionId, string? TranscriptPath, int Cursor, int Attempts, DateTimeOffset NextAt, string? LastError);
 
-/// <summary>
-/// The write path's own two tables (spec 8): <c>sessions</c> holds the turn cursor so a
-/// re-swept transcript costs no model call (Y-091), and <c>retry_queue</c> holds the attempts
-/// so a rejected summary waits instead of vanishing (Y-012, Y-033).
-/// </summary>
 public sealed partial class State
 {
-    /// <summary>The session's cursor and queue state, or <c>null</c> when it was never seen.</summary>
     public SessionRow? ReadSessionRow(string sessionId)
     {
         lock (_gate)
@@ -37,24 +30,20 @@ public sealed partial class State
         }
     }
 
-    /// <summary>Moves the cursor. It is written only after the daily append succeeded (spec 6.3-7).</summary>
     public void WriteSessionRow(string sessionId, string? transcriptPath, int cursor) =>
         Write("INSERT INTO sessions(session_id, transcript_path, last_turn_index, last_flush_ts) VALUES ($id, $p, $c, $ts) " +
               "ON CONFLICT(session_id) DO UPDATE SET transcript_path = COALESCE($p, transcript_path), " +
               "last_turn_index = MAX(last_turn_index, $c), last_flush_ts = $ts",
             ("$id", sessionId), ("$p", (object?)transcriptPath ?? DBNull.Value), ("$c", cursor), ("$ts", Stamp(_clock.Now)));
 
-    /// <summary>Queues a session with its exponential <c>next_at</c>; five attempts park it.</summary>
     public void WriteRetry(string sessionId, int attempts, DateTimeOffset nextAt, string? error) =>
         Write("INSERT INTO retry_queue(session_id, attempts, next_at, last_error) VALUES ($id, $a, $n, $e) " +
               "ON CONFLICT(session_id) DO UPDATE SET attempts = $a, next_at = $n, last_error = $e",
             ("$id", sessionId), ("$a", attempts), ("$n", Stamp(nextAt)), ("$e", (object?)error ?? DBNull.Value));
 
-    /// <summary>A session that finally succeeded leaves the queue.</summary>
     public void ClearRetry(string sessionId) =>
         Write("DELETE FROM retry_queue WHERE session_id = $id", ("$id", sessionId));
 
-    /// <summary>Due, not yet parked queue entries, oldest first — what a sweep works off (spec 6.3).</summary>
     public IReadOnlyList<SessionRow> ReadRetryQueue(DateTimeOffset now, int maxAttempts, int limit)
     {
         lock (_gate)
@@ -82,7 +71,6 @@ public sealed partial class State
         }
     }
 
-    /// <summary>The stamp a swept file carries, or <c>null</c> when the file was never swept.</summary>
     public (string Mtime, long Size, string Outcome)? ReadStamp(string path)
     {
         lock (_gate)
@@ -95,18 +83,12 @@ public sealed partial class State
         }
     }
 
-    /// <summary>Sessions the <c>daily/</c> anchors already prove, so a lost database costs no re-summary.</summary>
     public void SeedCursors(IReadOnlyDictionary<string, int> anchored)
     {
         foreach (var (sessionId, cursor) in anchored)
             WriteSessionRow(sessionId, null, cursor);
     }
 
-    /// <summary>
-    /// One more prompt seen in this session, and the running total after it. The session row is
-    /// created on the first prompt, so <c>first_seen</c> is the moment this conversation started
-    /// talking — which is what the sessionend reflection check compares Last-Session.md against.
-    /// </summary>
     public int CountPrompt(string sessionId, DateTimeOffset now)
     {
         Write("INSERT INTO sessions(session_id, last_turn_index, prompt_count, first_seen) VALUES ($id, -1, 1, $ts) " +
@@ -115,7 +97,6 @@ public sealed partial class State
         return (int)ScalarFor("SELECT prompt_count FROM sessions WHERE session_id = $id", sessionId);
     }
 
-    /// <summary>What <c>nudge</c> counted for this session and when it first spoke; zero and <c>null</c> when unseen.</summary>
     public (int PromptCount, DateTimeOffset? FirstSeen) ReadSessionActivity(string sessionId)
     {
         lock (_gate)
@@ -130,11 +111,6 @@ public sealed partial class State
         }
     }
 
-    /// <summary>
-    /// The reflection-debt row, read and removed in one go: <c>context</c> prints it at the top of
-    /// <c>[Bildirim]</c> and the row is gone, so the next session start does not repeat a reminder
-    /// the owner has already been given.
-    /// </summary>
     public string? TakeReflectionDebt()
     {
         lock (_gate)
@@ -153,7 +129,6 @@ public sealed partial class State
         }
     }
 
-    /// <summary>The first column of one query, materialised; the reader never outlives its command.</summary>
     public IReadOnlyList<string> ReadColumn(string sql)
     {
         lock (_gate)

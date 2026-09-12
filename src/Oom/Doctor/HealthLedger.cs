@@ -1,11 +1,9 @@
-// yazan: codex · gpt-5
 using System.Collections.Concurrent;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace Oom.Contracts;
 
-/// <summary>Durable health hand-off shared by producers and Doctor.</summary>
 internal static class HealthLedger
 {
     private static readonly ConcurrentDictionary<string, DoctorObservation> Memory = new(StringComparer.Ordinal);
@@ -13,7 +11,6 @@ internal static class HealthLedger
     internal static void Record(HealthItem item, DateTimeOffset observedAt)
     {
         Memory[$"{item.Component}:{item.Code}:{item.Key}"] = new DoctorObservation(item, observedAt);
-        // A read may not bring a state root into existence: only look at a database that already exists.
         var path = VaultIdentity.ExistingDatabase();
         if (path is null)
             return;
@@ -34,14 +31,12 @@ internal static class HealthLedger
         }
         catch (Exception error) when (error is IOException or SqliteException or UnauthorizedAccessException)
         {
-            // The in-process finding still reaches Doctor; a broken state store is diagnosed separately.
         }
     }
 
     internal static IReadOnlyList<DoctorObservation> Read()
     {
         var observations = Memory.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-        // A read may not bring a state root into existence: only look at a database that already exists.
         var path = VaultIdentity.ExistingDatabase();
         if (path is not null && File.Exists(path))
             try
@@ -61,7 +56,6 @@ internal static class HealthLedger
             }
             catch (SqliteException)
             {
-                // Doctor's state-integrity probe reports an unreadable or incomplete database.
             }
 
         return observations.Values.OrderBy(observation => observation.Item.Component, StringComparer.Ordinal)

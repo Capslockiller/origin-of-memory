@@ -4,12 +4,6 @@ using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
 
-/// <summary>
-/// The single frontmatter parser and the concept note contract (spec 6.4 and 7).
-/// There is exactly one parser in the product on purpose: a tolerant second copy
-/// is what turned <c>tags: [a, b</c> into an empty list in v0 (scar Y-096), so
-/// this one is strict and refuses instead of guessing.
-/// </summary>
 public sealed class Notes
 {
     private static readonly string[] RequiredKeys = ["title", "aliases", "tags", "sources", "created", "updated"];
@@ -23,12 +17,6 @@ public sealed class Notes
 
     private readonly TurkishFold _fold = new();
 
-    /// <summary>
-    /// Strict frontmatter parse. Every one of the six required keys must be
-    /// present with the documented type, the body must not be empty, and a
-    /// malformed value is a <see cref="FormatException"/> — never a silent
-    /// default. An invalid note is simply not indexed and <c>doctor</c> counts it.
-    /// </summary>
     public Note Parse(string path, string text)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -74,12 +62,6 @@ public sealed class Notes
             body);
     }
 
-    /// <summary>
-    /// Enforces the concept note contract of spec 7: ASCII kebab slug, no
-    /// subdirectory, and an <c>## İlgili Kavramlar</c> section carrying at least
-    /// two wikilinks, each with a reason sentence. Compile calls this before a
-    /// single file is written; a violation drops the whole run.
-    /// </summary>
     public Note Validate(Note note)
     {
         ArgumentNullException.ThrowIfNull(note);
@@ -114,12 +96,6 @@ public sealed class Notes
         return note;
     }
 
-    /// <summary>
-    /// The text that reaches the full text index: title, aliases, tags and body.
-    /// Anchor comments and retired anchors are removed first — a retired anchor
-    /// that stays searchable is how a dead session came back on every index
-    /// rebuild in v0 (scars Y-023 and Y-024).
-    /// </summary>
     public string IndexableText(Note note)
     {
         ArgumentNullException.ThrowIfNull(note);
@@ -134,14 +110,12 @@ public sealed class Notes
         return builder.ToString();
     }
 
-    /// <summary>The display body after non-indexable comments and retired anchors are removed.</summary>
     internal static string IndexableBody(Note note)
     {
         var body = HtmlComment.Replace(note.Body, string.Empty);
         return RetiredAnchor.Replace(body, string.Empty).Trim();
     }
 
-    /// <summary>Index terms for a note; the query side uses the same folding.</summary>
     public IReadOnlyList<string> IndexTokens(Note note) => _fold.Tokenize(IndexableText(note));
 
     private string? ReadRelatedSection(string body)

@@ -1,4 +1,3 @@
-// yazan: codex · gpt-5
 namespace Oom.Tests.Scars;
 
 public sealed class IntentionalRed

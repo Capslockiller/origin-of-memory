@@ -2,11 +2,6 @@ using System.Collections.Concurrent;
 
 namespace Oom.Contracts;
 
-/// <summary>
-/// Per-session write-path state (spec 6.3, 8). The durable home is <c>state.db</c>
-/// (<c>sessions</c>, <c>retry_queue</c>); the in-memory store below is what a component
-/// constructed without a state store — every scar test — sees instead.
-/// </summary>
 internal sealed class SessionState
 {
     internal string Id = string.Empty;
@@ -20,20 +15,13 @@ internal sealed class SessionState
     internal string? LastError;
 }
 
-/// <summary>Where one session's cursor and retry state live for the duration of a run.</summary>
 internal interface IFlushStore
 {
     SessionState Get(string sessionId, string? transcriptPath);
 
-    /// <summary>Persists cursor and retry state; the in-memory store already holds the object.</summary>
     void Save(SessionState state);
 }
 
-/// <summary>
-/// The process-wide store lane B used. It stays because a <c>Flush</c> built without a state
-/// store must still see one cursor per session inside one process, which is what the scar
-/// tests assert; a configured executable always gets <see cref="DurableFlushStore"/> instead.
-/// </summary>
 internal sealed class MemoryFlushStore : IFlushStore
 {
     internal static readonly MemoryFlushStore Instance = new();
@@ -51,19 +39,11 @@ internal sealed class MemoryFlushStore : IFlushStore
 
     public void Save(SessionState state)
     {
-        // The dictionary already holds this instance; nothing outlives the process.
     }
 }
 
-/// <summary>
-/// The real store: <c>sessions</c> carries the turn cursor, <c>retry_queue</c> the attempts.
-/// Neither is the only home of anything — the cursor is also provable from the <c>daily/</c>
-/// anchors — which is what lets <c>doctor --fix</c> rebuild a lost database (spec 6.8).
-/// </summary>
 internal sealed class DurableFlushStore(State state, int maxAttempts) : IFlushStore
 {
-    // One object per session for the life of the run: the parsed session a sweep hands in has
-    // to survive until the write function reads it back, and reloading the row would lose it.
     private readonly ConcurrentDictionary<string, SessionState> _live = new(StringComparer.Ordinal);
 
     public SessionState Get(string sessionId, string? transcriptPath)
@@ -102,7 +82,6 @@ internal sealed class DurableFlushStore(State state, int maxAttempts) : IFlushSt
     }
 }
 
-/// <summary>The lossless raw channel of Y-005; it is a hand-off inside one run, never a file.</summary>
 internal static class RawChannel
 {
     private static readonly ConcurrentDictionary<string, string> Texts = new(StringComparer.Ordinal);

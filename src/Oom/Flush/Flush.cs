@@ -5,7 +5,6 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-/// <summary>Options of the single write function (Spec 6.3).</summary>
 public sealed record FlushOptions(
     int MinTurns = 3,
     int MaxTurns = 30,
@@ -43,12 +42,9 @@ public sealed class Flush
         _guards = guards ?? new Guards();
         _notifier = notifier;
 
-        // A configured executable keeps cursors and the retry queue in state.db; without one the
-        // process-wide store keeps the same shape in memory, which is what the scar tests see.
         _store = state is null ? MemoryFlushStore.Instance : new DurableFlushStore(state, _options.MaxAttempts);
     }
 
-    /// <summary>The single write function; hook, sweep and ingest all enter here (Spec 6.3).</summary>
     public FlushResult FlushSession(string sessionId, string transcriptPath, FlushReason reason)
     {
         var state = _store.Get(sessionId, transcriptPath);
@@ -59,8 +55,6 @@ public sealed class Flush
         var session = state.Session ?? ReadSession(sessionId, transcriptPath);
         if (session is null)
         {
-            // A hook fires while the live session still owns the transcript: the transcript is
-            // not ours to read yet, the sweep stays the authoritative writer (Y-090).
             var missing = reason is FlushReason.SessionEnd or FlushReason.PreCompact
                 ? FlushOutcome.Locked
                 : FlushOutcome.MissingTranscript;
@@ -78,15 +72,6 @@ public sealed class Flush
 
         StoreRawTranscript(RenderRange(range));
 
-        // Y-126: the send boundary. Everything BuildPrompt renders leaves this machine for an
-        // external model, so the guard chain runs on the outbound text BEFORE the runner sees
-        // it — the gate below, on the model's reply, only ever protected the vault. The raw
-        // transcript is already kept unmasked in the local raw channel (Y-005), so masking
-        // here costs the owner nothing: only the copy that crosses the boundary is redacted.
-        // The direction is `Egress` and no longer a borrowed `Out`: at every other call site
-        // `In` is text a caller hands oom and `Out` is text a model hands back, and both of
-        // those are admission. This is the one call that is departure, and the health row it
-        // writes says so.
         var outbound = _guards.Gate(BuildPrompt(range), Direction.Egress, ComponentKind.Flush);
         RecordBoundary(sessionId, outbound);
         var run = _runner.Run(outbound.Text, ModelTier.Fast, ComponentKind.Flush, "summary");
@@ -110,7 +95,6 @@ public sealed class Flush
         return Commit(state, range, session, reason, gated.Text, FlushOutcome.Ok);
     }
 
-    /// <summary>Same write function, entered with an already parsed session (sweep and ingest).</summary>
     public FlushResult FlushSession(Session session, string transcriptPath, FlushReason reason)
     {
         var state = _store.Get(session.Id, transcriptPath);
@@ -118,10 +102,6 @@ public sealed class Flush
         return FlushSession(session.Id, transcriptPath, reason);
     }
 
-    /// <summary>
-    /// Plans the contiguous ranges after the cursor. The character budget applies to the whole
-    /// plan; whatever does not fit is left for the next run, never silently dropped (Y-001).
-    /// </summary>
     public IReadOnlyList<TurnRange> PlanRanges(Session session, int lastTurnIndex, int maxTurns, int maxCharacters)
     {
         Remember(session, lastTurnIndex);
@@ -162,13 +142,10 @@ public sealed class Flush
         return ranges;
     }
 
-    /// <summary>Reads user/assistant text turns; tool, thinking and system blocks are skipped.</summary>
     public IReadOnlyList<Turn> ParseTranscript(string jsonl) => ReadTranscript(jsonl).Turns;
 
-    /// <summary>The whole transcript: its own session id and project, plus the turns (spec 6.3).</summary>
     public TranscriptRead ReadTranscript(string jsonl) => ClaudeTranscript.Read(jsonl, _clock);
 
-    /// <summary>Lossless raw channel: the summary is derived, it never consumes the source (Y-005).</summary>
     public string StoreRawTranscript(string transcriptJsonl)
     {
         var key = Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(transcriptJsonl)))[..16];
@@ -184,7 +161,6 @@ public sealed class Flush
         return RawChannel.Read(key) ?? transcriptJsonl;
     }
 
-    /// <summary>Shape validation: five headings, once each, in order, no line starting with '&lt;'.</summary>
     public SummaryValidation ValidateSummary(string output, string sessionId)
     {
         var text = (output ?? string.Empty).Replace("\r\n", "\n").TrimStart('﻿');
@@ -209,7 +185,7 @@ public sealed class Flush
             }
 
             if (seen == 0)
-                continue; // preamble noise is dropped, never summarised
+                continue;
 
             normalized.Add(line);
         }
@@ -220,7 +196,6 @@ public sealed class Flush
         return new SummaryValidation(true, string.Join('\n', normalized).Trim(), null);
     }
 
-    /// <summary>Appends one composed block to the daily file text under the daily-append lock.</summary>
     public string AppendDaily(string existing, string block, string sessionId)
     {
         lock (DailyLock)
@@ -239,7 +214,6 @@ public sealed class Flush
         }
     }
 
-    /// <summary>Two writers, one file: every block survives (Y-014).</summary>
     public string AppendDailyConcurrently(string existing, IReadOnlyList<string> blocks)
     {
         var text = existing ?? string.Empty;
@@ -252,7 +226,6 @@ public sealed class Flush
         return text;
     }
 
-    /// <summary>Exponential retry: 1 s, 8 s, 24 s; the fifth attempt parks and notifies once (Y-012).</summary>
     public RetryRecord Retry(string sessionId, int currentAttempts, string rawOutput)
     {
         var state = _store.Get(sessionId, null);
@@ -275,7 +248,6 @@ public sealed class Flush
         return new RetryRecord(sessionId, attempts, state.NextAt, parked, state.Notifications);
     }
 
-    /// <summary>The tool's own traces never enter the capture path; real project dirs pass (Y-006).</summary>
     public bool IsMechanismTranscript(string transcriptPath, string projectPath)
     {
         if (string.IsNullOrWhiteSpace(transcriptPath))
@@ -293,18 +265,11 @@ public sealed class Flush
         return marked || full.StartsWith(temp + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// Event time comes from the transcript's last turn; file and scan time are fallbacks (Y-008).
-    /// Claude Code stamps turns in UTC, but spec 7 writes the heading and the <c>ts:</c> anchor in
-    /// the machine's zone, so the answer is converted: a 12:54Z turn is the 15:54 block the owner
-    /// lived through. Y-008's explicit +03:00 fixtures compare the instant and keep their date.
-    /// </summary>
     public DateTimeOffset EventTime(Session session, DateTimeOffset fileTime, DateTimeOffset scanTime) =>
         TimeZoneInfo.ConvertTime(session.Turns.Count > 0
             ? session.Turns.Max(turn => turn.Timestamp)
             : fileTime != default ? fileTime : scanTime, TimeZoneInfo.Local);
 
-    /// <summary>Hook input may arrive with a BOM; oom itself never writes one (Y-089).</summary>
     public IngressRecord ReadHookInput(byte[] input)
     {
         var text = Utf8.GetString(input ?? []).TrimStart('﻿').Trim();
@@ -355,7 +320,6 @@ public sealed class Flush
             File.WriteAllText(dailyPath, updated, Utf8);
         }
 
-        // The cursor moves only after the append succeeded, and only over this range.
         state.Cursor = range.End;
         state.Attempts = 0;
         state.LastError = null;
@@ -363,21 +327,6 @@ public sealed class Flush
         return new FlushResult(outcome, state.Cursor + 1, dailyPath, summary);
     }
 
-    /// <summary>
-    /// Y-126: what a boundary masked is written down. Redaction, not refusal, is the verdict
-    /// on the way out — refusing would park the session after five identical retries and lose
-    /// the owner's memory of it for good, while the model never needed the secret to write a
-    /// summary — but a redaction nobody can see afterwards is indistinguishable from no guard
-    /// at all. So every masked class reaches the health ledger, where <c>oom doctor</c> reads
-    /// it.
-    ///
-    /// Y-127: the two directions are not the same event and are not recorded as the same row.
-    /// <c>Egress</c> means a credential was about to leave this machine: warning level, code
-    /// <c>gonderim-siniri</c>, and for a secret the one-shot notification the park path uses.
-    /// Admission means one was about to enter the daily file: informational, code
-    /// <c>alim-siniri</c>, no notification. Reading the ledger, the owner can tell which
-    /// happened — before this the direction reached <c>Gate</c> and was discarded there.
-    /// </summary>
     private void RecordBoundary(string sessionId, GateResult gated)
     {
         var masked = gated.Findings.Where(finding => finding is "secret" or "pii").ToArray();
@@ -430,7 +379,6 @@ public sealed class Flush
             state.Cursor = lastTurnIndex;
     }
 
-    /// <summary>The session id the transcript declares, so a renamed file still meets its cursor.</summary>
     public Session? ReadSessionFile(string sessionId, string transcriptPath, string source)
     {
         if (string.IsNullOrWhiteSpace(transcriptPath) || !File.Exists(transcriptPath))
@@ -442,7 +390,6 @@ public sealed class Flush
             : new Session(read.SessionId ?? sessionId, source, read.Turns, read.Turns.Min(turn => turn.Timestamp));
     }
 
-    /// <summary>A transcript that a live session is still writing is read, not locked out.</summary>
     private static string ReadAllText(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

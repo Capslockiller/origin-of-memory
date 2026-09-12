@@ -1,31 +1,19 @@
-// yazan: codex · gpt-5
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace Oom.Contracts;
 
-/// <summary>The <c>sweep</c> block of <c>oom.json</c> (spec 4.1).</summary>
 public sealed record SweepSettings(int EveryHours, int SinceHours, int MinTurns, int MaxSessionsPerRun, IReadOnlyList<string> Roots);
 
-/// <summary>The <c>backend.claude</c> block: the two full model ids (spec 6.6).</summary>
 public sealed record ClaudeSettings(string Fast, string Smart);
 
-/// <summary>The <c>backend</c> block. There is one backend — the Claude CLI — and one place it is configured.</summary>
 public sealed record BackendSettings(ClaudeSettings Claude);
 
-/// <summary>The <c>compile</c> block of <c>oom.json</c> (spec 4.1, 6.5).</summary>
 public sealed record CompileOptions(int EveningHour, int MinIntervalHours, int MaxDailiesPerRun);
 
-/// <summary>One <c>extensions</c> entry — the single extension point of spec 2.2-4.</summary>
 public sealed record ExtensionSettings(string Name, string ContextLine);
 
-/// <summary>
-/// The whole of <c>oom.json</c> (spec 4.1). Every command is configured from this one file;
-/// nothing reads an environment variable but <c>OOM_INVOKED_BY</c> and <c>OOM_FAKE_NOW</c>,
-/// and no path is compiled in — the roots come from here and are expanded against the user's
-/// own environment at read time.
-/// </summary>
 public sealed record OomSettings(
     BackendSettings Backend,
     string RetrieveMode,
@@ -36,36 +24,21 @@ public sealed record OomSettings(
     bool McpEnabled,
     IReadOnlyList<ExtensionSettings> Extensions)
 {
-    /// <summary>Keys spec 4.1 defines; anything else is a warning for doctor, never an error.</summary>
     public static readonly string[] KnownKeys =
         ["backend", "retrieveMode", "sweep", "compile", "context", "retrieve", "mcp", "extensions", "nudgeEvery", "reflectionMinPrompts"];
 
-    /// <summary>How many prompts apart <c>oom nudge</c> reminds the owner to write the companion layer.</summary>
     public int NudgeEvery { get; init; } = 15;
 
-    /// <summary>Below this many prompts a session is too short to owe a reflection at all.</summary>
     public int ReflectionMinPrompts { get; init; } = 5;
 
     private static readonly UTF8Encoding Utf8 = new(false);
 
-    /// <summary>Keys the file carried that spec 4.1 does not define (spec 4.1: warning, not error).</summary>
     public IReadOnlyList<string> UnknownKeys { get; init; } = [];
 
-    /// <summary>
-    /// Why <c>oom.json</c> could not be read, when it exists but is unusable — invalid JSON,
-    /// an unreadable file. Falling back to the defaults is right, doing it silently is not:
-    /// the live acceptance run served a whole session from defaults while a broken file sat in
-    /// the vault. <c>doctor</c> turns this into the <c>config hata json</c> row.
-    /// </summary>
     public string? LoadError { get; init; }
 
-    /// <summary>
-    /// The sweep roots as they are written to disk: <c>%USERPROFILE%</c> is left unexpanded so the
-    /// file stays portable between machines, and <see cref="Expand"/> resolves it on load.
-    /// </summary>
     public static readonly string[] DefaultRoots = [@"%USERPROFILE%\.claude\projects", @"%USERPROFILE%\.codex\sessions"];
 
-    /// <summary>The spec 4.1 defaults, used verbatim when <c>oom.json</c> is absent or unreadable.</summary>
     public static OomSettings Defaults(string? vault = null) => new(
         new BackendSettings(new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5")),
         "bm25",
@@ -76,13 +49,6 @@ public sealed record OomSettings(
         true,
         []);
 
-    /// <summary>
-    /// The defaults as <c>oom.json</c> text — the file a fresh install writes (Y-104). The
-    /// installer used to carry a second, hand-written copy of this document, and the two drifted:
-    /// its <c>sweep.roots</c> was <c>[]</c>, so a clean install swept nothing, and its
-    /// <c>retrieve.strictScore</c> 25,0 / <c>minOverlap</c> 2 were the pre-R2 values from lane D
-    /// (`9f1c36a`), overriding the tuned ones. There is one source of truth now, and it is here.
-    /// </summary>
     public static string DefaultJson()
     {
         var defaults = Defaults();
@@ -116,7 +82,6 @@ public sealed record OomSettings(
         }, new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
 
-    /// <summary>Reads <c>&lt;vault&gt;\.oom\oom.json</c>; an unreadable file falls back to the defaults, never to a guess.</summary>
     public static OomSettings Load(string vault)
     {
         var defaults = Defaults(vault);
@@ -195,7 +160,6 @@ public sealed record OomSettings(
             ? [.. root.EnumerateObject().Select(property => property.Name).Where(name => !KnownKeys.Contains(name, StringComparer.Ordinal))]
             : [];
 
-    /// <summary><c>%VAR%</c> is expanded here so no user path is ever compiled in (gate 11-4).</summary>
     private static string Expand(string value) => Environment.ExpandEnvironmentVariables(value);
 
     private static JsonElement Section(JsonElement root, string name) =>

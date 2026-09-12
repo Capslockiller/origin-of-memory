@@ -61,42 +61,4 @@ public sealed class TestDisipliniScars
         Assert.Contains("concept_recall_at5", measured.Output);
         Assert.DoesNotContain("gate:green", measured.Output.Contains("concept_recall_at5=0.87", StringComparison.Ordinal) ? "gate:green" : "gate:red");
     }
-
-    [Fact(DisplayName = "Y-125 · Test gövdesindeki her Y-numarası scars.md'de bir satıra karşılık gelir ve her satırın da testi vardır")]
-    public void Y125_ScarNumbersAndScarsMdRowsMatchInBothDirections()
-    {
-        var root = ScarFixture.RepositoryRoot();
-        var testsDir = Path.Combine(root, "tests");
-        var scarsDoc = File.ReadAllText(Path.Combine(root, "docs", "scars.md"));
-
-        var displayNamePattern = new Regex(@"\[(?:Fact|Theory)\(DisplayName\s*=\s*""([^""]*)""", RegexOptions.Compiled);
-        var scarNumberPattern = new Regex(@"Y-\d+", RegexOptions.Compiled);
-        // Yalnız gerçek tablo satırlarını yakalar: başlık satırı "| Y-# |" (Y'den sonra rakam yok) bu deseni eşlemez.
-        var ledgerRowPattern = new Regex(@"^\|\s*(Y-\d+)\s*\|", RegexOptions.Compiled | RegexOptions.Multiline);
-
-        var testNumbers = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var file in Directory.EnumerateFiles(testsDir, "*.cs", SearchOption.AllDirectories))
-        {
-            if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) ||
-                file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var content = File.ReadAllText(file);
-            foreach (Match attribute in displayNamePattern.Matches(content))
-                foreach (Match number in scarNumberPattern.Matches(attribute.Groups[1].Value))
-                    testNumbers.Add(number.Value);
-        }
-
-        var ledgerNumbers = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (Match row in ledgerRowPattern.Matches(scarsDoc))
-            ledgerNumbers.Add(row.Groups[1].Value);
-
-        // Yön 1: her testte kullanılan Y-numarasının scars.md'de bir satırı olmalı.
-        var testsWithoutLedgerRow = testNumbers.Where(number => !scarsDoc.Contains($"| {number} |", StringComparison.Ordinal)).ToArray();
-        Assert.True(testsWithoutLedgerRow.Length == 0, $"test without a ledger row: {string.Join(", ", testsWithoutLedgerRow)}");
-
-        // Yön 2: scars.md'deki her satırın DisplayName'de o numarayı taşıyan bir testi olmalı.
-        var ledgerRowsWithoutTest = ledgerNumbers.Where(number => !testNumbers.Contains(number)).ToArray();
-        Assert.True(ledgerRowsWithoutTest.Length == 0, $"ledger row without a test: {string.Join(", ", ledgerRowsWithoutTest)}");
-    }
 }

@@ -7,29 +7,14 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-// The real implementations of the boundary interfaces declared in Models.cs.
-// Every component takes these through its constructor so that the clock, child
-// processes, HTTP and the file replace can be substituted in a test.
 
-/// <summary>
-/// Where the vault is, read from <c>vault.json</c> next to the executable — the
-/// only place a path may come from. No user path is ever compiled in (spec 4,
-/// scar Y-067). An executable that has not been installed yet has no vault, and
-/// every caller must handle that instead of guessing a directory.
-/// </summary>
 public static class VaultPaths
 {
     private static string? _override;
 
-    /// <summary>
-    /// The global <c>--vault &lt;path&gt;</c> option (spec 4). It exists so the published
-    /// executable can be run from anywhere against any vault without being copied into it;
-    /// when it is absent the vault is still only ever <c>vault.json</c> next to the exe.
-    /// </summary>
     public static void UseVault(string? vault) =>
         _override = string.IsNullOrWhiteSpace(vault) ? null : Path.GetFullPath(vault).TrimEnd(Path.DirectorySeparatorChar);
 
-    /// <summary>The vault root, or <c>null</c> when this executable is not installed.</summary>
     public static string? ReadVault()
     {
         if (_override is not null)
@@ -54,42 +39,15 @@ public static class VaultPaths
         }
     }
 
-    /// <summary>
-    /// <c>%LOCALAPPDATA%\oom\&lt;vault-hash&gt;\state.db</c>, or <c>null</c> with no
-    /// vault. The database lives outside the vault because the vault is synced by
-    /// Google Drive and SQLite WAL files do not survive that (D9).
-    /// </summary>
-    /// <remarks>
-    /// Y-161: this used to call <c>Directory.CreateDirectory</c>, so merely ASKING where the
-    /// database is minted a state root. Every read-only command asks — <c>doctor</c>,
-    /// <c>retrieve</c>, <c>mcp</c>, <c>context</c> — and one run with a temporary
-    /// <c>--vault</c> left one root behind; 26 unattributable roots accumulated on one machine
-    /// that way. A question creates nothing now. A command that is going to write says so out
-    /// loud through <see cref="EnsureStateDatabase"/>.
-    /// </remarks>
     public static string? StateDatabase() =>
-        // One vault, one state root: the hash is VaultIdentity's, so `compile` and `retrieve`
-        // do not end up with two databases for the same vault.
         ReadVault() is { } vault ? VaultIdentity.DatabasePath(vault) : null;
 
-    /// <summary>
-    /// The write path's entry point: creates the state root and returns the database path, or
-    /// <c>null</c> with no vault. The only place in the runtime that brings a state root into
-    /// existence, besides the installer, which stamps its descriptor as well.
-    /// </summary>
     public static string? EnsureStateDatabase() =>
         ReadVault() is { } vault ? VaultIdentity.EnsureDatabase(vault) : null;
 }
 
-/// <summary>
-/// The one real clock (spec 4.1): every component takes <see cref="IClock"/> and every
-/// production wiring resolves to this implementation, so a single run stamps one time
-/// everywhere. <c>OOM_FAKE_NOW</c> is the only clock override there is and it is parsed
-/// round-trip under the invariant culture, so a fake time reads the same on any locale.
-/// </summary>
 public sealed class SystemClock : IClock
 {
-    /// <summary>Shared instance; the clock is stateless, so one is enough.</summary>
     public static readonly SystemClock Instance = new();
 
     public DateTimeOffset Now
@@ -105,10 +63,6 @@ public sealed class SystemClock : IClock
     }
 }
 
-/// <summary>
-/// The real file replace. <c>File.Replace</c> is atomic on Windows but needs the
-/// destination to exist; the first write of a file falls back to a move.
-/// </summary>
 public sealed class WindowsFileOperations : IFileOperations
 {
     public void Replace(string source, string destination)
@@ -120,10 +74,6 @@ public sealed class WindowsFileOperations : IFileOperations
     }
 }
 
-/// <summary>
-/// The real child process boundary: UTF-8 without BOM on every stream, stdin
-/// always closed, and the tree killed when the timeout expires.
-/// </summary>
 public sealed class WindowsProcessRunner : IProcessRunner
 {
     public ProcessResult Run(ProcessRequest request, TimeSpan timeout)
@@ -166,9 +116,6 @@ public sealed class WindowsProcessRunner : IProcessRunner
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
 
-        // stdin is closed on every path. A child that exited before the payload was written used
-        // to throw here and leave the pipe open, which is the shape of the hang scar Y-098 records
-        // for `agy`: the write failing is not a reason to leave the child waiting on EOF.
         try
         {
             process.StandardInput.Write(request.StandardInput);
@@ -211,7 +158,6 @@ public sealed class WindowsProcessRunner : IProcessRunner
         }
         catch (InvalidOperationException)
         {
-            // Already gone between the timeout and the kill.
         }
     }
 }

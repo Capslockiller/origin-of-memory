@@ -1,4 +1,3 @@
-// yazan: codex · gpt-5
 using System.Text;
 using System.Text.Json;
 
