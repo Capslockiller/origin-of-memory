@@ -52,7 +52,7 @@ public sealed record QuotaWindow(string Name, double? UsedPercent, DateTimeOffse
 public sealed record QuotaResult(IReadOnlyList<QuotaWindow> Windows, string Band, IReadOnlyList<HealthItem> Warnings);
 public sealed record UsageRecord(string MessageId, string Owner, DateTimeOffset Timestamp, long InputTokens, long OutputTokens, long CacheReadTokens);
 public sealed record UsageSummary(long InputTokens, long OutputTokens, long CacheReadTokens, IReadOnlyDictionary<string, long> CacheReadByOwner);
-public sealed record StateStats(long Bytes, int Calls, int FlushLogs, int HealthRows, int RetrieveRows, int QuotaRows);
+public sealed record StateStats(long Bytes, int FlushLogs, int HealthRows);
 public sealed record HookStart(string SessionId, int ProcessId, DateTimeOffset Timestamp, bool Duplicate, string Context);
 public sealed record HookState(string SessionId, int PromptCount, DateTimeOffset StartedAt);
 public sealed record InstallResult(bool Success, IReadOnlyList<string> WrittenPaths, IReadOnlyList<string> Registrations, string? Error = null);
@@ -69,7 +69,5 @@ public sealed record FreshnessResult(bool ShouldProcess, int Skipped);
 
 public interface IClock { DateTimeOffset Now { get; } }
 public interface IProcessRunner { ProcessResult Run(ProcessRequest request, TimeSpan timeout); }
-public interface ITaskScheduler { void Register(string name, string xml); }
 public interface INotifier { void Notify(string text); }
-public interface IHttp { string Send(string method, string url, string body); }
 public interface IFileOperations { void Replace(string source, string destination); }

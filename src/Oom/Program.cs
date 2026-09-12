@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Oom.Contracts;
 
 namespace Oom;
@@ -22,7 +23,7 @@ internal static class Program
     private static readonly UTF8Encoding Utf8 = new(false);
 
     /// <summary>Commands a hook may trigger; inside an oom-invoked process they are silent (scar 10.1 #19).</summary>
-    private static readonly string[] GuardedCommands = ["context", "retrieve", "flush", "sweep", "compile"];
+    private static readonly string[] GuardedCommands = ["context", "retrieve", "nudge", "flush", "sweep", "compile"];
 
     private const uint SEM_FAILCRITICALERRORS = 0x0001;
     private const uint SEM_NOGPFAULTERRORBOX = 0x0002;
@@ -102,18 +103,6 @@ internal static class Program
             case "compile":
                 return RunCompile(args, vault, settings, now);
 
-            case "ingest":
-            {
-                var source = Argument(args, 0) ?? "claude"; var max = ReadInt(args, "--max"); // Y-112: was always handed an empty file list; --root overrides sweep's roots.
-                using var ingestState = OpenState(); // Y-114: state.db-backed dedupe so a rerun advances instead of reimporting the same oldest files forever.
-                var ingest = new Ingest(state: ingestState);
-                IReadOnlyList<string> roots = Value(args, "--root") is { Length: > 0 } r ? [r] : settings.Sweep.Roots;
-                var files = ingest.Discover(source, roots, max);
-                var outcome = ingest.RunWithOutcome(source, files, max);
-                Console.WriteLine($"içe aktarım: {outcome.Sessions.Count} oturum (bulunan dosya {files.Count}, atlanan {outcome.Skipped})");
-                return 0;
-            }
-
             case "doctor":
                 return Health(args, vault, settings, now);
 
@@ -134,51 +123,10 @@ internal static class Program
             }
 
             case "install":
-            {
-                if (args.Contains("--adopt")) { using var adoptState = OpenState(); Console.WriteLine($"benimseme: {AdoptCompiledVault(Value(args, "--vault") ?? vault, adoptState, now)} daily zaten derlenmiş olarak işaretlendi (adopted)"); return 0; } // Y-117
-                var target = Value(args, "--vault") ?? vault;
-                var install = new Install();
-                var uninstalling = args.Contains("--uninstall");
-                var scope = InstallScopeFor(args);
-                var result = uninstalling
-                    ? install.Uninstall(target)
-                    : install.Run(target, args.Contains("--from-v0"), args.Contains("--dry-run"), scope);
-                if (install.MigrationReport.Length > 0) Console.Write(install.MigrationReport);
-                if (!uninstalling)
-                    Console.WriteLine(scope == InstallScope.User
-                        ? "kapsam: kullanıcı — makine geneli tekil kayıtlar dahil (ortak settings.json, Claude Desktop MCP, zamanlanmış görev, kısayol/AUMID, Event Log)"
-                        : "kapsam: proje — yalnız vault'un kendi dosyaları; makine geneli kayıt için --user-scope");
-                // K7/Y-105: run from the installed copy, the exe cannot delete itself — the
-                // leftover path is reported so the user knows to remove it by hand.
-                var leftoverExe = result.Registrations.FirstOrDefault(r => r.StartsWith("exe-elle-sil:", StringComparison.Ordinal));
-                if (uninstalling && result.Success && leftoverExe is not null)
-                    Console.WriteLine($"kaldırma tamam — çalışan exe elle silinir: {leftoverExe["exe-elle-sil:".Length..]}");
-                else if (uninstalling)
-                    Console.WriteLine(result.Success ? "kaldırma tamam" : $"kaldırma başarısız: {result.Error}");
-                else
-                    Console.WriteLine(result.Success ? "kurulum tamam" : $"kurulum başarısız: {result.Error}");
-                return result.Success ? 0 : 1;
-            }
+                return RunInstall(args, vault);
 
-            case "bench":
-            {
-                // Spec 6.12's measurement command. The options are read here, where every other
-                // command's options are read; Bench itself only measures.
-                var options = new BenchOptions(
-                    (Value(args, "--backend") ?? "local").Trim().ToLowerInvariant(),
-                    ReadInt(args, "--transcripts") ?? 30, ReadInt(args, "--dailies") ?? 5,
-                    Value(args, "--transcript-dir"), Value(args, "--daily-dir"), Value(args, "--out"),
-                    args.Contains("--dry-run"), args.Contains("--judge"));
-                try
-                {
-                    return new Bench().Run(options, vault, settings, Console.Out);
-                }
-                catch (ArgumentException error)
-                {
-                    Console.Error.WriteLine(error.Message);
-                    return 1;
-                }
-            }
+            case "nudge":
+                return RunNudge(args, vault, settings, now);
 
             default:
                 PrintUsage();
@@ -187,29 +135,17 @@ internal static class Program
     }
 
     /// <summary>
-    /// Y-180/Y-182 (Faz 5): <c>install</c> writes the project package by default and reaches the
-    /// machine's shared registrations only when <c>--user-scope</c> is spelled out. The flag has
-    /// no short form and no default-on partner on purpose — the user-level write is the one that
-    /// takes the shared <c>~/.claude/settings.json</c> hooks, the single Claude Desktop MCP entry,
-    /// the single scheduled task and the single AUMID shortcut away from whichever vault held
-    /// them, so it must never be reachable by accident.
-    /// </summary>
-    internal static InstallScope InstallScopeFor(string[] args) =>
-        args.Contains("--user-scope") ? InstallScope.User : InstallScope.Project;
-
-    /// <summary>
     /// The SessionStart block (spec 6.2, 7). Called from the hook it answers in the hook's own
     /// JSON envelope; called by hand or by a phase 2 package it prints the block or <c>--json</c>.
     /// </summary>
     private static int Announce(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
         var hook = HookPayload.Read(ReadStandardInput());
-        // `context` runs on every SessionStart and writes nothing: it reads the last quota sample
-        // and the queued notification. A vault whose state has never been written gets a block
-        // without those two lines, not a new state root (Y-161).
-        using var state = OpenStateForReading();
-        Context.PublishStatusLine(state?.ReadStatusLine(now));
-        var options = settings.Context with { PendingNotification = state?.ReadPendingNotification(now) };
+        // `context` runs on every SessionStart. It creates no state root (Y-161): the handle below
+        // is a write handle ONLY when the database already exists, because the one write this
+        // command makes is the removal of a reflection-debt row it has just printed.
+        using var state = OpenStateForUpdate();
+        var options = settings.Context with { PendingNotification = state?.TakeReflectionDebt() };
         var result = new Context(options).Build(vault, now);
         var text = WithExtensions(result.Text, settings, vault);
 
@@ -223,44 +159,15 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>`retrieve --hook`, `--query` and `--batch`; all three share one ranking and one renderer (Y-038).</summary>
+    /// <summary>
+    /// `retrieve --query` and `--batch`. Retrieval is on demand: the hook that used to guess at
+    /// the prompt and inject on the owner's behalf is gone, and with it the whole gate, so both
+    /// remaining entry points share one ranking and one renderer (Y-038).
+    /// </summary>
     private static int RunRetrieve(string[] args, string vault, OomSettings settings)
     {
         var top = ReadInt(args, "--top") ?? settings.Retrieve.Top;
         var retrieve = MakeRetrieve(vault, settings, top);
-
-        if (args.Contains("--hook"))
-        {
-            var hook = HookPayload.Read(ReadStandardInput());
-            var session = Value(args, "--session") ?? hook.SessionId ?? "cli";
-            if (retrieve.GateReason(hook.Prompt) is { } reason)
-            {
-                Console.Error.WriteLine($"getirme atlandı ({reason})");
-                return 0;
-            }
-
-            var hooked = retrieve.Hook(hook.Prompt, session);
-            if (hooked.Hits.Count == 0)
-            {
-                Console.Error.WriteLine("getirme atlandı (skip:no-hit)");
-                return 0;
-            }
-
-            Console.WriteLine(JsonSerializer.Serialize(new
-            {
-                hookSpecificOutput = new { hookEventName = "UserPromptSubmit", additionalContext = hooked.Output }
-            }));
-
-            // Y-174: the served ledger records `prepared` when the block is built and only this
-            // line turns it into `emitted`. Without it every row ages into `uncertain` and the
-            // cross-process dedupe suppresses nothing -- the ledger would be written and never
-            // read. The flush comes first: an acknowledgement before the bytes are out is the
-            // same lie the ledger exists to stop.
-            Console.Out.Flush();
-            retrieve.AcknowledgeDelivery();
-            return 0;
-        }
-
         var cli = Value(args, "--session") ?? "cli";
         if (Value(args, "--batch") is { } batch)
         {
@@ -305,8 +212,27 @@ internal static class Program
         using var state = OpenState();
         var result = MakeFlush(vault, settings, state).FlushSession(session, transcript, Reason(reason));
         state.RecordFlush(Clock.Now, session, reason, result.Outcome.ToString().ToLowerInvariant(), 0, 0, "runner");
+        if (Reason(reason) is FlushReason.SessionEnd)
+            RecordReflectionDebt(state, vault, settings, session);
         Console.WriteLine($"flush: {result.Outcome}{(result.DailyPath is null ? string.Empty : " → " + result.DailyPath)}");
         return 0;
+    }
+
+    /// <summary>
+    /// The other half of <c>nudge</c> (see <see cref="Nudge"/>): a session long enough to be worth
+    /// reflecting on that closed without its <c>Last-Session.md</c> being written leaves one health
+    /// row, and the next <c>context</c> opens with it and removes it.
+    /// </summary>
+    internal static void RecordReflectionDebt(State state, string vault, OomSettings settings, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        var (prompts, firstSeen) = state.ReadSessionActivity(sessionId);
+        if (!Nudge.OwesReflection(vault, settings.Context.CompanionDir, firstSeen, prompts, settings.ReflectionMinPrompts))
+            return;
+
+        state.WriteHealthConcurrently([new HealthItem("hafiza", HealthLevel.Warning, "yansima-borcu", sessionId, Nudge.ReflectionDebt)]);
     }
 
     /// <summary>The authoritative write path (spec 6.3): discovery, the single write function, reconciliation.</summary>
@@ -344,7 +270,6 @@ internal static class Program
         var health = new Doctor(null, moment => Snapshot(moment, vault, settings, state), null).Check(now);
         var loud = health.Items.Where(item => item.Level is not HealthLevel.Info).ToArray();
         Console.WriteLine($"doctor: kapsama {health.Coverage:P0} · ret {health.RejectionRate:P0} · {loud.Length} uyarı");
-        Notify(state, loud);
         return 0;
     }
 
@@ -378,7 +303,7 @@ internal static class Program
                                   $"kök harita={plan.RootMapChars} · daily={plan.DailyChars} · istem={plan.PromptChars} karakter");
             }
 
-            Console.WriteLine($"backend.compile=[{string.Join(", ", settings.Backend.Compile)}] — model çağrısı yapılmadı");
+            Console.WriteLine($"backend: claude {settings.Backend.Claude.Smart} — model çağrısı yapılmadı");
             return 0;
         }
 
@@ -388,7 +313,7 @@ internal static class Program
             return 0;
         }
 
-        var runner = modelRunner ?? MakeRunner(vault, settings, state);
+        var runner = modelRunner ?? MakeRunner(vault, settings);
         foreach (var daily in pending)
         {
             var plan = Plan(compile, vault, daily, corpus, rootMap);
@@ -420,8 +345,7 @@ internal static class Program
         using var state = fixing ? OpenState() : OpenStateForReading();
         var doctor = new Doctor(null,
             moment => Snapshot(moment, vault, settings, state),
-            () => { if (state is not null) Repair(vault, settings, state); },
-            StateRootHealth);
+            () => { if (state is not null) Repair(vault, settings, state); });
         var result = fixing ? doctor.Fix() : doctor.Check(now);
         if (args.Contains("--json"))
         {
@@ -468,6 +392,101 @@ internal static class Program
         return written.Written ? 0 : 1;
     }
 
+    /// <summary>
+    /// Project-scope install, and there is no other scope. It writes two things and nothing else:
+    /// <c>&lt;vault&gt;\.oom\</c> with its descriptor and a default <c>oom.json</c>, and the four
+    /// hooks into <c>&lt;vault&gt;\.claude\settings.json</c> pointing at the executable that is
+    /// running right now. No shared user settings, no Claude Desktop entry, no scheduled task, no
+    /// shortcut, no Event Log source — every one of those was a single machine-wide registration
+    /// that a second vault's install silently took away from the first.
+    /// </summary>
+    internal static int RunInstall(string[] args, string vault)
+    {
+        var uninstalling = args.Contains("--uninstall");
+        var executable = Executable();
+        var oom = Path.Combine(vault, ".oom");
+        if (!uninstalling)
+        {
+            Directory.CreateDirectory(oom);
+            WriteIfAbsent(Path.Combine(oom, "vault.json"), JsonSerializer.Serialize(new { vault, schema = 1 }) + "\n");
+            WriteIfAbsent(Path.Combine(oom, "oom.json"), OomSettings.DefaultJson());
+        }
+
+        var settingsPath = Path.Combine(vault, ".claude", "settings.json");
+        JsonObject root;
+        try
+        {
+            root = (File.Exists(settingsPath) ? JsonNode.Parse(File.ReadAllText(settingsPath, Utf8).TrimStart('﻿')) : null) as JsonObject ?? [];
+        }
+        catch (JsonException error)
+        {
+            Console.Error.WriteLine($"kurulum yapılmadı: {settingsPath} okunamadı — {error.Message}");
+            return 1;
+        }
+
+        // Merge, never replace: an unrelated hook the owner registered himself is copied through
+        // untouched, and only entries naming THIS executable are rewritten or removed.
+        var hooks = root["hooks"] as JsonObject ?? [];
+        foreach (var registration in HookTemplates.Build(executable))
+        {
+            var kept = new JsonArray();
+            if (hooks[registration.Event] is JsonArray existing)
+                foreach (var entry in existing)
+                    if (entry is not null && !entry.ToJsonString().Contains(executable, StringComparison.OrdinalIgnoreCase))
+                        kept.Add(entry.DeepClone());
+
+            if (!uninstalling)
+                kept.Add(new JsonObject
+                {
+                    ["hooks"] = new JsonArray(new JsonObject
+                    {
+                        ["type"] = "command",
+                        ["command"] = registration.Command,
+                        ["timeout"] = registration.TimeoutSeconds
+                    })
+                });
+
+            if (kept.Count > 0)
+                hooks[registration.Event] = kept;
+            else
+                hooks.Remove(registration.Event);
+        }
+
+        if (hooks.Count > 0)
+            root["hooks"] = hooks;
+        else
+            root.Remove("hooks");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+        File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", Utf8);
+        Console.WriteLine(uninstalling
+            ? $"kaldırma tamam: kancalar {settingsPath} dosyasından düşürüldü"
+            : $"kurulum tamam (kapsam: proje): {oom} · {settingsPath}");
+        return 0;
+    }
+
+    private static void WriteIfAbsent(string path, string content)
+    {
+        if (!File.Exists(path))
+            File.WriteAllText(path, content, Utf8);
+    }
+
+    /// <summary>
+    /// The UserPromptSubmit hook. It counts, and every <c>nudgeEvery</c> prompts it reminds the
+    /// owner to write the companion layer; it never decides what the model should remember.
+    /// </summary>
+    private static int RunNudge(string[] args, string vault, OomSettings settings, DateTimeOffset now)
+    {
+        _ = vault;
+        var hook = HookPayload.Read(ReadStandardInput());
+        var session = Value(args, "--session") ?? hook.SessionId ?? "cli";
+        using var state = OpenState();
+        if (Nudge.Envelope(Nudge.Count(state, session, now, settings.NudgeEvery)) is { Length: > 0 } envelope)
+            Console.WriteLine(envelope);
+
+        return 0;
+    }
+
     private static CompilePlan Plan(Compile compile, string vault, string daily, IReadOnlyList<Note> corpus, string rootMap)
     {
         var body = File.ReadAllText(daily, Utf8);
@@ -486,9 +505,6 @@ internal static class Program
 
         var flushes = Count("SELECT COUNT(*) FROM flush_log WHERE outcome <> 'summary'");
         var rejected = Count("SELECT COUNT(*) FROM flush_log WHERE outcome IN ('retry','parked')");
-        // The newest coverage row is the 7-day window the sweep just measured (spec 6.8); summing every row ever written mixed windows and reported a coverage nobody has.
-        var covered = Count("SELECT IFNULL((SELECT covered FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
-        var total = Count("SELECT IFNULL((SELECT total FROM coverage ORDER BY ts DESC LIMIT 1), 0)");
         var invalid = Concepts(vault).Count - Corpus(vault).Count;
         var database = VaultPaths.StateDatabase();
         // Y-113: a live reachability read supersedes a stale hook-failed ledger row for the same file.
@@ -501,10 +517,8 @@ internal static class Program
                 : Observe(now, "state", "state-db", "state.db", $"{database} · {(database is not null && File.Exists(database) ? new FileInfo(database).Length : 0)} bayt"),
             Observe(now, "state", "fts5-ok", "notes_fts", $"İndekste {(state is null ? 0 : Rows(state, "notes_fts"))} not"),
             Observe(now, "notes", "corpus", "concepts", $"{Corpus(vault).Count} geçerli kavram notu"),
-            Observe(now, "runner", "backend", "flush", $"backend.flush=[{string.Join(", ", settings.Backend.Flush)}]"),
-            Observe(now, "runner", "claude-config", "isolation", settings.ClaudeConfigDirectory(vault)),
+            Observe(now, "runner", "backend", "claude", $"{settings.Backend.Claude.Fast} / {settings.Backend.Claude.Smart}"),
             Observe(now, "sweep", "roots", "sweep.roots", string.Join(" · ", settings.Sweep.Roots)),
-            Observe(now, "calls", "call-summary", "7d", $"{Count("SELECT COUNT(*) FROM calls")} çağrı kaydı"),
             Observe(now, "sweep", "flush-log", "rows", $"{flushes} flush_log satırı"),
             .. settings.UnknownKeys.Select(key => new DoctorObservation(
                 new HealthItem("config", HealthLevel.Warning, "unknown-key", key, $"oom.json içinde bilinmeyen anahtar: {key}"), now)),
@@ -515,34 +529,27 @@ internal static class Program
             .. HealthLedger.Read().Where(o => reach.Level != HealthLevel.Info || o.Item.Component != "hooks" || o.Item.Code != "hook-failed" || o.Item.Key != reach.Key)
         ];
 
+        // Coverage is no longer persisted: the `coverage` table is gone and the sweep computes its
+        // reconciliation in memory for its own summary line. Doctor reports 1.0 rather than a number
+        // read out of a table nobody writes any more.
         return new DoctorSnapshot(observations,
-            total == 0 ? 1.0 : (double)covered / total,
+            1.0,
             flushes == 0 ? 0.0 : (double)rejected / flushes,
             Pending(vault, state).Count,
             (int)Count("SELECT COUNT(*) FROM retry_queue WHERE attempts >= 5"),
             (int)Count("SELECT COUNT(*) FROM retry_queue"),
             (int)Count("SELECT COUNT(*) FROM quarantine"),
-            Math.Max(0, invalid), (int)total); // Y-118: the 7d population size doctor uses to pick uyarı vs hata.
+            Math.Max(0, invalid));
     }
 
     /// <summary>`doctor --fix` (spec 6.8): idempotent repairs of what the machine can repair alone.</summary>
     private static void Repair(string vault, OomSettings settings, State state)
     {
-        ClaudeIsolation.Prepare(settings.ClaudeConfigDirectory(vault));
-        Directory.CreateDirectory(Path.Combine(state.WorkDirectory, "backup"));
         Directory.CreateDirectory(Path.Combine(state.WorkDirectory, "logs"));
         state.SeedCursors(new SweepRun(vault, settings, MakeFlush(vault, settings, state), state).ReadAnchors());
         state.SweepRetention(Clock.Now);
         new RootMap(vault).Regenerate();
         ReportIndex(MakeRetrieve(vault, settings, settings.Retrieve.Top).Build());
-    }
-
-    /// <summary>The notification policy of spec 6.8: only these classes toast, once in seven days.</summary>
-    private static void Notify(State state, IReadOnlyList<HealthItem> loud)
-    {
-        var notifier = new WindowsNotifier(state);
-        foreach (var item in loud.Where(item => item.Level is HealthLevel.Error))
-            notifier.Send(item.Code, item.Key, item.Detail);
     }
 
     /// <summary>
@@ -666,21 +673,22 @@ internal static class Program
         IndexPath = VaultPaths.StateDatabase()
     });
 
-    private static Runner MakeRunner(string vault, OomSettings settings, State? state) => new(
-        new RunnerProfile(vault, settings.ClaudeConfigDirectory(vault), settings.Backend.Claude, settings.Backend.Local,
-            new Dictionary<ComponentKind, IReadOnlyList<string>>
-            {
-                [ComponentKind.Flush] = settings.Backend.Flush,
-                [ComponentKind.Compile] = settings.Backend.Compile
-            }),
-        state: state);
+    private static Runner MakeRunner(string vault, OomSettings settings) =>
+        new(new RunnerProfile(vault, ClaudeConfigDirectory(vault), settings.Backend.Claude));
+
+    /// <summary>
+    /// The <c>CLAUDE_CONFIG_DIR</c> the summarising child gets: the vault's own <c>.oom</c>, so the
+    /// child cannot inherit the owner's hooks, skills or plan mode (Y-011). Nothing is copied into
+    /// it — credential isolation, which used to duplicate the session credential, is gone.
+    /// </summary>
+    private static string ClaudeConfigDirectory(string vault) => Path.Combine(vault, ".oom", "claude-config");
 
     private static Flush MakeFlush(string vault, OomSettings settings, State? state)
     {
         // The rejection channel lives in the state root; the lossless raw channel stays in
         // memory here, so no run of this build duplicates a transcript onto disk.
         var options = new FlushOptions(MinTurns: settings.Sweep.MinTurns, VaultPath: vault, RejectionPath: state?.WorkDirectory);
-        return new Flush(options, null, MakeRunner(vault, settings, state), null, new WindowsNotifier(state), state);
+        return new Flush(options, null, MakeRunner(vault, settings), null, null, state);
     }
 
     /// <summary>
@@ -697,21 +705,12 @@ internal static class Program
     private static State? OpenStateForReading() => State.OpenReadOnly();
 
     /// <summary>
-    /// The stray-state-root scan, wired into the <c>doctor</c> COMMAND rather than into
-    /// <see cref="Doctor"/>'s default. <see cref="Doctor"/> keeps the scan off by default so that
-    /// constructing one in the test suite does not start opening the owner's real databases; the
-    /// shipped command is the one place that turns it on. It reports and deletes nothing: the 26
-    /// existing roots carry no descriptor and surface as <c>artık</c> or <c>sahipsiz</c>, and what
-    /// to do about them is the owner's decision on a concrete list (Y-162).
+    /// A write handle on a state database that already exists, and nothing at all when it does not.
+    /// This is what a mostly-reading command opens when it has exactly one row to remove: the write
+    /// happens, and pointing the command at an uninstalled vault still mints no state root (Y-161).
     /// </summary>
-    /// <summary>
-    /// Y-162: the scan walks every database under the state-roots folder read-only, so a test
-    /// that drives the shipped `doctor` would otherwise open the owner's real vaults -- including
-    /// one whose database is corrupt. The override is a test seam and nothing else: production
-    /// never sets it, and the folder is still derived by <see cref="VaultIdentity"/>.
-    /// </summary>
-    internal static IReadOnlyList<HealthItem> StateRootHealth() =>
-        new Doctor().StateRootItems(Environment.GetEnvironmentVariable("OOM_LOCALAPPDATA"));
+    private static State? OpenStateForUpdate() =>
+        VaultIdentity.ExistingDatabase() is { } path ? new State(null, null, path, StateAccess.ReadWrite) : null;
 
     /// <summary>A red index is computed and then thrown away unless someone prints it.</summary>
     private static void ReportIndex(VerifyResult index)
@@ -722,9 +721,14 @@ internal static class Program
                 + (index.Extra.Count > 0 ? $" · fazla: {string.Join(", ", index.Extra.Take(5))}" : string.Empty));
     }
 
+    /// <summary>
+    /// When the last compile succeeded, as far as the state file knows. The <c>compile_runs</c>
+    /// table is gone; a daily already marked <c>ingested</c> is the same evidence, read off the
+    /// table that is still written.
+    /// </summary>
     private static DateTimeOffset? LastCompile(State state)
     {
-        var last = state.Scalar("SELECT COUNT(*) FROM compile_runs WHERE status = 'ok'");
+        var last = state.Scalar("SELECT COUNT(*) FROM daily_ingest WHERE status = 'ingested'");
         return last == 0 ? null : Clock.Now.AddHours(-1);
     }
 
@@ -783,16 +787,6 @@ internal static class Program
         return [.. Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly)
             .Where(path => !ingested.Contains(Path.GetFileName(path)))
             .Order(StringComparer.Ordinal)];
-    }
-
-    /// <summary>Y-117: a daily already reflected in knowledge/ is marked "adopted" — never re-queued as if uncompiled — and distinct from "ingested" so a forced recompile can still run.</summary>
-    private static int AdoptCompiledVault(string vault, State state, DateTimeOffset now)
-    {
-        var corpus = Corpus(vault); var directory = Path.Combine(vault, "daily");
-        if (corpus.Count == 0 || !Directory.Exists(directory)) return 0;
-        var stamp = corpus.Max(note => note.Updated > note.Created ? note.Updated : note.Created); var due = Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly).Where(path => DateOnly.TryParseExact(Path.GetFileNameWithoutExtension(path), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date) && date <= stamp).ToArray();
-        foreach (var path in due) state.WriteDailyIngest(Path.GetFileName(path), "adopted", now);
-        state.WriteVaultStamp(state.VaultInstalledAt()); return due.Length; // Y-118: persists the real fallback stamp, never "now", so hours of already-genuine vault activity are not mislabeled archive.
     }
 
     private static string ReadIfPresent(string path) => File.Exists(path) ? File.ReadAllText(path, Utf8) : string.Empty;
@@ -893,24 +887,18 @@ internal static class Program
             Kullanım: oom [--vault <yol>] <komut> [seçenekler]
 
               context [--json]                  Oturum başlangıcı bağlam bloğunu basar
-              retrieve --hook | --query <soru> [--json] [--top N] [--batch <dosya>]
+              retrieve --query <soru> [--json] [--top N] [--batch <dosya>]
+                                                İstek üzerine hafıza getirir
+              nudge [--session <id>]            UserPromptSubmit kancası: mesaj sayar, hatırlatır
               flush [--session <id>] [--reason]  Bir oturumu özetler (kancadan ayrık koşar)
               sweep [--dry-run]                 Asıl yazma yolu: taramayı koşar
               compile [--dry-run]               Daily'leri kavram notlarına derler
-              ingest claude|codex [--max N]     Arşivi geri doldurur
               doctor [--fix] [--json] [--quiet] Sağlık ve onarım
               save "<metin>" | --session-json   Daily'ye doğrudan kayıt
               mcp                               Salt okunur MCP sunucusu (stdio JSON-RPC)
-              install [--uninstall] [--from-v0] [--dry-run] [--adopt] [--user-scope]
-                                                Kurulum, göç, zaten derlenmiş vault'u benimseme.
-                                                Varsayılan kapsam PROJE: yalnız vault'un içine yazar.
-                                                --user-scope makine geneli tekil kayıtları da yazar
-                                                (ortak settings.json, Claude Desktop MCP, zamanlanmış
-                                                görev, kısayol/AUMID, Event Log) — ikinci bir vault
-                                                kurulunca bunlar birbirini ezer.
-              bench [--backend claude|local] [--transcripts N] [--dailies N]
-                    [--transcript-dir <yol>] [--daily-dir <yol>] [--out <dosya>] [--judge] [--dry-run]
-                                                Spec 6.12 ölçümü; sonuç bench/results/<tarih>.json
+              install [--uninstall]             Proje kapsamı kurulum: <vault>\.oom\ dosyaları ve
+                                                <vault>\.claude\settings.json içindeki dört kanca.
+                                                Makine geneli hiçbir kayıt yazılmaz.
             """);
     }
 }

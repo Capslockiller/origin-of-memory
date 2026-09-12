@@ -15,8 +15,3 @@ jobs:
       - run: dotnet restore Oom.sln
       - run: dotnet build Oom.sln --no-restore -c Release
       - run: dotnet test Oom.sln --no-build -c Release
-      # The product ships as one self-contained win-x64 executable; a solution that builds
-      # and tests but cannot publish is not a releasable candidate (Astra, dalga 1 / INT-1).
-      - run: dotnet publish src/Oom/Oom.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
-      - run: if (-not (Test-Path publish/oom.exe)) { throw "publish produced no oom.exe" }
-        shell: pwsh

@@ -10,52 +10,10 @@ public sealed record RetrieveOptions(
     int Top = 3,
     int PerNoteChars = 1500,
     int TotalChars = 4500,
-    int MinOverlap = 3,
-    double StrictScore = 1.0,
-    int MinPromptChars = 12,
-    int DedupeDays = 7,
     string? VaultPath = null,
     string? IndexPath = null,
     string CompanionDir = "🔮 850-Companion",
-    double CorrectionBoost = 4.0,
-    string Client = "claude");
-
-/// <summary>
-/// The scope one served note is remembered under. Every component is a discriminator that must be
-/// able to let memory through again:
-/// <list type="bullet">
-/// <item><c>Vault</c> — two vaults on one machine share <c>%LOCALAPPDATA%</c>, never a silence.</item>
-/// <item><c>Client</c> and <c>Entry</c> — Claude having been shown a note is not Codex having been
-/// shown it, and the CLI's <c>--json</c> output is not the hook's injection.</item>
-/// <item><c>SessionId</c> — <b>this is what keeps a seven-day silence from spreading.</b> The window
-/// is seven days long, so without the session in the key one delivery on Monday would withhold that
-/// note from every new conversation until the following Monday. A new session has never been told
-/// anything; it starts with the whole vault available to it.</item>
-/// <item><c>Signature</c> — a different question in the same session sees the same note again
-/// (Y-039). The plan for this table named vault+client+session+note+hash and left this out; Y-039
-/// is a live scar over exactly that, so the signature stays in the key.</item>
-/// <item><c>ContentHash</c> — the hash of the text that was actually rendered. A note whose body has
-/// been rewritten is new memory, not a repeat, and is served again even to the same question.</item>
-/// </list>
-/// </summary>
-internal sealed record ServedKey(string Vault, string Client, string Entry, string SessionId, string Signature, string Note, string ContentHash);
-
-/// <summary>
-/// What is known about one served note's fate. The three are not decoration: a hook event is a whole
-/// process lifetime, and the process can die between rendering a block and the block reaching the
-/// model.
-/// </summary>
-public enum ServedStatus
-{
-    /// <summary>The block was built and handed to the caller. Nobody has said it left the process.</summary>
-    Prepared,
-
-    /// <summary>The caller acknowledged that the block actually left the process (<see cref="Retrieve.AcknowledgeDelivery"/>).</summary>
-    Emitted,
-
-    /// <summary>A <see cref="Prepared"/> row whose process is gone without ever acknowledging. Not a delivery.</summary>
-    Uncertain
-}
+    double CorrectionBoost = 4.0);
 
 /// <summary>
 /// Corpus statistics for one query, on the axis SQLite's <c>bm25()</c> uses: one row count, one
@@ -91,36 +49,9 @@ public sealed class Retrieve
         "bunu", "şunu", "bana", "sana", "olan", "olarak", "sonra", "önce", "bugün", "yani"
     ];
 
-    private static readonly string[] ChatPhrases =
-    [
-        "nasılsın", "merhaba", "selam", "günaydın", "iyi geceler", "teşekkür", "sağol",
-        "soru sorma", "dur bana", "boş ver", "yeter artık", "naber"
-    ];
-
-    private static readonly string[] ToolVerbs =
-    [
-        "çalıştır", "düzenle", "yaz", "sil", "oku", "aç", "kur", "derle", "commit", "run",
-        "edit", "write", "delete", "read", "open", "install", "build", "fix", "refactor", "git"
-    ];
-
-    private static readonly string[] EnvelopeMarkers = ["<task-notification", "<system-reminder", "<local-command"];
-
     private static readonly (string Field, double Weight)[] Weights =
         [("title", TitleWeight), ("aliases", AliasWeight), ("tags", TagWeight), ("body", BodyWeight)];
 
-    /// <summary>
-    /// What this instance has already handed to its caller. Instance-scoped, not static, because in
-    /// production one process is one <see cref="Retrieve"/> and one hook event — a static dictionary
-    /// was a per-process cache pretending to be a seven-day ledger, and it died with the executable
-    /// after every single hook event, which is why nothing was ever actually de-duplicated.
-    /// Suppressing on this layer is honest: the block was returned to the caller, we watched it
-    /// happen. Across a process boundary nothing was watched, which is what
-    /// <see cref="ServedLedger"/> is careful about.
-    /// </summary>
-    private readonly Dictionary<ServedKey, DateTimeOffset> _served = [];
-
-    /// <summary>Keys this instance wrote as <see cref="ServedStatus.Prepared"/> and has not acknowledged.</summary>
-    private readonly List<ServedKey> _prepared = [];
     private static readonly UTF8Encoding Utf8 = new(false);
     private readonly RetrieveOptions _options;
     private readonly TurkishFold _fold;
@@ -128,12 +59,11 @@ public sealed class Retrieve
     private readonly IClock _clock;
     private IReadOnlyList<Note>? _corpus;
     private Dictionary<string, Dictionary<string, string[]>>? _fields;
-    private Dictionary<string, HashSet<string>>? _surfaces;
     private HashSet<string>? _retired;
     private bool? _indexUsable;
 
     /// <summary>
-    /// Where the candidates of the last <see cref="Query"/> or <see cref="Hook"/> came from:
+    /// Where the candidates of the last <see cref="Query"/> came from:
     /// <c>fts</c> when the FTS5 index generated them, <c>corpus-scan:*</c> when it could not and the
     /// file scan did, with the reason attached. A retrieval path may fall back silently — a broken
     /// index must never stop answering — but it may not be *unobservable*, or the next measurement
@@ -244,22 +174,50 @@ public sealed class Retrieve
         if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
             return null;
 
-        return StateStore.Open(path, StateAccess.ReadWrite).Connection;
+        return StateStore.Open(path, StateAccess.ReadWrite);
     }
 
     private SqliteConnection? OpenIndexForWrite() => OpenIndexForWriteAt(IndexFile());
 
-    /// <summary>Raw ranking entry point (CLI <c>--json</c>, MCP); the hook gate does not apply here.</summary>
+    /// <summary>
+    /// The one retrieval entry point: ranked, budgeted, rendered. It is asked on demand — by the
+    /// CLI, by <c>mcp</c>, by the assistant when it decides it needs memory — and never by a hook
+    /// that guesses on the owner's behalf.
+    /// </summary>
     public RetrieveResult Query(string query, string sessionId, int top = 3)
     {
-        var hits = Filter(Search(query, top), "query", query, sessionId);
+        _ = sessionId;
+        var hits = Budget(Search(query, top));
         return new RetrieveResult(hits, Render(hits), 0);
     }
 
     /// <summary>
-    /// The single search path. <see cref="Query"/> (CLI <c>--json</c> and MCP) and <see cref="Hook"/>
-    /// both come through here, so candidate generation cannot differ between the two entry points
-    /// the way the output contract once did (Y-038).
+    /// The per-note and total character budgets of spec 6.4, applied to a ranked list. A concept
+    /// the hand layer has retired is dropped here rather than in the ranker, so its score is still
+    /// computed and comparable (Y-035).
+    /// </summary>
+    private IReadOnlyList<SearchHit> Budget(IReadOnlyList<SearchHit> hits)
+    {
+        var kept = new List<SearchHit>();
+        var total = 0;
+        foreach (var hit in hits)
+        {
+            if (hit.Superseded)
+                continue;
+
+            var text = Trim(hit.Text, Math.Min(_options.PerNoteChars, Math.Max(0, _options.TotalChars - total)));
+            if (text.Length == 0)
+                break;
+
+            total += text.Length;
+            kept.Add(hit with { Text = text });
+        }
+
+        return kept;
+    }
+
+    /// <summary>
+    /// The single search path.
     ///
     /// Candidates come from the FTS5 index — <see cref="Candidates"/>, which until now had no caller
     /// outside the scar suite — whenever the index is present and its manifest still describes the
@@ -332,24 +290,6 @@ public sealed class Retrieve
         }
     }
 
-    /// <summary>
-    /// The hook entry point. Same renderer as <see cref="Query"/>; the difference is the gate in
-    /// front of it, never a second output contract (Y-038).
-    /// </summary>
-    public RetrieveResult Hook(string prompt, string sessionId, IReadOnlyDictionary<string, string>? environment = null)
-    {
-        var invokedBy = environment is not null && environment.TryGetValue("OOM_INVOKED_BY", out var value)
-            ? value
-            : Environment.GetEnvironmentVariable("OOM_INVOKED_BY");
-
-        if (!string.IsNullOrEmpty(invokedBy) || GateReason(prompt) is not null)
-            return new RetrieveResult([], string.Empty, 0);
-
-        var kept = Search(prompt, _options.Top).Where(hit => ShouldInject(prompt, hit)).ToList();
-        var hits = Filter(kept, "hook", prompt, sessionId);
-        return new RetrieveResult(hits, Render(hits), 0);
-    }
-
     /// <summary>Field-weighted BM25; the weights are the ones the index carries (Y-040, Y-041).</summary>
     public IReadOnlyList<SearchHit> Rank(string query, IReadOnlyList<Note> notes, string mode = "bm25")
     {
@@ -399,174 +339,6 @@ public sealed class Retrieve
         return hits.OrderByDescending(hit => hit.Score).ThenBy(hit => hit.Name, StringComparer.Ordinal).ToList();
     }
 
-    /// <summary>
-    /// The intent gate decides independently of topic overlap: a chat or stop sentence produces no
-    /// injection even when a topic-matching note exists (Y-043).
-    /// </summary>
-    public bool ShouldInject(string prompt, SearchHit hit)
-    {
-        if (GateReason(prompt) is not null)
-            return false;
-
-        var terms = QueryTerms(prompt);
-        if (terms.Length == 0)
-            return false;
-
-        // `strictScore` is a per-term mean, not the raw sum. The sum grows with the length of the
-        // prompt, so one constant over it binds on short prompts and never on long ones; at 25.0
-        // against sums that ran 60-300 it never bound at all and every candidate was injected.
-        // yazan: codex · gpt-6
-        // Y-110: calibrate the gate at the 542-document gate-5 reference corpus. In a small
-        // topic slice, common query terms reach floor IDF and depress the mean even when
-        // the first hit identifies the answer. Scale only the gate, capped at the configured
-        // threshold; ranking, identity overlap and the caller's strictness remain intact.
-        var corpusScale = Math.Min(1.0, Math.Max(1, LoadCorpus().Count) / 542.0);
-        if (hit.Score / terms.Length < _options.StrictScore * corpusScale)
-            return false;
-
-        var surface = GateSurface(hit.Name);
-        return ContentWords(prompt).Count(word => surface.Contains(word)) >= _options.MinOverlap;
-    }
-
-    /// <summary>
-    /// The note's identity fields — slug, title, aliases, tags — which is where spec 6.4 puts the
-    /// overlap test. The old gate ran it over <c>hit.Text</c>, and a 1500 character body shares two
-    /// content words with very nearly any prompt, so the test passed 5 of 5 no-answer canaries. The
-    /// slug is carried alongside the title because it is the ASCII fold of it, and a prompt typed
-    /// without Turkish diacritics only ever matches that form.
-    /// </summary>
-    private HashSet<string> GateSurface(string name)
-    {
-        _surfaces ??= LoadCorpus().ToDictionary(note => note.Name, Surface, StringComparer.Ordinal);
-
-        // A hit that is not a corpus note — a synthetic one in a scar test — still gets its name.
-        return _surfaces.TryGetValue(name, out var surface) ? surface : Surface(name);
-    }
-
-    private HashSet<string> Surface(Note note) =>
-        Tokenize($"{Slug(note.Name)} {note.Title} {string.Join(' ', note.Aliases)} {string.Join(' ', note.Tags)}")
-            .ToHashSet(StringComparer.Ordinal);
-
-    private HashSet<string> Surface(string name) => Tokenize(Slug(name)).ToHashSet(StringComparer.Ordinal);
-
-    private static string Slug(string name) => Path.GetFileNameWithoutExtension(name).Replace('-', ' ');
-
-    /// <summary>Why the hook stays silent, or <c>null</c> when the prompt may be served.</summary>
-    internal string? GateReason(string prompt)
-    {
-        var text = (prompt ?? string.Empty).Trim();
-        if (text.Length < _options.MinPromptChars)
-            return "skip:short";
-
-        if (text.StartsWith('/'))
-            return "skip:slash";
-
-        if (text.Contains("```", StringComparison.Ordinal) || text.StartsWith('<')
-            || EnvelopeMarkers.Any(marker => text.Contains(marker, StringComparison.OrdinalIgnoreCase)))
-            return "skip:intent";
-
-        // The gate runs before any tokenisation: it is an intent decision, not a ranking one.
-        if (ChatPhrases.Any(phrase => text.Contains(phrase, StringComparison.OrdinalIgnoreCase)))
-            return "skip:intent";
-
-        var words = text.Split([' ', '\t', '\n'], StringSplitOptions.RemoveEmptyEntries);
-        if (words.Length > 0 && ToolVerbs.Contains(words[0].Trim(',', '.', ':'), StringComparer.OrdinalIgnoreCase))
-            return "skip:intent";
-
-        var pathy = words.Count(IsPathToken);
-        return words.Length > 0 && pathy * 2 >= words.Length ? "skip:intent" : null;
-    }
-
-    /// <summary>
-    /// The served-note gate. Two layers, and the difference between them is the whole point:
-    /// <list type="bullet">
-    /// <item><b>this process</b> — <see cref="_served"/>. The block was returned to the caller in
-    /// front of us, so a repeat inside one process is a repeat (Y-039, Y-110).</item>
-    /// <item><b>earlier processes</b> — <see cref="ServedLedger"/>, and only rows it can show were
-    /// <see cref="ServedStatus.Emitted"/>. A row left <see cref="ServedStatus.Prepared"/> by a
-    /// process that is gone becomes <see cref="ServedStatus.Uncertain"/> and suppresses nothing: an
-    /// unacknowledged delivery is not a delivery, and treating it as one withholds the owner's
-    /// memory on the strength of something nobody observed.</item>
-    /// </list>
-    /// </summary>
-    private IReadOnlyList<SearchHit> Filter(IReadOnlyList<SearchHit> hits, string entry, string query, string sessionId)
-    {
-        if (hits.Count == 0)
-            return hits;
-
-        var signature = Signature(query);
-        var now = _clock.Now;
-        var cutoff = now.AddDays(-_options.DedupeDays);
-        var kept = new List<SearchHit>();
-        var total = 0;
-
-        using var ledger = ServedLedger.Open(IndexFile());
-        ledger?.Prune(cutoff);
-        foreach (var stale in _served.Where(pair => pair.Value < cutoff).Select(pair => pair.Key).ToArray())
-            _served.Remove(stale);
-
-        foreach (var hit in hits)
-        {
-            if (hit.Superseded)
-                continue;
-
-            var text = Trim(hit.Text, Math.Min(_options.PerNoteChars, Math.Max(0, _options.TotalChars - total)));
-            if (text.Length == 0)
-                break;
-
-            var key = new ServedKey(VaultScope, ClientScope, entry, sessionId, signature, hit.Name, ContentHash(text));
-            if (_served.ContainsKey(key) || ledger?.WasEmitted(key, cutoff) == true)
-                continue;
-
-            total += text.Length;
-            _served[key] = now;
-            if (ledger?.Prepare(key, now) == true)
-                _prepared.Add(key);
-
-            kept.Add(hit with { Text = text });
-        }
-
-        return kept;
-    }
-
-    /// <summary>
-    /// Records that everything this instance prepared actually left the process, and returns how many
-    /// rows that was. Until this is called the rows say <see cref="ServedStatus.Prepared"/>, and the
-    /// next process reads them as <see cref="ServedStatus.Uncertain"/> — so a run that renders a
-    /// memory block and then dies, or is killed, or has its stdout discarded, withholds nothing from
-    /// the next one.
-    /// </summary>
-    /// <remarks>
-    /// This is the acknowledgement half of the contract and it currently has no caller in
-    /// <c>src/</c>: the one place that knows the block reached stdout is <c>Program.cs</c>, which
-    /// this lane may not edit. Until that single line exists, every persisted row ages into
-    /// <see cref="ServedStatus.Uncertain"/> and the cross-process dedupe deliberately suppresses
-    /// nothing — memory is repeated rather than silently withheld, which is the correct direction to
-    /// fail in.
-    /// </remarks>
-    public int AcknowledgeDelivery()
-    {
-        if (_prepared.Count == 0)
-            return 0;
-
-        using var ledger = ServedLedger.Open(IndexFile());
-        var acknowledged = ledger?.Acknowledge(_prepared, _clock.Now) ?? 0;
-        _prepared.Clear();
-        return acknowledged;
-    }
-
-    /// <summary>Which vault a served note belongs to; two vaults on one machine never share a silence.</summary>
-    private string VaultScope => _options.VaultPath is { Length: > 0 } vault ? VaultIdentity.Hash(VaultIdentity.Canonical(vault)) : string.Empty;
-
-    /// <summary>Which assistant was served. <c>OOM_CLIENT</c> lets a second client say so without a rebuild.</summary>
-    private string ClientScope =>
-        Environment.GetEnvironmentVariable("OOM_CLIENT") is { Length: > 0 } client
-            ? client
-            : _options.Client is { Length: > 0 } configured ? configured : "claude";
-
-    /// <summary>The hash of the text that was actually rendered, not of the note it came from.</summary>
-    private static string ContentHash(string text) => Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(text)))[..16];
-
     private string Render(IReadOnlyList<SearchHit> hits)
     {
         var builder = new StringBuilder();
@@ -597,7 +369,6 @@ public sealed class Retrieve
         {
             _corpus = null;
             _fields = null;
-            _surfaces = null;
             _retired = null;
             _indexUsable = null;
         }
@@ -741,13 +512,7 @@ public sealed class Retrieve
         return content.Length > 0 ? content : Tokenize(query).Distinct().ToArray();
     }
 
-    private string[] ContentWords(string text) =>
-        Tokenize(text).Where(word => word.Length >= 4 && !Stopwords.Contains(word, StringComparer.Ordinal)).Distinct().ToArray();
-
     private IReadOnlyList<string> Tokenize(string text) => _fold.Tokenize(text ?? string.Empty);
-
-    private string Signature(string query) =>
-        Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(string.Join(' ', Tokenize(query).OrderBy(x => x, StringComparer.Ordinal)))))[..16];
 
     private string? IndexFile() => _options.IndexPath;
 
@@ -800,8 +565,6 @@ public sealed class Retrieve
         command.ExecuteNonQuery();
     }
 
-    private static bool IsPathToken(string word) =>
-        word.Contains('\\') || (word.Contains('/') && word.Contains('.')) || word.Contains(":\\", StringComparison.Ordinal);
 
     private static string Trim(string text, int limit)
     {
@@ -880,157 +643,6 @@ public sealed class Retrieve
             names.Add(reader.GetString(0));
 
         return names;
-    }
-}
-
-/// <summary>
-/// The served-note ledger, on disk, in <c>retrieve_served</c>. It exists because production spawns a
-/// fresh <c>oom.exe</c> for every hook event: an in-memory dictionary is emptied between one prompt
-/// and the next, so the seven-day dedupe the spec describes had never de-duplicated anything.
-///
-/// It never creates a file. A vault that has not been installed has no state root, and a retrieval
-/// must not be the thing that mints one (Y-161..Y-163); with no ledger the dedupe simply falls back
-/// to the process-local layer, which is what the old code had everywhere.
-/// </summary>
-internal sealed class ServedLedger : IDisposable
-{
-    private readonly SqliteConnection _connection;
-    private readonly int _pid = Environment.ProcessId;
-
-    private ServedLedger(SqliteConnection connection) => _connection = connection;
-
-    internal static ServedLedger? Open(string? path)
-    {
-        if (path is null || !File.Exists(path))
-            return null;
-
-        SqliteConnection? connection = null;
-        try
-        {
-            connection = new SqliteConnection($"Data Source={path}");
-            connection.Open();
-
-            // A hook event can land while `oom sweep` holds the write handle. Wait rather than
-            // fail: the dedupe degrading to silence is a repeated note, which is recoverable; the
-            // dedupe throwing is a hook that returns nothing, which is not.
-            using (var busy = connection.CreateCommand())
-            {
-                busy.CommandText = "PRAGMA busy_timeout=5000;";
-                busy.ExecuteNonQuery();
-            }
-
-            if (!StateStore.TableExists(connection, "retrieve_served") || !ColumnExists(connection, "status"))
-            {
-                connection.Dispose();
-                return null;
-            }
-
-            var ledger = new ServedLedger(connection);
-            ledger.Reclassify();
-            return ledger;
-        }
-        catch (SqliteException)
-        {
-            // A locked or damaged state database must degrade the dedupe, never the answer.
-            connection?.Dispose();
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Every row another process left <see cref="ServedStatus.Prepared"/> becomes
-    /// <see cref="ServedStatus.Uncertain"/> the moment this process opens the ledger. Nobody
-    /// acknowledged those blocks and nobody ever will; the table says so out loud rather than
-    /// letting them read as deliveries.
-    /// </summary>
-    private void Reclassify() => Execute(
-        "UPDATE retrieve_served SET status = $uncertain WHERE status = $prepared AND pid <> $pid",
-        ("$uncertain", Name(ServedStatus.Uncertain)), ("$prepared", Name(ServedStatus.Prepared)), ("$pid", _pid));
-
-    /// <summary>Whether this exact scope was acknowledged as delivered inside the window.</summary>
-    internal bool WasEmitted(ServedKey key, DateTimeOffset cutoff)
-    {
-        using var command = Command(
-            "SELECT 1 FROM retrieve_served WHERE status = $emitted AND ts >= $cutoff AND " +
-            "vault = $vault AND client = $client AND entry = $entry AND session_id = $session AND " +
-            "query_sig = $sig AND note = $note AND content_hash = $hash",
-            [("$emitted", Name(ServedStatus.Emitted)), ("$cutoff", Stamp(cutoff)), .. Scope(key)]);
-        return command.ExecuteScalar() is not null;
-    }
-
-    /// <summary>Records the block as built but unacknowledged. Returns whether the row was written.</summary>
-    internal bool Prepare(ServedKey key, DateTimeOffset now)
-    {
-        try
-        {
-            using var command = Command(
-                "INSERT INTO retrieve_served(vault, client, entry, session_id, query_sig, note, content_hash, ts, status, pid, acked_ts) " +
-                "VALUES($vault, $client, $entry, $session, $sig, $note, $hash, $ts, $prepared, $pid, NULL) " +
-                "ON CONFLICT(vault, client, entry, session_id, query_sig, note, content_hash) DO UPDATE SET " +
-                "ts = $ts, status = $prepared, pid = $pid, acked_ts = NULL",
-                [("$ts", Stamp(now)), ("$prepared", Name(ServedStatus.Prepared)), ("$pid", _pid), .. Scope(key)]);
-            return command.ExecuteNonQuery() > 0;
-        }
-        catch (SqliteException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>Turns this process's own prepared rows into acknowledged deliveries.</summary>
-    internal int Acknowledge(IReadOnlyList<ServedKey> keys, DateTimeOffset now)
-    {
-        var acknowledged = 0;
-        foreach (var key in keys)
-        {
-            using var command = Command(
-                "UPDATE retrieve_served SET status = $emitted, acked_ts = $ts WHERE pid = $pid AND status = $prepared AND " +
-                "vault = $vault AND client = $client AND entry = $entry AND session_id = $session AND " +
-                "query_sig = $sig AND note = $note AND content_hash = $hash",
-                [("$emitted", Name(ServedStatus.Emitted)), ("$prepared", Name(ServedStatus.Prepared)), ("$ts", Stamp(now)), ("$pid", _pid), .. Scope(key)]);
-            acknowledged += command.ExecuteNonQuery();
-        }
-
-        return acknowledged;
-    }
-
-    /// <summary>The seven-day window, applied where the rows are; <c>State.SweepRetention</c> prunes the same table.</summary>
-    internal void Prune(DateTimeOffset cutoff) =>
-        Execute("DELETE FROM retrieve_served WHERE ts < $cutoff", ("$cutoff", Stamp(cutoff)));
-
-    public void Dispose() => _connection.Dispose();
-
-    private static (string Name, object Value)[] Scope(ServedKey key) =>
-    [
-        ("$vault", key.Vault), ("$client", key.Client), ("$entry", key.Entry), ("$session", key.SessionId),
-        ("$sig", key.Signature), ("$note", key.Note), ("$hash", key.ContentHash)
-    ];
-
-    private static bool ColumnExists(SqliteConnection connection, string column)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM pragma_table_info('retrieve_served') WHERE name = $name";
-        command.Parameters.AddWithValue("$name", column);
-        return command.ExecuteScalar() is not null;
-    }
-
-    internal static string Name(ServedStatus status) => status.ToString().ToLowerInvariant();
-
-    private static string Stamp(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
-
-    private void Execute(string sql, params (string Name, object Value)[] parameters)
-    {
-        using var command = Command(sql, parameters);
-        command.ExecuteNonQuery();
-    }
-
-    private SqliteCommand Command(string sql, (string Name, object Value)[] parameters)
-    {
-        var command = _connection.CreateCommand();
-        command.CommandText = sql;
-        foreach (var (name, value) in parameters)
-            command.Parameters.AddWithValue(name, value);
-        return command;
     }
 }
 

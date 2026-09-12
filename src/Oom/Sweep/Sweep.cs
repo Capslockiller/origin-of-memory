@@ -126,39 +126,6 @@ public sealed class Sweep
             : new FreshnessResult(true, 0);
     }
 
-    /// <summary>
-    /// Task Scheduler registration for <c>schtasks /Create /XML</c>: no duration element anywhere,
-    /// eight-hourly, run-if-missed, thirty-minute limit (Y-009, D4).
-    /// </summary>
-    public string BuildScheduledTaskXml(string executablePath) => $"""
-        <?xml version="1.0" encoding="UTF-16"?>
-        <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-          <RegistrationInfo><Author>oom</Author><Description>OdenaOS bellek taraması</Description></RegistrationInfo>
-          <Triggers>
-            <CalendarTrigger>
-              <StartBoundary>2026-01-01T06:00:00</StartBoundary>
-              <Enabled>true</Enabled>
-              <Repetition><Interval>PT8H</Interval></Repetition>
-              <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
-            </CalendarTrigger>
-          </Triggers>
-          <Principals>
-            <Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>
-          </Principals>
-          <Settings>
-            <StartWhenAvailable>true</StartWhenAvailable>
-            <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-            <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-            <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
-            <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-            <Priority>7</Priority>
-          </Settings>
-          <Actions Context="Author">
-            <Exec><Command>{Escape(executablePath)}</Command><Arguments>sweep</Arguments></Exec>
-          </Actions>
-        </Task>
-        """;
-
     /// <summary>Sessions stamped in this process; the durable store is <c>sweep_stamps</c>.</summary>
     private static readonly ConcurrentDictionary<string, byte> StampedSessions = new(StringComparer.Ordinal);
 
@@ -168,7 +135,4 @@ public sealed class Sweep
     private static string TranscriptPathOf(Session session) => $"{session.Id}.jsonl";
 
     private static string SourceOf(string path) => SourceClassifier.FromPath(path);
-
-    private static string Escape(string value) =>
-        value.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 }

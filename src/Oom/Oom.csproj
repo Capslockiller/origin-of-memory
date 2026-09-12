@@ -5,13 +5,10 @@
     <AssemblyName>oom</AssemblyName>
     <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <!-- D1: .NET 10 LTS hedef; SDK kurulunca tek satir degisir -->
-    <PublishSingleFile>true</PublishSingleFile>
-    <!-- Y-100: without this the SQLite native library stays beside the exe, and the installer,
-         which copies the running file alone, produced a vault copy that died with
-         DllNotFoundException on a clean Windows. -->
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- No single-file, self-contained or trimmed publish. The installer that copied the running
+         executable into the vault is gone, so the one thing those properties bought — an exe that
+         survived being copied away from its runtime — is no longer needed. Plain `dotnet build`
+         output is the deliverable. -->
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -21,7 +18,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Y-116: lets the scar suite call Bench's internal exclusion counters directly, no copy of the rule. -->
+    <!-- Lets the scar suite reach internal seams (the transcript parsers, Retrieve.CandidateSource)
+         directly, without a second copy of the rule living in the test. -->
     <InternalsVisibleTo Include="Oom.Tests" />
   </ItemGroup>
 

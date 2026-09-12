@@ -12,10 +12,16 @@ public sealed record HookRegistration(string Event, string Command, int TimeoutS
 public static class HookTemplates
 {
     /// <summary>Builds the four registrations with an absolute exe path; no PowerShell, no Python.</summary>
+    /// <remarks>
+    /// UserPromptSubmit runs <c>nudge</c>, not <c>retrieve --hook</c>. Hook-time injection guessed
+    /// at every prompt whether the owner wanted memory and answered with a gate nobody could see;
+    /// retrieval is on demand now, and the prompt hook does the one thing a prompt hook is actually
+    /// good for — counting, and reminding.
+    /// </remarks>
     public static IReadOnlyList<HookRegistration> Build(string executablePath) =>
     [
         new("SessionStart", Quote(executablePath) + " context", 15),
-        new("UserPromptSubmit", Quote(executablePath) + " retrieve --hook", 5),
+        new("UserPromptSubmit", Quote(executablePath) + " nudge", 5),
         new("SessionEnd", Quote(executablePath) + " flush --reason sessionend", 15),
         new("PreCompact", Quote(executablePath) + " flush --reason precompact", 15)
     ];

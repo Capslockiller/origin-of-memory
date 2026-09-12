@@ -148,19 +148,15 @@ public sealed class SweepRun
         var queued = dryRun ? 0 : DrainQueue(now, budget - results.Count, results, ref covered, uncovered);
         var dailies = results.Where(entry => entry.DailyPath is not null).Select(entry => entry.DailyPath!).Distinct().ToArray();
         var total = covered + uncovered.Count;
-        var since = _state?.VaultInstalledAt() ?? DateTimeOffset.MinValue; // Y-118: a file older than the vault is archive, not a miss.
-        var window = Coverage(candidates, uncovered, now, since, sevenDay: true);
-        var allTime = Coverage(candidates, uncovered, now, since, sevenDay: false);
+        var window = Coverage(candidates, uncovered, now);
         var summary = $"tarama: {candidates.Count} dosya, {changed} değişmiş, {results.Count} oturum, {queued} kuyruk, {covered}/{total} kapsandı, {skipped} atlandı";
 
         if (!dryRun && _state is not null)
         {
-            _state.RecordCoverage(now, window.Total, window.Covered, window.Uncovered);
             _state.RecordFlush(now, "sweep", "sweep", "summary", results.Count, characters, "sweep");
             _state.WriteHealthConcurrently([
                 new HealthItem("sweep", HealthLevel.Info, "sweep-summary", "son koşum", summary),
-                new HealthItem("sweep", HealthLevel.Info, "kapsama-tum-zamanlar", "tüm zamanlar", $"Tüm zamanlar kapsama: {allTime.Covered}/{allTime.Total} — arşiv geri alımı ilerledikçe kapanır."),
-                new HealthItem("sweep", HealthLevel.Info, "arsiv", "vault-oncesi", $"Vault öncesi arşiv: {candidates.Count(c => c.ModifiedAt < since)} dosya — kapsamaya girmez (bilgi).")]);
+                new HealthItem("sweep", HealthLevel.Info, "kapsama", "7g", $"Son 7 gün kapsama: {window.Covered}/{window.Total}")]);
             _state.SweepRetention(now);
         }
 
@@ -168,14 +164,17 @@ public sealed class SweepRun
             new SweepResult(total, covered, uncovered, skipped, results), dailies, summary);
     }
 
-    /// <summary>The coverage window of spec 6.8, now the vault's own (Y-118): a candidate older than
-    /// <paramref name="since"/> — the vault's install/adoption stamp — is archive, not a miss; <paramref name="sevenDay"/> narrows the population further to the last seven days.</summary>
-    private static (int Total, int Covered, IReadOnlyList<string> Uncovered) Coverage(IReadOnlyList<SweepCandidate> candidates, IReadOnlyList<string> uncovered, DateTimeOffset now, DateTimeOffset since, bool sevenDay)
+    /// <summary>
+    /// The coverage window of spec 6.8, computed in memory for the summary line alone. It is no
+    /// longer persisted: the <c>coverage</c> table is gone, and a reconciliation that is only ever
+    /// read back to print one percentage does not need a table to live in.
+    /// </summary>
+    private static (int Total, int Covered) Coverage(IReadOnlyList<SweepCandidate> candidates, IReadOnlyList<string> uncovered, DateTimeOffset now)
     {
-        var recent = candidates.Where(candidate => candidate.ModifiedAt >= since && (!sevenDay || now - candidate.ModifiedAt <= TimeSpan.FromDays(CoverageWindowDays)))
+        var recent = candidates.Where(candidate => now - candidate.ModifiedAt <= TimeSpan.FromDays(CoverageWindowDays))
             .Select(candidate => candidate.SessionId).ToHashSet(StringComparer.Ordinal);
-        var missed = uncovered.Where(recent.Contains).Distinct(StringComparer.Ordinal).ToArray();
-        return (recent.Count, recent.Count - missed.Length, missed);
+        var missed = uncovered.Where(recent.Contains).Distinct(StringComparer.Ordinal).Count();
+        return (recent.Count, recent.Count - missed);
     }
 
     /// <summary>Each daily anchor is a durable cursor: <c>turns:a-b</c> says b was already summarised.</summary>

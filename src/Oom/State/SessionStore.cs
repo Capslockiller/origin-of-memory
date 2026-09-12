@@ -102,18 +102,54 @@ public sealed partial class State
             WriteSessionRow(sessionId, null, cursor);
     }
 
-    /// <summary>The last quota sample sweep took; <c>context</c> prints it without measuring (spec 6.2).</summary>
-    public string? ReadStatusLine(DateTimeOffset now)
+    /// <summary>
+    /// One more prompt seen in this session, and the running total after it. The session row is
+    /// created on the first prompt, so <c>first_seen</c> is the moment this conversation started
+    /// talking — which is what the sessionend reflection check compares Last-Session.md against.
+    /// </summary>
+    public int CountPrompt(string sessionId, DateTimeOffset now)
     {
-        var calls = Scalar($"SELECT COUNT(*) FROM calls WHERE ts >= '{Stamp(now.AddDays(-7))}'");
+        Write("INSERT INTO sessions(session_id, last_turn_index, prompt_count, first_seen) VALUES ($id, -1, 1, $ts) " +
+              "ON CONFLICT(session_id) DO UPDATE SET prompt_count = prompt_count + 1, first_seen = COALESCE(first_seen, $ts)",
+            ("$id", sessionId), ("$ts", Stamp(now)));
+        return (int)ScalarFor("SELECT prompt_count FROM sessions WHERE session_id = $id", sessionId);
+    }
+
+    /// <summary>What <c>nudge</c> counted for this session and when it first spoke; zero and <c>null</c> when unseen.</summary>
+    public (int PromptCount, DateTimeOffset? FirstSeen) ReadSessionActivity(string sessionId)
+    {
         lock (_gate)
         {
-            using var command = Command("SELECT used_pct, \"window\" FROM kota ORDER BY ts DESC LIMIT 1", []);
+            using var command = Command("SELECT prompt_count, first_seen FROM sessions WHERE session_id = $id", [("$id", sessionId)]);
             using var reader = command.ExecuteReader();
-            var quota = reader.Read() && !reader.IsDBNull(0)
-                ? $"kota %{reader.GetDouble(0):F0} ({reader.GetString(1)})"
-                : "kota bilinmiyor";
-            return $"{quota} · son 7 gün {calls} çağrı";
+            if (!reader.Read())
+                return (0, null);
+
+            return (reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+                reader.IsDBNull(1) ? null : DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture));
+        }
+    }
+
+    /// <summary>
+    /// The reflection-debt row, read and removed in one go: <c>context</c> prints it at the top of
+    /// <c>[Bildirim]</c> and the row is gone, so the next session start does not repeat a reminder
+    /// the owner has already been given.
+    /// </summary>
+    public string? TakeReflectionDebt()
+    {
+        lock (_gate)
+        {
+            using var read = Command("SELECT detail FROM health WHERE component = 'hafiza' AND code = 'yansima-borcu' ORDER BY rowid DESC LIMIT 1", []);
+            string? detail;
+            using (var reader = read.ExecuteReader())
+                detail = reader.Read() ? reader.GetString(0) : null;
+
+            if (detail is null || _access is StateAccess.ReadOnly)
+                return detail;
+
+            using var delete = Command("DELETE FROM health WHERE component = 'hafiza' AND code = 'yansima-borcu'", []);
+            delete.ExecuteNonQuery();
+            return detail;
         }
     }
 
@@ -132,27 +168,12 @@ public sealed partial class State
         }
     }
 
-    /// <summary>One <c>notified</c> row; the same (class, key) is toasted once in seven days (spec 6.8).</summary>
-    public void RecordNotified(string notificationClass, string key, DateTimeOffset now) =>
-        Write("INSERT INTO notified(class, key, ts) VALUES ($c, $k, $ts)",
-            ("$c", notificationClass), ("$k", key), ("$ts", Stamp(now)));
-
-    /// <summary>The queued notification line the next SessionStart block opens with (spec 6.2, 6.8).</summary>
-    public string? ReadPendingNotification(DateTimeOffset now)
+    private long ScalarFor(string sql, string sessionId)
     {
         lock (_gate)
         {
-            using var command = Command(
-                "SELECT detail FROM health WHERE component = 'notify' AND ts >= $cutoff ORDER BY ts DESC LIMIT 1",
-                [("$cutoff", Stamp(now.AddDays(-7)))]);
-            using var reader = command.ExecuteReader();
-            return reader.Read() ? reader.GetString(0) : null;
+            using var command = Command(sql, [("$id", sessionId)]);
+            return Convert.ToInt64(command.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
         }
     }
-
-    /// <summary>One quota sample per sweep (spec 6.3); the reader never spends a reset credit (Y-057).</summary>
-    public void RecordQuota(DateTimeOffset now, QuotaWindow window) =>
-        Write("INSERT INTO kota(ts, \"window\", used_pct, resets_at) VALUES ($ts, $w, $u, $r)",
-            ("$ts", Stamp(now)), ("$w", window.Name), ("$u", (object?)window.UsedPercent ?? DBNull.Value),
-            ("$r", (object?)window.ResetsAt?.ToString("O", CultureInfo.InvariantCulture) ?? DBNull.Value));
 }

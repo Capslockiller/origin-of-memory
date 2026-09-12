@@ -8,7 +8,6 @@ namespace Oom.Contracts;
 public sealed record ContextOptions(
     string CompanionDir = "🔮 850-Companion",
     int CapChars = 16_000,
-    bool StatusLine = true,
     string? PendingNotification = null);
 
 public sealed class Context
@@ -19,7 +18,7 @@ public sealed class Context
     private static readonly string[] SectionNames =
     [
         "Bildirim", "Son Oturum", "Aktif Threadler", "Kurallar", "Düzeltmeler", "Son Journal",
-        "Durum", "Bilgi Tabanı — İndeks", "Bugünün Logu"
+        "Bilgi Tabanı — İndeks", "Bugünün Logu"
     ];
 
     private static readonly (string Section, string File, int Lines)[] CompanionFiles =
@@ -62,8 +61,6 @@ public sealed class Context
         Append(builder, "[Bildirim]", _options.PendingNotification);
         foreach (var (section, file, lines) in CompanionFiles)
             Append(builder, Label(section), Head(companion is null ? null : Path.Combine(companion, file), lines, section));
-
-        Append(builder, "[Durum]", _options.StatusLine ? StatusText(vaultPath) : null);
 
         // The two flexible bodies are trimmed, never their labels: every section of the
         // Spec 7 contract stays present and in order even when the cap bites.
@@ -258,14 +255,4 @@ public sealed class Context
         return null;
     }
 
-    /// <summary>
-    /// Quota percentage and the last seven days of calls, sampled by sweep into state.db. Nothing
-    /// is measured here: the SessionStart hook may not spend seconds on a status line.
-    /// </summary>
-    private static string? StatusText(string vaultPath) => _statusLine;
-
-    private static string? _statusLine;
-
-    /// <summary>Sweep publishes the sampled status line; until then the section stays empty.</summary>
-    public static void PublishStatusLine(string? line) => _statusLine = line;
 }

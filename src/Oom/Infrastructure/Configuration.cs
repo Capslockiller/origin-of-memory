@@ -1,5 +1,4 @@
 // yazan: codex · gpt-5
-using System.Net;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -9,14 +8,11 @@ namespace Oom.Contracts;
 /// <summary>The <c>sweep</c> block of <c>oom.json</c> (spec 4.1).</summary>
 public sealed record SweepSettings(int EveryHours, int SinceHours, int MinTurns, int MaxSessionsPerRun, IReadOnlyList<string> Roots);
 
-/// <summary>The <c>backend.claude</c> block: full model ids and the isolated config directory (spec 6.6).</summary>
-public sealed record ClaudeSettings(string Fast, string Smart, string ConfigDir);
+/// <summary>The <c>backend.claude</c> block: the two full model ids (spec 6.6).</summary>
+public sealed record ClaudeSettings(string Fast, string Smart);
 
-/// <summary>The <c>backend.local</c> block: one endpoint, its three models and the context window (tokens, Y-115).</summary>
-public sealed record LocalSettings(string Url, string Fast, string Smart, string Embed, int NumCtx = 8192);
-
-/// <summary>The <c>backend</c> block: two ordered component chains plus both endpoints (spec 6.6).</summary>
-public sealed record BackendSettings(IReadOnlyList<string> Flush, IReadOnlyList<string> Compile, ClaudeSettings Claude, LocalSettings Local);
+/// <summary>The <c>backend</c> block. There is one backend — the Claude CLI — and one place it is configured.</summary>
+public sealed record BackendSettings(ClaudeSettings Claude);
 
 /// <summary>The <c>compile</c> block of <c>oom.json</c> (spec 4.1, 6.5).</summary>
 public sealed record CompileOptions(int EveningHour, int MinIntervalHours, int MaxDailiesPerRun);
@@ -38,12 +34,17 @@ public sealed record OomSettings(
     ContextOptions Context,
     RetrieveOptions Retrieve,
     bool McpEnabled,
-    bool Toast,
     IReadOnlyList<ExtensionSettings> Extensions)
 {
     /// <summary>Keys spec 4.1 defines; anything else is a warning for doctor, never an error.</summary>
     public static readonly string[] KnownKeys =
-        ["backend", "retrieveMode", "sweep", "compile", "context", "retrieve", "mcp", "notify", "extensions"];
+        ["backend", "retrieveMode", "sweep", "compile", "context", "retrieve", "mcp", "extensions", "nudgeEvery", "reflectionMinPrompts"];
+
+    /// <summary>How many prompts apart <c>oom nudge</c> reminds the owner to write the companion layer.</summary>
+    public int NudgeEvery { get; init; } = 15;
+
+    /// <summary>Below this many prompts a session is too short to owe a reflection at all.</summary>
+    public int ReflectionMinPrompts { get; init; } = 5;
 
     private static readonly UTF8Encoding Utf8 = new(false);
 
@@ -66,17 +67,12 @@ public sealed record OomSettings(
 
     /// <summary>The spec 4.1 defaults, used verbatim when <c>oom.json</c> is absent or unreadable.</summary>
     public static OomSettings Defaults(string? vault = null) => new(
-        new BackendSettings(
-            ["claude", "local"],
-            ["claude"],
-            new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5", @"%LOCALAPPDATA%\oom\claude-config"),
-            new LocalSettings("http://127.0.0.1:11434/v1", "qwen3:8b", "qwen3:14b", "nomic-embed-text")),
+        new BackendSettings(new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5")),
         "bm25",
         new SweepSettings(8, 8, 3, 20, [.. DefaultRoots.Select(Expand)]),
         new CompileOptions(18, 20, 3),
         new ContextOptions(),
         new RetrieveOptions(VaultPath: vault),
-        true,
         true,
         []);
 
@@ -94,10 +90,7 @@ public sealed record OomSettings(
         {
             backend = new
             {
-                flush = defaults.Backend.Flush,
-                compile = defaults.Backend.Compile,
-                claude = new { fast = defaults.Backend.Claude.Fast, smart = defaults.Backend.Claude.Smart, configDir = defaults.Backend.Claude.ConfigDir },
-                local = new { url = defaults.Backend.Local.Url, fast = defaults.Backend.Local.Fast, smart = defaults.Backend.Local.Smart, embed = defaults.Backend.Local.Embed, numCtx = defaults.Backend.Local.NumCtx }
+                claude = new { fast = defaults.Backend.Claude.Fast, smart = defaults.Backend.Claude.Smart }
             },
             retrieveMode = defaults.RetrieveMode,
             sweep = new
@@ -109,17 +102,16 @@ public sealed record OomSettings(
                 roots = DefaultRoots
             },
             compile = new { eveningHour = defaults.Compile.EveningHour, minIntervalHours = defaults.Compile.MinIntervalHours, maxDailiesPerRun = defaults.Compile.MaxDailiesPerRun },
-            context = new { companionDir = defaults.Context.CompanionDir, capChars = defaults.Context.CapChars, statusLine = defaults.Context.StatusLine },
+            context = new { companionDir = defaults.Context.CompanionDir, capChars = defaults.Context.CapChars },
             retrieve = new
             {
                 top = defaults.Retrieve.Top,
                 perNoteChars = defaults.Retrieve.PerNoteChars,
-                totalChars = defaults.Retrieve.TotalChars,
-                minOverlap = defaults.Retrieve.MinOverlap,
-                strictScore = defaults.Retrieve.StrictScore
+                totalChars = defaults.Retrieve.TotalChars
             },
             mcp = new { enabled = defaults.McpEnabled },
-            notify = new { toast = defaults.Toast },
+            nudgeEvery = defaults.NudgeEvery,
+            reflectionMinPrompts = defaults.ReflectionMinPrompts,
             extensions = Array.Empty<object>()
         }, new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
@@ -144,10 +136,11 @@ public sealed record OomSettings(
                 ReadContext(Section(root, "context"), defaults.Context),
                 ReadRetrieve(Section(root, "retrieve"), defaults.Retrieve),
                 Flag(Section(root, "mcp"), "enabled", defaults.McpEnabled),
-                Flag(Section(root, "notify"), "toast", defaults.Toast),
                 ReadExtensions(root))
             {
-                UnknownKeys = Unknown(root)
+                UnknownKeys = Unknown(root),
+                NudgeEvery = Number(root, "nudgeEvery", defaults.NudgeEvery),
+                ReflectionMinPrompts = Number(root, "reflectionMinPrompts", defaults.ReflectionMinPrompts)
             };
         }
         catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException or FormatException)
@@ -156,59 +149,12 @@ public sealed record OomSettings(
         }
     }
 
-    /// <summary>
-    /// The absolute isolated <c>CLAUDE_CONFIG_DIR</c> (spec 6.6). A relative value is anchored
-    /// at the vault, as spec 4.1's default is; an absolute one — <c>%VAR%</c> expanded — is
-    /// honoured as given, which is how the directory can be kept off a synced drive, since it
-    /// holds a copy of the session credential.
-    /// </summary>
-    public string ClaudeConfigDirectory(string vault)
-    {
-        _ = Backend.Claude.ConfigDir; // retained in the serialized contract; it cannot move credentials
-        return ClaudeIsolation.ConfigurationDirectory(vault);
-    }
-
-    private static BackendSettings ReadBackend(JsonElement element, BackendSettings fallback) => new(
-        Strings(element, "flush", fallback.Flush),
-        Strings(element, "compile", fallback.Compile),
-        ReadClaude(Section(element, "claude"), fallback.Claude),
-        ReadLocal(Section(element, "local"), fallback.Local));
+    private static BackendSettings ReadBackend(JsonElement element, BackendSettings fallback) =>
+        new(ReadClaude(Section(element, "claude"), fallback.Claude));
 
     private static ClaudeSettings ReadClaude(JsonElement element, ClaudeSettings fallback) => new(
         Text(element, "fast", fallback.Fast),
-        Text(element, "smart", fallback.Smart),
-        Text(element, "configDir", fallback.ConfigDir));
-
-    private static LocalSettings ReadLocal(JsonElement element, LocalSettings fallback) => new(
-        ValidateLocalUrl(TranslateLegacyLocalhostUrl(Text(element, "url", fallback.Url))),
-        Text(element, "fast", fallback.Fast),
-        Text(element, "smart", fallback.Smart),
-        Text(element, "embed", fallback.Embed), Number(element, "numCtx", fallback.NumCtx));
-
-    /// <summary>Translates the pre-2.0 localhost spelling at the file-load boundary without DNS.</summary>
-    private static string TranslateLegacyLocalhostUrl(string value)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttp ||
-            !string.IsNullOrEmpty(uri.UserInfo) ||
-            !uri.IdnHost.Equals("localhost", StringComparison.OrdinalIgnoreCase))
-            return value;
-
-        var hostStart = value.IndexOf("://", StringComparison.Ordinal) + 3;
-        return $"{value[..hostStart]}127.0.0.1{value[(hostStart + "localhost".Length)..]}";
-    }
-
-    /// <summary>Accepts only absolute HTTP URLs whose host is a numeric loopback address.</summary>
-    public static string ValidateLocalUrl(string value)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttp)
-            throw new FormatException("backend.local.url yalnız mutlak http adresi olabilir.");
-        if (!string.IsNullOrEmpty(uri.UserInfo))
-            throw new FormatException("backend.local.url kullanıcı bilgisi içeremez.");
-        if (!IPAddress.TryParse(uri.IdnHost.Trim('[', ']'), out var address) || !IPAddress.IsLoopback(address))
-            throw new FormatException("backend.local.url yalnız sayısal geri döngü adresi kullanabilir.");
-        return value.TrimEnd('/');
-    }
+        Text(element, "smart", fallback.Smart));
 
     private static SweepSettings ReadSweep(JsonElement element, SweepSettings fallback) => new(
         Number(element, "everyHours", fallback.EveryHours),
@@ -224,16 +170,13 @@ public sealed record OomSettings(
 
     private static ContextOptions ReadContext(JsonElement element, ContextOptions fallback) => new(
         Text(element, "companionDir", fallback.CompanionDir),
-        Number(element, "capChars", fallback.CapChars),
-        Flag(element, "statusLine", fallback.StatusLine));
+        Number(element, "capChars", fallback.CapChars));
 
     private static RetrieveOptions ReadRetrieve(JsonElement element, RetrieveOptions fallback) => fallback with
     {
         Top = Number(element, "top", fallback.Top),
         PerNoteChars = Number(element, "perNoteChars", fallback.PerNoteChars),
-        TotalChars = Number(element, "totalChars", fallback.TotalChars),
-        MinOverlap = Number(element, "minOverlap", fallback.MinOverlap),
-        StrictScore = Real(element, "strictScore", fallback.StrictScore)
+        TotalChars = Number(element, "totalChars", fallback.TotalChars)
     };
 
     private static IReadOnlyList<ExtensionSettings> ReadExtensions(JsonElement root)
@@ -273,9 +216,6 @@ public sealed record OomSettings(
 
     private static int Number(JsonElement element, string name, int fallback) =>
         element.ValueKind is JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.TryGetInt32(out var parsed) ? parsed : fallback;
-
-    private static double Real(JsonElement element, string name, double fallback) =>
-        element.ValueKind is JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.TryGetDouble(out var parsed) ? parsed : fallback;
 
     private static bool Flag(JsonElement element, string name, bool fallback) =>
         element.ValueKind is JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False

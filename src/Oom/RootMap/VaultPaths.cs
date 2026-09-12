@@ -52,8 +52,17 @@ internal static class LaneCVaultPaths
     internal static string Hash(string value)
         => Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(value.TrimEnd(Path.DirectorySeparatorChar))), 0, 8).ToLowerInvariant();
 
+    /// <summary>
+    /// Where state roots live. <c>OOM_LOCALAPPDATA</c> overrides the real profile — a test seam,
+    /// and the only one: a suite that measures what a command writes has to be able to point the
+    /// state root at a fixture, or it is measuring the owner's real profile. The doctor scan
+    /// already read this variable and the state root did not, so the two could disagree about
+    /// where state lives; they read it in one place now.
+    /// </summary>
     private static string LocalAppData()
     {
+        if (Environment.GetEnvironmentVariable("OOM_LOCALAPPDATA") is { Length: > 0 } redirected)
+            return redirected;
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         return string.IsNullOrEmpty(local) ? Path.Combine(Path.GetTempPath(), "oom-local") : local;
     }
