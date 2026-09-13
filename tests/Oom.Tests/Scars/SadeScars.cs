@@ -558,4 +558,12 @@ public sealed class SadeScars
         }
     }
 
+    [Fact(DisplayName = "Y-332 · oom dışı bir kanca (başka aracın PreToolUse komutu) hook-path hatası üretmez")]
+    public void Y332_ForeignHooksAreNotJudged()
+    {
+        var user = "{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"grep -qE 'remove' && printf x\"}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"E:/v/.oom/bin/oom.exe --vault E:/v context\"}]}]}}";
+        var items = new Doctor().ValidateHooks(user, string.Empty);
+        Assert.DoesNotContain(items, item => item.Code == "hook-path");
+        Assert.DoesNotContain(items, item => item.Code == "duplicate-hook");
+    }
 }

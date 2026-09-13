@@ -124,7 +124,7 @@ public sealed class Doctor
         var items = new List<HealthItem>();
         var user = ReadHookCommands(userSettings);
         var project = ReadHookCommands(projectSettings);
-        var all = user.Concat(project).ToArray();
+        var all = user.Concat(project).Where(command => command.Contains("oom", StringComparison.OrdinalIgnoreCase)).ToArray();
 
         if (userSettings.Length > 0 && userSettings == projectSettings)
             items.Add(Item("hooks", HealthLevel.Error, "duplicate-hook", "settings", "Aynı hook kullanıcı ve proje ayarında iki kez kayıtlı."));
