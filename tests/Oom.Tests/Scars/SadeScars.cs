@@ -566,4 +566,14 @@ public sealed class SadeScars
         Assert.DoesNotContain(items, item => item.Code == "hook-path");
         Assert.DoesNotContain(items, item => item.Code == "duplicate-hook");
     }
+
+    [Fact(DisplayName = "Y-333 · derlemenin 'ok' sonucu daily_ingest'e 'ingested' olarak düşer; aksi hâlde daily sonsuza dek bekleyen sayılırdı")]
+    public void Y333_CompileOkIsRecordedAsIngested()
+    {
+        using var state = new State(null, null, Path.Combine(ScarFixture.TempDirectory(), "state.db"));
+        state.WriteDailyIngest("2025-10-13.md", "ok", ScarFixture.Now);
+        state.WriteDailyIngest("2025-10-18.md", "rejected", ScarFixture.Now, "sebep");
+        Assert.Equal(["2025-10-13.md"], state.ReadColumn("SELECT name FROM daily_ingest WHERE status = 'ingested'"));
+        Assert.Equal(["2025-10-18.md"], state.ReadColumn("SELECT name FROM daily_ingest WHERE status = 'rejected'"));
+    }
 }

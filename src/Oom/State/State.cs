@@ -110,6 +110,8 @@ public sealed partial class State : IDisposable
 
     public void WriteDailyIngest(string name, string status, DateTimeOffset ts, string? reason = null)
     {
+        if (string.Equals(status, "ok", StringComparison.Ordinal))
+            status = "ingested";
         var stamped = string.IsNullOrWhiteSpace(reason) ? string.Empty : $"[{Stamp(ts)}] {reason}";
         Write("INSERT INTO daily_ingest(name, status, attempts, reasons, ts) VALUES ($n, $s, 1, $r, $t) " +
               "ON CONFLICT(name) DO UPDATE SET status = $s, ts = $t, " +
