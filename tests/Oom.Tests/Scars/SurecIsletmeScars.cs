@@ -16,24 +16,6 @@ public sealed class SurecIsletmeScars
         Assert.True(complete.Written && complete.Verified);
     }
 
-    [Fact(DisplayName = "Y-086 · Sürümdeki her yetenek iddiası test veya ölçüm kanıtı taşır")]
-    public void Y086_ReleaseClaimsRequireEvidence()
-    {
-        var claims = new Dictionary<string, string> { ["tek exe"] = "publish-single-file", ["kurulum çalışıyor"] = "" };
-        var findings = new Doctor().ValidateReleaseClaims(claims);
-        Assert.Contains(findings, x => x.Code == "claim-without-evidence" && x.Key == "kurulum çalışıyor");
-    }
-
-    [Fact(DisplayName = "Y-087 · Bekleyici döngü N denemede kırmızı çıkar ve sonsuza dek beklemez")]
-    public void Y087_WaitLoopIsBoundedAndSurfacesFailure()
-    {
-        var result = new Runner().WaitForOutcome("never-arrives", maxAttempts: 5);
-        Assert.False(result.Completed);
-        Assert.Equal(5, result.Attempts);
-        Assert.NotEqual(0, result.ExitCode);
-        Assert.NotEmpty(result.Error);
-    }
-
     [Fact(DisplayName = "Y-088 · Doctor yeşil olmak için kapsama ve ret oranını ölçer")]
     public void Y088_DoctorHealthRequiresCoverageAndRejectionTargets()
     {

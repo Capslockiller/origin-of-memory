@@ -6,14 +6,6 @@ namespace Oom.Tests.Scars;
 
 public sealed class TestDisipliniScars
 {
-    [Fact(DisplayName = "Y-075 · Kavram recall ile tarih tutar karar düzeltme recall ayrı raporlanır")]
-    public void Y075_AccuracyAxesAreReportedSeparately()
-    {
-        var result = new Retrieve().Query("benchmark: 13 Eylül 48 EUR çelişkisi", "quality", 5);
-        Assert.DoesNotContain(result.Hits, x => x.Text.Contains("13 Eylül / 48 EUR", StringComparison.Ordinal));
-        Assert.Contains("concept_recall", result.Output);
-        Assert.Contains("fact_recall", result.Output);
-    }
 
     [Fact(DisplayName = "Y-077 · Zamanlama senaryosu sahte saatle deterministiktir")]
     public void Y077_TimingTestUsesInjectedClock()
@@ -53,12 +45,4 @@ public sealed class TestDisipliniScars
         Assert.All(production, path => Assert.DoesNotContain("INTENTIONAL_STATIC_SCAN_VIOLATION", File.ReadAllText(path)));
     }
 
-    [Fact(DisplayName = "Y-082 · Kabul koşumu kazanç ve karşıt metriği birlikte raporlar")]
-    public void Y082_AcceptanceGateRequiresPrimaryAndCounterMetric()
-    {
-        var measured = new Retrieve().Query("acceptance benchmark", "counter-metric", 5);
-        Assert.Contains("episodic_top3", measured.Output);
-        Assert.Contains("concept_recall_at5", measured.Output);
-        Assert.DoesNotContain("gate:green", measured.Output.Contains("concept_recall_at5=0.87", StringComparison.Ordinal) ? "gate:green" : "gate:red");
-    }
 }

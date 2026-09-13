@@ -81,22 +81,6 @@ public sealed class Sweep
         return new ReconciliationResult(overdue, completed);
     }
 
-    public Session RelocateMissingTranscript(string sessionId, string stalePath, IReadOnlyDictionary<string, string> roots)
-    {
-        foreach (var (path, content) in roots)
-        {
-            var named = Path.GetFileNameWithoutExtension(path).Contains(sessionId, StringComparison.OrdinalIgnoreCase);
-            if (!named && !content.Contains($"\"{sessionId}\"", StringComparison.Ordinal))
-                continue;
-
-            var turns = _flush.ParseTranscript(content);
-            var started = turns.Count > 0 ? turns.Min(turn => turn.Timestamp) : _clock.Now;
-            return new Session(sessionId, SourceOf(path), turns, started);
-        }
-
-        return new Session(sessionId, SourceOf(stalePath), [], _clock.Now);
-    }
-
     public bool ShouldProcess(DateTimeOffset modifiedAt, bool stamped, int sinceHours, DateTimeOffset now)
     {
         if (!stamped || sinceHours <= 0)

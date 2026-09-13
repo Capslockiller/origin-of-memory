@@ -91,32 +91,6 @@ public sealed class Context
         return Build(vaultPath, start.Timestamp);
     }
 
-    public IReadOnlyList<HealthItem> AuditCompanion(string vaultPath)
-    {
-        var items = new List<HealthItem>();
-        var companion = CompanionPath(vaultPath);
-        foreach (var (section, file, _) in CompanionFiles)
-        {
-            var path = companion is null ? null : Path.Combine(companion, file);
-            if (path is null || !File.Exists(path))
-            {
-                items.Add(new HealthItem("context", HealthLevel.Info, "companion-missing", file, $"{section} dosyası yok"));
-                continue;
-            }
-
-            var text = File.ReadAllText(path);
-            var digest = Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(text)));
-            var touched = File.GetLastWriteTimeUtc(path);
-            var unchanged = ContentDigests.TryGetValue(path, out var previous) && string.Equals(previous, digest, StringComparison.Ordinal);
-            ContentDigests[path] = digest;
-            if (unchanged && touched > SystemClock.Instance.Now.UtcDateTime.AddDays(-1))
-                items.Add(new HealthItem("context", HealthLevel.Warning, "companion-content-stale", file,
-                    $"{section} dosyasına dokunulmuş ama içeriği değişmemiş"));
-        }
-
-        return items;
-    }
-
     public IReadOnlyList<string> CompanionWarnings(string vaultPath)
     {
         var companion = CompanionPath(vaultPath);

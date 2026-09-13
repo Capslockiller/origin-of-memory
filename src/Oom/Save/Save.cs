@@ -46,6 +46,7 @@ public sealed class Save
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, $"{now:yyyy-MM-dd}.md");
             var block = FormatDailyBlock(text, now);
+            using var dailyLock = DailyFileLock.Acquire(path);
             var existing = File.Exists(path) ? File.ReadAllText(path, Utf8) : string.Empty;
             var separator = existing.Length == 0 || existing.EndsWith('\n') ? string.Empty : "\n";
             File.AppendAllText(path, separator + block, Utf8);

@@ -36,34 +36,6 @@ public static class HookTemplates
         return JsonSerializer.Serialize(new { hooks }, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    public static IReadOnlyList<string> Duplicates(string userSettings, string projectSettings)
-    {
-        var duplicates = new List<string>();
-        foreach (var name in new[] { "SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact" })
-        {
-            var marker = $"\"{name}\"";
-            if (userSettings.Contains(marker, StringComparison.Ordinal) && projectSettings.Contains(marker, StringComparison.Ordinal))
-                duplicates.Add(name);
-        }
-
-        return duplicates;
-    }
-
-    public static int LaunchDetached(string executablePath, string sessionId, FlushReason reason, string? transcriptPath = null)
-    {
-        List<string> arguments =
-        [
-            "flush", "--detached",
-            "--session", sessionId,
-            "--reason", reason == FlushReason.PreCompact ? "precompact" : "sessionend"
-        ];
-
-        if (!string.IsNullOrEmpty(transcriptPath))
-            arguments.AddRange(["--transcript", transcriptPath]);
-
-        return DetachedProcess.Start(executablePath, arguments, Path.GetTempPath());
-    }
-
     private static string Quote(string path)
     {
         var forward = path.Replace('\\', '/');

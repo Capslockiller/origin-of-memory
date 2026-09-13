@@ -5,16 +5,6 @@ namespace Oom.Tests.Scars;
 
 public sealed class DerleyiciScars
 {
-    [Fact(DisplayName = "Y-022 · Onaylı düzeltme eski iddiayı sonraki sorgudan önce geçersiz kılar")]
-    public void Y022_CorrectionInvalidatesStaleClaimBeforeQuery()
-    {
-        var stale = ScarFixture.Note(1, "Speaking tarihi 13 Eylül, ücret 48 EUR.");
-        var replacement = ScarFixture.Note(2, "Speaking tarihi 20 Eylül, ücret 52 EUR.");
-        var corrected = new Compile().ApplyCorrection(stale, replacement, "2026-09-09.md");
-        Assert.DoesNotContain("13 Eylül", corrected.Body);
-        Assert.Contains("20 Eylül", corrected.Body);
-        Assert.Contains("2026-09-09.md", corrected.Sources);
-    }
 
     [Fact(DisplayName = "Y-023 · Emekli çapa hiçbir yeniden kurulum yolunda geri dönmez")]
     public void Y023_RetiredAnchorNeverReturns()
@@ -35,16 +25,6 @@ public sealed class DerleyiciScars
         Assert.DoesNotContain("retired-session-24", text);
         var hits = new Retrieve().Rank("retired-session-24", [note]);
         Assert.Empty(hits);
-    }
-
-    [Fact(DisplayName = "Y-025 · Aday seçimi 534 notun tamamını yerelde kapsar")]
-    public void Y025_CandidateSelectionSeesFullCorpus()
-    {
-        var corpus = Enumerable.Range(1, 534).Select(i => ScarFixture.Note(i)).ToArray();
-        var incoming = ScarFixture.Note(535, "Kavram 534 için güncelleme.");
-        var candidates = new Compile().SelectCandidates(incoming, corpus);
-        Assert.Contains("note-534.md", candidates);
-        Assert.Equal(534, corpus.Length);
     }
 
     [Fact(DisplayName = "Y-026 · Direktif girdisi karantinaya düşer ve güvensiz yollar reddedilir")]
@@ -202,7 +182,7 @@ public sealed class DerleyiciScars
             Assert.Contains(new string('g', 500), attempt.Error!, StringComparison.Ordinal);
             Assert.DoesNotContain(new string('g', 501), attempt.Error!, StringComparison.Ordinal);
 
-            var flush = new Flush(new FlushOptions(RejectionPath: directory), notifier: null);
+            var flush = new Flush(new FlushOptions(RejectionPath: directory));
             var record = flush.Retry("oturum-312", 0, attempt.Error!);
             Assert.Equal(1, record.Attempts);
             var red = Directory.EnumerateFiles(Path.Combine(directory, "red")).Single();

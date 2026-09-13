@@ -193,7 +193,7 @@ public sealed class SweepRun
             var result = _flush.FlushSession(row.SessionId, path, FlushReason.Sweep);
             results.Add(result);
             drained++;
-            _state.RecordFlush(now, row.SessionId, "retry", Name(result.Outcome), 0, 0, "runner");
+            _state.RecordFlush(now, row.SessionId, "retry", Name(result.Outcome), null, null, "runner");
             Reconcile(Name(result.Outcome), row.SessionId, ref covered, uncovered);
         }
 

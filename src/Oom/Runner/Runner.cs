@@ -135,25 +135,6 @@ public sealed class Runner
         }
     }
 
-    public IntPtr PreserveHandle(ulong handle) => new(unchecked((long)handle));
-
-    public WaitResult WaitForOutcome(string target, int maxAttempts)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(target);
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
-
-        var path = Path.Combine(Path.GetTempPath(), "oom", "outcomes", target + ".json");
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            if (File.Exists(path))
-                return new WaitResult(true, attempt, 0, string.Empty);
-            if (attempt < maxAttempts)
-                Thread.Sleep(PollInterval);
-        }
-
-        return new WaitResult(false, maxAttempts, 1, $"'{target}' sonucu {maxAttempts} denemede gelmedi — oom doctor");
-    }
-
     private RunResult Attempt(string prompt, ModelTier tier, string operationId, string attemptId, int attemptNumber)
     {
         var model = ModelFor(tier);

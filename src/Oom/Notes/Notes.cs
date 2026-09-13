@@ -157,8 +157,6 @@ public sealed class Notes
         return RetiredAnchor.Replace(body, string.Empty).Trim();
     }
 
-    public IReadOnlyList<string> IndexTokens(Note note) => _fold.Tokenize(IndexableText(note));
-
     private string? ReadRelatedSection(string body)
     {
         var lines = body.Replace("\r\n", "\n").Split('\n');

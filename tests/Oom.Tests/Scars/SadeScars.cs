@@ -80,13 +80,13 @@ public sealed class SadeScars
         }
     }
 
-    [Fact(DisplayName = "Y-302 · Durum dosyası silinebilir; yeni açılış on tabloyu sıfırdan kurar ve sürüm damgası aramaz")]
+    [Fact(DisplayName = "Y-302 · Durum dosyası silinebilir; yeni açılış dokuz tabloyu sıfırdan kurar ve sürüm damgası aramaz")]
     public void Y302_DeletedStateFileIsRebuiltFromScratchOnTheNextOpen()
     {
         string[] expected =
         [
             "daily_ingest", "flush_log", "health", "notes", "notes_fts",
-            "oom_index_meta", "quarantine", "retry_queue", "sessions", "sweep_stamps"
+            "oom_index_meta", "retry_queue", "sessions", "sweep_stamps"
         ];
 
         var root = ScarFixture.TempDirectory();
@@ -389,4 +389,173 @@ public sealed class SadeScars
         Assert.Equal(["genel"], map.Assign("Bu kavram günlük yaşamı anlatır."));
         Assert.Equal(["unreal"], map.Assign("VR başlık kullanımı."));
     }
+    [Fact(DisplayName = "Y-325 · doctor kanca hatasını gözlemler, install uyarır, kaldırma uyarmaz")]
+    public void Y325_HookValidationRunsInProductPaths()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var stderr = Console.Error;
+        using var captured = new StringWriter();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(vault, ".claude"));
+            File.WriteAllText(Path.Combine(vault, ".claude", "settings.json"), HookTemplates.Render("relative/oom.exe", vault));
+            var snapshot = Program.Snapshot(ScarFixture.Now, vault, OomSettings.Defaults(vault), null);
+            Assert.Contains(snapshot.Observations, o => o.Item.Code == "hook-path" && o.Item.Level == HealthLevel.Error);
+            Console.SetError(captured);
+            Assert.Equal(0, Program.RunInstall(["install"], vault));
+            Assert.Contains("kurulum uyarısı: hook-path:", captured.ToString());
+            captured.GetStringBuilder().Clear();
+            Assert.Equal(0, Program.RunInstall(["install", "--uninstall"], vault));
+            Assert.DoesNotContain("kurulum uyarısı:", captured.ToString());
+        }
+        finally
+        {
+            Console.SetError(stderr);
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    [Fact(DisplayName = "Y-326 · karantina sayısı yalnız gerçek markdown dosyalarından gelir")]
+    public void Y326_QuarantineUsesFilesWithoutATable()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            using var state = new State(null, null, Path.Combine(vault, "state.db"));
+            var settings = OomSettings.Defaults(vault);
+            Assert.Equal(0, Program.Snapshot(ScarFixture.Now, vault, settings, state).Quarantine);
+            var quarantine = Directory.CreateDirectory(Path.Combine(vault, ".oom", "quarantine")).FullName;
+            File.WriteAllText(Path.Combine(quarantine, "one.md"), "one");
+            File.WriteAllText(Path.Combine(quarantine, "two.md"), "two");
+            File.WriteAllText(Path.Combine(quarantine, "other.txt"), "other");
+            Assert.Equal(2, Program.Snapshot(ScarFixture.Now, vault, settings, state).Quarantine);
+            Assert.Equal(0, state.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'quarantine'"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    [Fact(DisplayName = "Y-327 · süreçler aynı daily kilidini bekler ve ayar yedekleri korunur")]
+    public async Task Y327_DailyWritersWaitAndSettingsKeepBackups()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            var daily = Path.Combine(Directory.CreateDirectory(Path.Combine(vault, "daily")).FullName, $"{ScarFixture.Now:yyyy-MM-dd}.md");
+            var start = new System.Diagnostics.ProcessStartInfo("dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+            foreach (var argument in new[] { typeof(Program).Assembly.Location, "--vault", vault, "save", "karar: kayıt\ndüzeltme: yok\ndevir: tamam" })
+                start.ArgumentList.Add(argument);
+            start.Environment["OOM_FAKE_NOW"] = ScarFixture.Now.ToString("O");
+            using var held = DailyFileLock.Acquire(daily);
+            using var child = System.Diagnostics.Process.Start(start)!;
+            var output = child.StandardOutput.ReadToEndAsync();
+            var error = child.StandardError.ReadToEndAsync();
+            var session = ScarFixture.Session("y327-" + Guid.NewGuid().ToString("N"), 3);
+            var flush = Task.Run(() => new Flush(new FlushOptions(VaultPath: vault)).FlushSession(session, "unused.jsonl", FlushReason.SessionEnd));
+            await Task.Delay(600);
+            Assert.False(child.HasExited);
+            Assert.False(flush.IsCompleted);
+            Assert.False(File.Exists(daily));
+            held.Dispose();
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.True(child.ExitCode == 0, await error);
+            Assert.Equal(FlushOutcome.Ok, (await flush.WaitAsync(TimeSpan.FromSeconds(15))).Outcome);
+            var text = File.ReadAllText(daily);
+            Assert.Contains("karar: kayıt", text);
+            Assert.Contains("session:" + session.Id, text);
+            await output;
+            var settings = Path.Combine(Directory.CreateDirectory(Path.Combine(vault, ".claude")).FullName, "settings.json");
+            const string original = "{\"permissions\":{\"allow\":[\"Bash\"]}}";
+            File.WriteAllText(settings, original);
+            Assert.Equal(0, Program.RunInstall(["install"], vault));
+            var installed = File.ReadAllText(settings);
+            Assert.Equal(0, Program.RunInstall(["install", "--uninstall"], vault));
+            var backups = Directory.GetFiles(Path.GetDirectoryName(settings)!, "settings.json.bak-*").Select(File.ReadAllText).ToArray();
+            Assert.Equal(2, backups.Length);
+            Assert.Contains(original, backups);
+            Assert.Contains(installed, backups);
+            Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(settings)!, "*.tmp"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    [Fact(DisplayName = "Y-328 · getirme gerçek sonuç döndürür, sabit ölçüm iddiası basmaz")]
+    public void Y328_RetrievalOmitsInventedMetrics()
+    {
+        var vault = ScarFixture.RetrievalVault();
+        try
+        {
+            var result = new Retrieve(new RetrieveOptions(VaultPath: vault)).Query("Türkçe tokenizasyon", Guid.NewGuid().ToString(), 3);
+            Assert.NotEmpty(result.Hits);
+            Assert.DoesNotContain("oom-getirme", result.Output);
+            Assert.DoesNotContain("episodic_top3", result.Output);
+        }
+        finally { ScarFixture.Remove(vault); }
+    }
+
+    [Fact(DisplayName = "Y-329 · özet düz metindir, anahtar ve parola maskelenmiş sayılmaz")]
+    public void Y329_SummariesKeepPlainTextWithoutMaskingClaims()
+    {
+        const string text = "karar: api_key=sk-example123456789 parola=example-password";
+        var result = new Guards().Gate(text, Direction.Egress, ComponentKind.Flush);
+        Assert.Equal(text, result.Text);
+        Assert.DoesNotContain("secret", result.Findings);
+        Assert.DoesNotContain("pii", result.Findings);
+        Assert.Contains(text, new Save().FormatDailyBlock(text, ScarFixture.Now));
+        Assert.Null(typeof(Flush).Assembly.GetType("Oom.Contracts.INotifier"));
+    }
+
+    [Fact(DisplayName = "Y-330 · flush ölçümleri saklanır, bilinmeyen ölçümler NULL kalır")]
+    public void Y330_FlushLogPreservesMeasurementsAndUnknowns()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            using var state = new State(null, null, Path.Combine(vault, "state.db"));
+            state.RecordFlush(ScarFixture.Now, "measured", "sessionend", "ok", 7, 123, "runner");
+            state.RecordFlush(ScarFixture.Now, "unknown", "retry", "retry", null, null, "runner");
+            Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM flush_log WHERE session_id = 'measured' AND turns = 7 AND chars = 123"));
+            Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM flush_log WHERE session_id = 'unknown' AND turns IS NULL AND chars IS NULL"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    [Fact(DisplayName = "Y-331 · doctor eksik indeks ile kavram korpusu farkını bildirir")]
+    public void Y331_DoctorComparesIndexWithConceptCorpus()
+    {
+        var vault = ScarFixture.RetrievalVault();
+        var previous = Environment.GetEnvironmentVariable("OOM_LOCALAPPDATA");
+        try
+        {
+            Environment.SetEnvironmentVariable("OOM_LOCALAPPDATA", vault);
+            VaultPaths.UseVault(vault);
+            var settings = OomSettings.Defaults(vault);
+            Assert.Contains(Program.Snapshot(ScarFixture.Now, vault, settings, null).Observations, o => o.Item.Code == "index-mismatch");
+            var retrieve = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: VaultIdentity.EnsureDatabase(vault)));
+            Assert.Equal(0, retrieve.Build().ExitCode);
+            Assert.Contains(Program.Snapshot(ScarFixture.Now, vault, settings, null).Observations, o => o.Item.Code == "index-sound");
+            using var state = new State(null, null, VaultIdentity.DatabasePath(vault));
+            state.Scalar("DELETE FROM notes_fts WHERE rowid IN (SELECT rowid FROM notes_fts LIMIT 1)");
+            Assert.Contains(Program.Snapshot(ScarFixture.Now, vault, settings, state).Observations, o => o.Item.Code == "index-mismatch");
+        }
+        finally
+        {
+            VaultPaths.UseVault(null);
+            Environment.SetEnvironmentVariable("OOM_LOCALAPPDATA", previous);
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
 }

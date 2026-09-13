@@ -1,13 +1,10 @@
 using System.Globalization;
-using System.Text;
 using Microsoft.Data.Sqlite;
 
 namespace Oom.Contracts;
 
 public sealed partial class State : IDisposable
 {
-    private const int ReplaceAttempts = 5;
-    private const int ReplaceBackoffMs = 200;
     private const int StaleWarningHours = 24;
 
     private static readonly (string Table, string Column, int Days)[] Retention =
@@ -17,12 +14,10 @@ public sealed partial class State : IDisposable
     ];
 
     private readonly IClock _clock;
-    private readonly IFileOperations _files;
     private readonly SqliteConnection _connection;
     private readonly StateAccess _access;
     private readonly string _workDirectory;
     private readonly Lock _gate = new();
-    private long _temporaryCounter;
 
     public State() : this(null, null, null) { }
 
@@ -32,7 +27,6 @@ public sealed partial class State : IDisposable
     public State(IClock? clock, IFileOperations? files, string? databasePath, StateAccess access)
     {
         _clock = clock ?? SystemClock.Instance;
-        _files = files ?? new WindowsFileOperations();
         _access = access;
         var path = databasePath ?? (access is StateAccess.ReadOnly ? VaultIdentity.ExistingDatabase() : VaultPaths.StateDatabase());
         _workDirectory = path is null
@@ -53,28 +47,6 @@ public sealed partial class State : IDisposable
     public string WorkDirectory => _workDirectory;
 
     public StateAccess Access => _access;
-
-    public UsageSummary AggregateUsage(IEnumerable<UsageRecord> records)
-    {
-        ArgumentNullException.ThrowIfNull(records);
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        long input = 0, output = 0, cacheRead = 0;
-        var byOwner = new Dictionary<string, long>(StringComparer.Ordinal);
-
-        foreach (var record in records)
-        {
-            if (!seen.Add(record.MessageId))
-                continue;
-
-            input += record.InputTokens;
-            output += record.OutputTokens;
-            cacheRead += record.CacheReadTokens;
-            byOwner[record.Owner] = byOwner.GetValueOrDefault(record.Owner) + record.CacheReadTokens;
-        }
-
-        return new UsageSummary(input, output, cacheRead, byOwner);
-    }
 
     public StateStats SweepRetention(DateTimeOffset now)
     {
@@ -128,29 +100,9 @@ public sealed partial class State : IDisposable
         return written;
     }
 
-    public string AtomicWrite(string path, string content, int writers)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        ArgumentNullException.ThrowIfNull(content);
-        ArgumentOutOfRangeException.ThrowIfLessThan(writers, 1);
-
-        var target = Path.IsPathRooted(path) ? path : Path.Combine(_workDirectory, path);
-        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-
-        Parallel.For(0, writers, _ => WriteOnce(target, content));
-
-        foreach (var leftover in Directory.EnumerateFiles(Path.GetDirectoryName(target)!, Path.GetFileName(target) + ".*.tmp"))
-            TryDelete(leftover);
-
-        return File.ReadAllText(target, new UTF8Encoding(false));
-    }
-
-    public void RecordFlush(DateTimeOffset now, string sessionId, string reason, string outcome, int turns, int chars, string backend) =>
+    public void RecordFlush(DateTimeOffset now, string sessionId, string reason, string outcome, int? turns, int? chars, string backend) =>
         Write("INSERT INTO flush_log(ts, session_id, reason, outcome, turns, chars, backend) VALUES ($ts, $s, $r, $o, $t, $c, $b)",
-            ("$ts", Stamp(now)), ("$s", sessionId), ("$r", reason), ("$o", outcome), ("$t", turns), ("$c", chars), ("$b", backend));
-
-    public bool IsStamped(string path, string mtime, long size) =>
-        Text("SELECT 1 FROM sweep_stamps WHERE path = $p AND mtime = $m AND size = $s", ("$p", path), ("$m", mtime), ("$s", size)) is not null;
+            ("$ts", Stamp(now)), ("$s", sessionId), ("$r", reason), ("$o", outcome), ("$t", (object?)turns ?? DBNull.Value), ("$c", (object?)chars ?? DBNull.Value), ("$b", backend));
 
     public void WriteStamp(string path, string mtime, long size, string outcome) =>
         Write("INSERT INTO sweep_stamps(path, mtime, size, outcome) VALUES ($p, $m, $s, $o) ON CONFLICT(path) DO UPDATE SET mtime = $m, size = $s, outcome = $o",
@@ -169,41 +121,6 @@ public sealed partial class State : IDisposable
     }
 
     public void Dispose() => _connection.Dispose();
-
-    private void WriteOnce(string target, string content)
-    {
-        var counter = Interlocked.Increment(ref _temporaryCounter);
-        var temporary = $"{target}.{Environment.ProcessId}-{Environment.CurrentManagedThreadId}-{counter}.tmp";
-        File.WriteAllText(temporary, content, new UTF8Encoding(false));
-
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                _files.Replace(temporary, target);
-                return;
-            }
-            catch (IOException) when (attempt < ReplaceAttempts)
-            {
-                Thread.Sleep(ReplaceBackoffMs);
-            }
-            catch (UnauthorizedAccessException) when (attempt < ReplaceAttempts)
-            {
-                Thread.Sleep(ReplaceBackoffMs);
-            }
-        }
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (IOException)
-        {
-        }
-    }
 
     public long Scalar(string sql)
     {
@@ -342,7 +259,6 @@ internal static class StateStore
             "CREATE TABLE IF NOT EXISTS retry_queue(session_id TEXT PRIMARY KEY, attempts INTEGER, next_at TEXT, last_error TEXT);" +
             "CREATE TABLE IF NOT EXISTS sweep_stamps(path TEXT PRIMARY KEY, mtime TEXT, size INTEGER, outcome TEXT);" +
             "CREATE TABLE IF NOT EXISTS daily_ingest(name TEXT PRIMARY KEY, digest TEXT, status TEXT, attempts INTEGER, reasons TEXT, ts TEXT);" +
-            "CREATE TABLE IF NOT EXISTS quarantine(digest TEXT PRIMARY KEY, source TEXT, reason TEXT, ts TEXT, path TEXT);" +
             "CREATE TABLE IF NOT EXISTS health(ts TEXT, component TEXT, level TEXT, code TEXT, key TEXT, detail TEXT);" +
             "CREATE TABLE IF NOT EXISTS notes(name TEXT PRIMARY KEY, title TEXT, aliases TEXT, tags TEXT, body TEXT, updated TEXT);" +
             "CREATE INDEX IF NOT EXISTS ix_notes_updated ON notes(updated);" +

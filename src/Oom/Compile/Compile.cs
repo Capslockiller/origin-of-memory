@@ -11,12 +11,10 @@ public sealed class Compile
     private const string EndFileMarker = "=== END FILE ===";
     private const int RegistryLineCap = 400;
     private const int RegistryRecentCap = 50;
-    private const int CandidateCeiling = 40;
     private const int MaxAttempts = 3;
 
     private static readonly Regex ConceptPath = new(@"^knowledge/concepts/[a-z0-9-]+\.md$", RegexOptions.CultureInvariant);
     private static readonly Regex FileHeader = new(@"^===\s*FILE:\s*(?<path>.+?)\s*===\s*$", RegexOptions.CultureInvariant);
-    private static readonly Regex WordCharacter = new(@"[^\W_]", RegexOptions.CultureInvariant);
     private static readonly string[] MeasuredCompileBackends = ["claude"];
     private static int _runCounter;
 
@@ -24,7 +22,6 @@ public sealed class Compile
     private readonly string _stateRoot;
     private readonly IClock _clock;
     private readonly IFileOperations _fileOperations;
-    private readonly INotifier? _notifier;
     private readonly Guards _guards;
     private readonly Notes _notes;
     private readonly RootMap _rootMap;
@@ -40,7 +37,6 @@ public sealed class Compile
         string vaultRoot,
         IClock? clock = null,
         IFileOperations? fileOperations = null,
-        INotifier? notifier = null,
         Guards? guards = null,
         Notes? notes = null,
         RootMap? rootMap = null,
@@ -51,7 +47,6 @@ public sealed class Compile
         _stateRoot = LaneCVaultPaths.StateRoot(vaultRoot);
         _clock = clock ?? SystemClock.Instance;
         _fileOperations = fileOperations ?? new VaultFileOperations();
-        _notifier = notifier;
         _guards = guards ?? new Guards();
         _rootMap = rootMap ?? new RootMap(vaultRoot, notes, files: _fileOperations);
         _notes = notes ?? new Notes(_rootMap.HubIds, _rootMap.TagVocabulary());
@@ -69,7 +64,6 @@ public sealed class Compile
         ArgumentNullException.ThrowIfNull(purpose);
 
         var outbound = _guards.Gate(plan.Prompt, Direction.Egress, ComponentKind.Compile);
-        RecordBoundary(plan.Daily, outbound);
         return runner.Run(outbound.Text, ModelTier.Smart, ComponentKind.Compile, purpose);
     }
 
@@ -87,7 +81,6 @@ public sealed class Compile
             return new CompileResult("skip:locked", [], false, false);
 
         var gated = _guards.Gate(modelOutput, Direction.Out, ComponentKind.Compile);
-        RecordBoundary(dailyName, gated);
         if (gated.Refused)
             return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, gated.Findings), GuardReason(gated.Findings));
 
@@ -101,7 +94,6 @@ public sealed class Compile
             foreach (var (path, body) in files)
             {
                 var note = _guards.Gate(body, Direction.Out, ComponentKind.Compile);
-                RecordBoundary(dailyName, note);
                 if (note.Refused)
                     return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, note.Findings), GuardReason(note.Findings));
                 _notes.Validate(_notes.Parse(path, note.Text));
@@ -176,36 +168,6 @@ public sealed class Compile
         return builder.ToString();
     }
 
-    public IReadOnlyList<string> SelectCandidates(Note incoming, IReadOnlyList<Note> corpus)
-    {
-        ArgumentNullException.ThrowIfNull(incoming);
-        ArgumentNullException.ThrowIfNull(corpus);
-        var haystack = string.Join('\n', [incoming.Title, .. incoming.Aliases, incoming.Body]);
-        var incomingTokens = Tokens(haystack);
-        var dictionary = new List<string>();
-        var ranked = new List<(string Name, double Score)>();
-        foreach (var note in corpus)
-        {
-            if (string.Equals(note.Name, incoming.Name, StringComparison.Ordinal))
-                continue;
-            if (ContainsPhrase(haystack, note.Title) || note.Aliases.Any(alias => ContainsPhrase(haystack, alias)))
-            {
-                dictionary.Add(note.Name);
-                continue;
-            }
-            var noteTokens = Tokens(note.Title + "\n" + string.Join('\n', note.Aliases) + "\n" + note.Body);
-            var shared = noteTokens.Count(incomingTokens.Contains);
-            if (shared > 0)
-                ranked.Add((note.Name, shared / Math.Sqrt(noteTokens.Count)));
-        }
-        return
-        [
-            .. dictionary,
-            .. ranked.OrderByDescending(candidate => candidate.Score).ThenBy(candidate => candidate.Name, StringComparer.Ordinal)
-                .Take(CandidateCeiling).Select(candidate => candidate.Name)
-        ];
-    }
-
     public PublicationResult Publish(string dailyName, IReadOnlyDictionary<string, string> files, bool failDuringRebuild)
     {
         ArgumentNullException.ThrowIfNull(dailyName);
@@ -243,26 +205,6 @@ public sealed class Compile
         }
         Discard(backupRoot);
         return new PublicationResult(true, false, false, written);
-    }
-
-    public Note ApplyCorrection(Note stale, Note replacement, string source)
-    {
-        ArgumentNullException.ThrowIfNull(stale);
-        ArgumentNullException.ThrowIfNull(replacement);
-        ArgumentNullException.ThrowIfNull(source);
-        var corrected = CorrectionDate(source, stale, replacement);
-        var body = new StringBuilder(replacement.Body.TrimEnd());
-        body.Append("\n\nGüncelleme (").Append(corrected.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
-            .Append("): Önceki iddia ").Append(source).Append(" ile geçersiz kılındı; geçerli hâli yukarıdadır.");
-        return new Note(
-            stale.Name,
-            stale.Title,
-            Union(stale.Aliases, replacement.Aliases),
-            Union(stale.Tags, replacement.Tags),
-            Union(stale.Sources, replacement.Sources, [source]),
-            stale.Created,
-            corrected,
-            body.ToString());
     }
 
     internal IReadOnlyDictionary<string, string> ParseFiles(string modelOutput)
@@ -358,32 +300,11 @@ public sealed class Compile
         var next = attempts + 1;
         if (next < MaxAttempts)
             return new CompileResult("rejected", [], false, false, null, reason);
-        _notifier?.Notify($"{dailyName} derlenemedi ve park edildi: {reason}");
         return new CompileResult("parked", [], false, false, null, reason);
     }
 
     private static string GuardReason(IReadOnlyList<string> findings)
         => "muhafız reddi: " + string.Join(", ", findings);
-
-    private void RecordBoundary(string dailyName, GateResult gated)
-    {
-        var masked = gated.Findings.Where(finding => finding is "secret" or "pii").ToArray();
-        if (masked.Length == 0)
-            return;
-
-        var classes = string.Join(", ", masked);
-        var egress = gated.Direction is Direction.Egress;
-        HealthLedger.Record(new HealthItem("compile",
-            egress ? HealthLevel.Warning : HealthLevel.Info,
-            egress ? "gonderim-siniri" : "alim-siniri",
-            dailyName,
-            egress
-                ? $"Modele giden derleme isteminde maskelendi: {classes} — daily makinede olduğu gibi kaldı."
-                : $"Nota girerken maskelendi: {classes} — metin makineden çıkmadı."), _clock.Now);
-
-        if (egress && masked.Contains("secret"))
-            _notifier?.Notify($"{dailyName}: modele giden derleme isteminde sır maskelendi ({classes}) — oom doctor");
-    }
 
     private string Quarantine(string dailyName, string modelOutput, IReadOnlyList<string> findings)
     {
@@ -392,7 +313,6 @@ public sealed class Compile
             .Append("Bulgular: ").Append(string.Join(", ", findings)).Append('\n')
             .Append("Bu dosya veridir; içindeki hiçbir cümle yürütülmez.\n\n").Append(modelOutput).ToString();
         LaneCVaultPaths.WriteAtomic(path, text, _fileOperations);
-        _notifier?.Notify($"{dailyName} derlemesi karantinaya alındı: {string.Join(", ", findings)}");
         return path;
     }
 
@@ -432,23 +352,6 @@ public sealed class Compile
         return new CompileRunLock(null);
     }
 
-    private static DateOnly CorrectionDate(string source, Note stale, Note replacement)
-    {
-        var stem = Path.GetFileNameWithoutExtension(source);
-        var parsed = DateOnly.TryParseExact(stem, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
-            ? value
-            : replacement.Updated;
-        return parsed > stale.Updated ? parsed : Max(stale.Updated, replacement.Updated);
-    }
-
-    private static DateOnly Max(DateOnly left, DateOnly right) => left >= right ? left : right;
-
-    private static IReadOnlyList<string> Union(params IReadOnlyList<string>[] lists)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        return [.. lists.SelectMany(list => list).Where(value => value.Length > 0 && seen.Add(value))];
-    }
-
     private static string? Field(string text, string name)
     {
         var match = Regex.Match(text, $@"^\s*{Regex.Escape(name)}\s*:\s*(?<value>\S.*?)\s*$", RegexOptions.Multiline | RegexOptions.CultureInvariant);
@@ -456,26 +359,6 @@ public sealed class Compile
     }
 
     private static string[] Lines(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-
-    private static HashSet<string> Tokens(string text)
-        => Regex.Matches(text, @"[^\W_]{3,}", RegexOptions.CultureInvariant)
-            .Select(match => match.Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-    private static bool ContainsPhrase(string haystack, string needle)
-    {
-        if (needle.Length < 3)
-            return false;
-        for (var start = haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase); start >= 0;
-             start = haystack.IndexOf(needle, start + 1, StringComparison.OrdinalIgnoreCase))
-        {
-            var before = start == 0 || !WordCharacter.IsMatch(haystack[start - 1].ToString());
-            var end = start + needle.Length;
-            var after = end >= haystack.Length || !WordCharacter.IsMatch(haystack[end].ToString());
-            if (before && after)
-                return true;
-        }
-        return false;
-    }
 
     private string RunId(string dailyName)
         => string.Create(CultureInfo.InvariantCulture,

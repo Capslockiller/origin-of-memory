@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.4 — 2026-09-13
+
+### Fixed
+- Doctor validates user and vault hooks, checks the search index against the corpus, and counts quarantine Markdown files. Install prints hook errors to stderr.
+- Flush and save share a cross-process daily file lock, retrying every 100 ms for up to ten seconds. Install and uninstall preserve timestamped settings backups and replace the file through a temporary write.
+- Flush records measured turns and summary length; unknown retry measurements remain NULL.
+- The README states that summaries are plain text and session secrets can reach daily logs. The 3.0.0 source-size claim now names its measured scope.
+
+### Removed
+- The unused quarantine table declaration, unreachable masking notifications and the unimplemented notifier interface.
+- The constant retrieval metric claim and its two word-matching tests.
+- Uncalled audit helpers and their tests. WriteDailyIngest remains in the compile path; IndexHealth now runs in doctor.
+
 ## 3.0.3 — 2026-09-13
 
 ### Added
@@ -39,7 +52,7 @@ A smaller program with no history attached. Everything the owner had not asked f
 - Test Y-125, which checked the deleted scar ledger.
 
 ### Changed
-- Source 12,770 → 7,300 lines; tests 261 → 105; state database 16 → 9 tables in one `CREATE` script, no `user_version`.
+- src+tests 7,669 non-blank lines; tests 261 → 105; state database 16 → 9 tables in one `CREATE` script, no `user_version`.
 - A state database with an older schema is set aside as `state.db.eski-<timestamp>` and rebuilt; it is never migrated.
 - `doctor` reads coverage from the sweep's own health row and says it is unmeasured before the first sweep.
 - `install` writes only the project: `.oom/vault.json`, `.oom/oom.json` and four hooks in `.claude/settings.json`.

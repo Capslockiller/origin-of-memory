@@ -34,16 +34,14 @@ public sealed class Flush
     private readonly IClock _clock;
     private readonly Runner _runner;
     private readonly Guards _guards;
-    private readonly INotifier? _notifier;
     private readonly IFlushStore _store;
 
-    public Flush(FlushOptions? options = null, IClock? clock = null, Runner? runner = null, Guards? guards = null, INotifier? notifier = null, State? state = null)
+    public Flush(FlushOptions? options = null, IClock? clock = null, Runner? runner = null, Guards? guards = null, State? state = null)
     {
         _options = options ?? new FlushOptions();
         _clock = clock ?? SystemClock.Instance;
         _runner = runner ?? new Runner();
         _guards = guards ?? new Guards();
-        _notifier = notifier;
 
         _store = state is null ? MemoryFlushStore.Instance : new DurableFlushStore(state, _options.MaxAttempts);
     }
@@ -76,7 +74,6 @@ public sealed class Flush
         StoreRawTranscript(RenderRange(range));
 
         var outbound = _guards.Gate(BuildPrompt(range), Direction.Egress, ComponentKind.Flush);
-        RecordBoundary(sessionId, outbound);
         var run = _runner.Run(outbound.Text, ModelTier.Fast, ComponentKind.Flush, "summary");
         if (run.Error?.Contains("yapılandırma yok", StringComparison.Ordinal) == true)
             run = new RunResult(ExtractiveSummary(range), null, "extractive", "in-process", "none");
@@ -91,7 +88,6 @@ public sealed class Flush
             return Queue(state, "sekil dogrulamasi", cursor);
 
         var gated = _guards.Gate(validation.Normalized, Direction.Out, ComponentKind.Flush);
-        RecordBoundary(sessionId, gated);
         if (gated.Refused)
             return Queue(state, "guard refuse", cursor);
 
@@ -236,18 +232,6 @@ public sealed class Flush
         }
     }
 
-    public string AppendDailyConcurrently(string existing, IReadOnlyList<string> blocks)
-    {
-        var text = existing ?? string.Empty;
-        Parallel.ForEach(blocks, block =>
-        {
-            lock (DailyLock)
-                text = AppendDaily(text, block, "concurrent");
-        });
-
-        return text;
-    }
-
     public RetryRecord Retry(string sessionId, int currentAttempts, string rawOutput)
     {
         var state = _store.Get(sessionId, null);
@@ -263,7 +247,6 @@ public sealed class Flush
         if (parked && state.Notifications == 0)
         {
             state.Notifications = 1;
-            _notifier?.Notify($"Oturum {sessionId} beş denemeden sonra park edildi — oom doctor");
         }
 
         _store.Save(state);
@@ -292,25 +275,6 @@ public sealed class Flush
             ? session.Turns.Max(turn => turn.Timestamp)
             : fileTime != default ? fileTime : scanTime, TimeZoneInfo.Local);
 
-    public IngressRecord ReadHookInput(byte[] input)
-    {
-        var text = Utf8.GetString(input ?? []).TrimStart('﻿').Trim();
-        var id = string.Empty;
-        var errorPath = (string?)null;
-        try
-        {
-            var root = JsonDocument.Parse(text).RootElement;
-            id = ReadString(root, "id") ?? ReadString(root, "session_id") ?? ReadString(root, "sessionId") ?? string.Empty;
-            errorPath = ReadString(root, "stderr_path");
-        }
-        catch (JsonException)
-        {
-            id = string.Empty;
-        }
-
-        return new IngressRecord(id, _clock.Now, "received", errorPath);
-    }
-
     internal string ComposeBlock(Session session, TurnRange range, FlushReason reason, string summary, DateTimeOffset eventTime)
     {
         var suffix = reason switch
@@ -333,6 +297,8 @@ public sealed class Flush
         {
             var block = ComposeBlock(session, range, reason, summary, eventTime);
             dailyPath = DailyPath(eventTime);
+            Directory.CreateDirectory(Path.GetDirectoryName(dailyPath)!);
+            using var dailyLock = DailyFileLock.Acquire(dailyPath);
             var existing = File.Exists(dailyPath) ? File.ReadAllText(dailyPath) : string.Empty;
             var updated = AppendDaily(existing, block, session.Id, DateOnly.FromDateTime(eventTime.DateTime));
             var directory = Path.GetDirectoryName(dailyPath);
@@ -347,26 +313,6 @@ public sealed class Flush
         state.LastError = null;
         _store.Save(state);
         return new FlushResult(outcome, state.Cursor + 1, dailyPath, summary, null, range.End - range.Start + 1);
-    }
-
-    private void RecordBoundary(string sessionId, GateResult gated)
-    {
-        var masked = gated.Findings.Where(finding => finding is "secret" or "pii").ToArray();
-        if (masked.Length == 0)
-            return;
-
-        var classes = string.Join(", ", masked);
-        var egress = gated.Direction is Direction.Egress;
-        HealthLedger.Record(new HealthItem("flush",
-            egress ? HealthLevel.Warning : HealthLevel.Info,
-            egress ? "gonderim-siniri" : "alim-siniri",
-            sessionId,
-            egress
-                ? $"Modele giden özet isteminde maskelendi: {classes} — ham transkript makinede kaldı."
-                : $"Vault'a girerken maskelendi: {classes} — metin makineden çıkmadı."), _clock.Now);
-
-        if (egress && masked.Contains("secret"))
-            _notifier?.Notify($"Oturum {sessionId}: modele giden istemde sır maskelendi ({classes}) — oom doctor");
     }
 
     private FlushResult Queue(SessionState state, string error, int cursor)
@@ -484,9 +430,6 @@ public sealed class Flush
             ? line[..^2].TrimEnd()
             : line;
     }
-
-    private static string? ReadString(JsonElement root, string name) =>
-        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     private static string SafeFullPath(string path)
     {

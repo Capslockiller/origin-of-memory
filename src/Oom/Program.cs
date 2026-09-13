@@ -173,7 +173,7 @@ internal static class Program
 
         using var state = OpenState();
         var result = MakeFlush(vault, settings, state).FlushSession(session, transcript, Reason(reason));
-        state.RecordFlush(Clock.Now, session, reason, result.Outcome.ToString().ToLowerInvariant(), 0, 0, "runner");
+        state.RecordFlush(Clock.Now, session, reason, result.Outcome.ToString().ToLowerInvariant(), result.Turns, result.Summary?.Length, "runner");
         if (Reason(reason) is FlushReason.SessionEnd)
             RecordReflectionDebt(state, vault, settings, session);
         Console.WriteLine($"flush: {result.Outcome}{(result.DailyPath is null ? string.Empty : " → " + result.DailyPath)}");
@@ -388,12 +388,29 @@ internal static class Program
             root.Remove("hooks");
 
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-        File.WriteAllText(settingsPath, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", Utf8);
+        if (File.Exists(settingsPath))
+        {
+            var stamp = Clock.Now;
+            var backup = $"{settingsPath}.bak-{stamp:yyyyMMdd-HHmmss}";
+            while (File.Exists(backup))
+                backup = $"{settingsPath}.bak-{(stamp = stamp.AddSeconds(1)):yyyyMMdd-HHmmss}";
+            File.Copy(settingsPath, backup);
+        }
+        var temporary = settingsPath + $".{Guid.NewGuid():N}.tmp";
+        File.WriteAllText(temporary, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n", Utf8);
+        File.Move(temporary, settingsPath, overwrite: true);
+        if (!uninstalling)
+            foreach (var item in HookHealth(vault).Where(item => item.Level == HealthLevel.Error))
+                Console.Error.WriteLine($"kurulum uyarısı: {item.Code}: {item.Detail}");
         Console.WriteLine(uninstalling
             ? $"kaldırma: {settingsPath}"
             : $"kurulum: {oom} · {settingsPath}");
         return 0;
     }
+
+    private static IReadOnlyList<HealthItem> HookHealth(string vault) => new Doctor().ValidateHooks(
+        ReadIfPresent(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "settings.json")),
+        ReadIfPresent(Path.Combine(vault, ".claude", "settings.json")));
 
     private static void WriteIfAbsent(string path, string content)
     {
@@ -426,7 +443,7 @@ internal static class Program
             map.HubLines, map.TagVocabulary(corpus));
     }
 
-    private static DoctorSnapshot Snapshot(DateTimeOffset now, string vault, OomSettings settings, State? state)
+    internal static DoctorSnapshot Snapshot(DateTimeOffset now, string vault, OomSettings settings, State? state)
     {
         long Count(string sql) => state is null ? 0 : state.Scalar(sql);
 
@@ -451,6 +468,8 @@ internal static class Program
             .. settings.LoadError is null ? Array.Empty<DoctorObservation>() : [new DoctorObservation(
                 new HealthItem("config", HealthLevel.Error, "hata", "json",
                     $"oom.json okunamadı, varsayılanlar kullanılıyor — {settings.LoadError}"), now)],
+            .. HookHealth(vault).Select(item => new DoctorObservation(item, now)),
+            new(new Doctor().IndexHealth(MakeRetrieve(vault, settings, settings.Retrieve.Top)), now),
             .. Doctor.VaultSchema(vault, Corpus(vault), new RootMap(vault).CatchAllHub).Select(item => new DoctorObservation(item, now)),
             .. HealthLedger.Read().Where(o => reach.Level != HealthLevel.Info || o.Item.Component != "hooks" || o.Item.Code != "hook-failed" || o.Item.Key != reach.Key)
         ];
@@ -463,7 +482,8 @@ internal static class Program
             Pending(vault, state).Count,
             (int)Count("SELECT COUNT(*) FROM retry_queue WHERE attempts >= 5"),
             (int)Count("SELECT COUNT(*) FROM retry_queue"),
-            (int)Count("SELECT COUNT(*) FROM quarantine"),
+            Directory.Exists(Path.Combine(vault, ".oom", "quarantine"))
+                ? Directory.EnumerateFiles(Path.Combine(vault, ".oom", "quarantine"), "*.md").Count() : 0,
             Math.Max(0, invalid),
             window?.Total ?? 0);
     }
@@ -574,7 +594,7 @@ internal static class Program
     private static Flush MakeFlush(string vault, OomSettings settings, State? state)
     {
         var options = new FlushOptions(MinTurns: settings.Sweep.MinTurns, VaultPath: vault, RejectionPath: state?.WorkDirectory, Mode: settings.Flush.Mode, SliceTurns: settings.Flush.SliceTurns);
-        return new Flush(options, null, MakeRunner(vault, settings), null, null, state);
+        return new Flush(options, null, MakeRunner(vault, settings), null, state);
     }
 
     private static State OpenState() => new(null, null, VaultPaths.EnsureStateDatabase(), StateAccess.ReadWrite);

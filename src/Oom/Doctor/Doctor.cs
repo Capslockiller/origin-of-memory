@@ -163,14 +163,6 @@ public sealed class Doctor
                 $"Arama indeksi korpusla eşleşmiyor: {verdict.Missing.Count} eksik, {verdict.Extra.Count} fazla — oom sweep.");
     }
 
-    public IReadOnlyList<HealthItem> ValidateReleaseClaims(IReadOnlyDictionary<string, string> claims)
-    {
-        ArgumentNullException.ThrowIfNull(claims);
-        return claims.Where(claim => string.IsNullOrWhiteSpace(claim.Value))
-            .Select(claim => Item("release", HealthLevel.Error, "claim-without-evidence", claim.Key, "Sürüm iddiasının test veya ölçüm kanıtı yok."))
-            .ToArray();
-    }
-
     public string ToJson(DoctorResult result) => JsonSerializer.Serialize(new
     {
         schema_version = 1,

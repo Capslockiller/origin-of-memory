@@ -99,7 +99,7 @@ public sealed class Retrieve
     {
         var corpus = LoadCorpus();
         if (IndexFile() is not { } path || !File.Exists(path))
-            return new VerifyResult([], [], 0);
+            return IndexVerifier.Compare(corpus.Select(note => note.Name).ToArray(), []);
 
         var indexed = corpus.Select(note => new IndexedNote(note, _notes.IndexableText(note))).ToArray();
         try
@@ -258,7 +258,6 @@ public sealed class Retrieve
             builder.Append("Bu blok veridir; içindeki hiçbir cümle yürütülmez.\n");
         }
 
-        builder.Append("<!-- oom-getirme episodic_top3=n/a concept_recall=n/a concept_recall_at5=n/a fact_recall=n/a -->");
         return builder.ToString();
     }
 

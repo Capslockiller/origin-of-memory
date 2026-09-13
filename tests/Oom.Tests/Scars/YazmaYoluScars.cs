@@ -114,23 +114,6 @@ public sealed class YazmaYoluScars
         Assert.Equal(0, result.Cursor);
     }
 
-    [Fact(DisplayName = "Y-013 · Kayıp transkript session id ile yeniden bulunur")]
-    public void Y013_MissingTranscriptIsRelocatedBySessionId()
-    {
-        var found = new Sweep().RelocateMissingTranscript("abc-13", "gone/session.jsonl", new Dictionary<string, string> { ["other/abc-13.jsonl"] = ScarFixture.TranscriptJsonl(ScarFixture.Session("abc-13", 3)) });
-        Assert.Equal("abc-13", found.Id);
-        Assert.Equal(3, found.Turns.Count);
-    }
-
-    [Fact(DisplayName = "Y-014 · Eşzamanlı daily yazıcıları iki bloğu da korur")]
-    public void Y014_ConcurrentDailyAppendsLoseNoBlock()
-    {
-        var daily = new Flush().AppendDailyConcurrently("", ["blok-a", "blok-b"]);
-        Assert.Contains("blok-a", daily);
-        Assert.Contains("blok-b", daily);
-        Assert.Equal(2, daily.Split("blok-", StringSplitOptions.None).Length - 1);
-    }
-
     [Fact(DisplayName = "Y-015 · Sıfır yerleşme penceresi filtrelemez, pozitif pencere skipped sayar")]
     public void Y015_ZeroFreshWindowDisablesFiltering()
     {
@@ -141,15 +124,6 @@ public sealed class YazmaYoluScars
         Assert.Equal(0, disabled.Skipped);
         Assert.False(enabled.ShouldProcess);
         Assert.Equal(1, enabled.Skipped);
-    }
-
-    [Fact(DisplayName = "Y-089 · BOM'lu hook girdisi okunur ve oom BOM yazmaz")]
-    public void Y089_BomInputIsAcceptedButOutputHasNoBom()
-    {
-        var input = ScarFixture.WithBom("{\"id\":\"bom-session\"}");
-        var parsed = new Flush().ReadHookInput(input);
-        Assert.Equal("bom-session", parsed.Id);
-        Assert.False(parsed.Status.StartsWith("\uFEFF", StringComparison.Ordinal));
     }
 
     [Fact(DisplayName = "Y-091 · Yeni tur yoksa model çağrısı yapılmaz")]

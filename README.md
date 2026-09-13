@@ -85,6 +85,8 @@ oom [--vault <path>] <command>
 - `<companionDir>/` — hand-written files injected at session start (Core, Last-Session, Threads, Journal)
 - `.oom/` — `oom.json` and `vault.json`
 
+Summaries are plain text. There is no secret masking; a key or password said in a session can end up in `daily/`.
+
 ## Development
 
 ```

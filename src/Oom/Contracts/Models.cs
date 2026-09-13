@@ -49,5 +49,4 @@ public sealed record FreshnessResult(bool ShouldProcess, int Skipped);
 
 public interface IClock { DateTimeOffset Now { get; } }
 public interface IProcessRunner { ProcessResult Run(ProcessRequest request, TimeSpan timeout); }
-public interface INotifier { void Notify(string text); }
 public interface IFileOperations { void Replace(string source, string destination); }

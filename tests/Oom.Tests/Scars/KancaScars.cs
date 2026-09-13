@@ -51,16 +51,6 @@ public sealed class KancaScars
         Assert.Empty(result.UncoveredIds);
     }
 
-    [Fact(DisplayName = "Y-048 · Eşzamanlı oturumların prompt sayaçları bağımsızdır")]
-    public void Y048_HookCountersArePerSession()
-    {
-        var states = new[] { new HookState("a", 3, ScarFixture.Now), new HookState("b", 7, ScarFixture.Now) };
-        var audited = new Context().AuditCompanion("fixture-vault");
-        Assert.Equal(3, states.Single(x => x.SessionId == "a").PromptCount);
-        Assert.Equal(7, states.Single(x => x.SessionId == "b").PromptCount);
-        Assert.DoesNotContain(audited, x => x.Code == "shared-hook-counter");
-    }
-
     [Fact(DisplayName = "Y-049 · Kanca hata yolu kalıcı doctor bulgusu bırakır")]
     public void Y049_HookFailureIsPersisted()
     {
@@ -68,28 +58,6 @@ public sealed class KancaScars
         var process = new Runner().RunProcess(request, TimeSpan.FromSeconds(1));
         Assert.NotEqual(0, process.ExitCode);
         Assert.Contains(new Doctor().Check(ScarFixture.Now).Items, x => x.Code == "hook-failed");
-    }
-
-    [Fact(DisplayName = "Y-050 · El katmanı denetimi mtime yerine içeriğe bakar")]
-    public void Y050_CompanionAuditUsesContentNotMtime()
-    {
-        var vault = ScarFixture.CompanionVault("# Düzeltmeler\n- ilk hâli\n");
-        try
-        {
-            var context = new Context();
-            var path = Path.Combine(vault, ScarFixture.CompanionDir, "Duzeltmeler.md");
-            Assert.DoesNotContain(context.AuditCompanion(vault), x => x.Code == "companion-content-stale");
-
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
-            Assert.Contains(context.AuditCompanion(vault), x => x.Code == "companion-content-stale" && x.Key == "Duzeltmeler.md");
-
-            File.WriteAllText(path, "# Düzeltmeler\n- ikinci hâli\n");
-            Assert.DoesNotContain(context.AuditCompanion(vault), x => x.Code == "companion-content-stale");
-        }
-        finally
-        {
-            ScarFixture.Remove(vault);
-        }
     }
 
     [Fact(DisplayName = "Y-051 · Açılışta enjekte edilen bölüm listesi belgeyle birebir eşleşir")]
