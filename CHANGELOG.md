@@ -8,11 +8,14 @@
 - The compile prompt lists the hub ids and a tag vocabulary (hub-config tags plus the forty most frequent); more than one tag outside it is a health warning.
 - `doctor` reports orphan concepts, concepts without a hub, and notes outside the schema.
 - Compile keeps the reason a daily was rejected; a failed `claude` call records its stdout and stderr.
+- Flush reads the compact summary Claude Code writes when a conversation is compacted and puts it before the raw-turn slice, under its own character budget. A session that holds only a compact summary still flushes.
 
 ### Fixed
 - Codex rollouts in the current `response_item` format parse; developer and injected blocks are skipped. Until now every Codex session was unreadable to sweep.
 - The hub configuration lives at `.oom/hub-config.json`; without it every concept fell into the catch-all hub.
 - The nudge reminder is English. `sessions` gained `last_prompt_ts`; an older state database is set aside and rebuilt.
+- Sweep and flush read Codex rollouts through the Codex parser; stamps marked unreadable by the old parser are retried.
+- Hub membership matches whole tags and the note's name and title. A short tag such as `vr` no longer matches inside a word such as `kavram`, which had put every concept into one hub.
 
 ## 3.0.2 — 2026-09-12
 

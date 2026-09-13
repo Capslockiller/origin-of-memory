@@ -313,4 +313,80 @@ public sealed class SadeScars
         }
     }
 
+    [Fact(DisplayName = "Y-322 · Compact özeti ayrı tür olarak okunur, tur bütçesini yemez ve istemde ham turlardan önce gelir")]
+    public void Y322_CompactSummaryRidesAlongsideRawTurns()
+    {
+        var flush = new Flush(new FlushOptions(Mode: "dilim", SliceTurns: 30, MaxCharacters: 15_000));
+        var summary = new string('s', 16_000);
+        var lines = new List<string>();
+        for (var i = 0; i < 4; i++)
+            lines.Add($"{{\"sessionId\":\"y322\",\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"eski tur {i}\"}},\"timestamp\":\"2026-09-12T20:0{i}:00Z\"}}");
+        lines.Add($"{{\"sessionId\":\"y322\",\"type\":\"user\",\"isCompactSummary\":true,\"isVisibleInTranscriptOnly\":true,\"message\":{{\"role\":\"user\",\"content\":\"{summary}\"}},\"timestamp\":\"2026-09-12T22:04:10Z\"}}");
+        for (var i = 0; i < 4; i++)
+            lines.Add($"{{\"sessionId\":\"y322\",\"type\":\"{(i % 2 == 0 ? "user" : "assistant")}\",\"message\":{{\"role\":\"{(i % 2 == 0 ? "user" : "assistant")}\",\"content\":\"yeni tur {i}\"}},\"timestamp\":\"2026-09-12T22:1{i}:00Z\"}}");
+
+        var turns = flush.ParseTranscript(string.Join('\n', lines));
+        Assert.Equal(9, turns.Count);
+        Assert.Equal("compact", turns[4].Kind);
+
+        var session = new Session("y322", "claude", turns, turns[0].Timestamp);
+        var ranges = flush.PlanRanges(session, -1, 30, 15_000);
+
+        Assert.Single(ranges);
+        Assert.Equal(8, ranges[0].Turns.Count);
+        Assert.DoesNotContain(ranges[0].Turns, turn => turn.Kind == "compact");
+        Assert.Equal(summary, ranges[0].Compact);
+
+        var prompt = (string)typeof(Flush).GetMethod("BuildPrompt", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(flush, [ranges[0]])!;
+        Assert.Contains("BEGIN UNTRUSTED COMPACT SUMMARY", prompt, StringComparison.Ordinal);
+        Assert.True(prompt.IndexOf("END UNTRUSTED COMPACT SUMMARY", StringComparison.Ordinal) < prompt.IndexOf("BEGIN UNTRUSTED TRANSCRIPT DATA", StringComparison.Ordinal));
+        Assert.Contains("[8][assistant][text] yeni tur 3", prompt, StringComparison.Ordinal);
+
+        var later = flush.PlanRanges(session, 4, 30, 15_000);
+        Assert.Null(later[0].Compact);
+    }
+
+    [Fact]
+    public void Y323_CompactOnlySessionAdvancesWithoutInventedRawTurns()
+    {
+        var flush = new Flush(new FlushOptions(Mode: "dilim"));
+        var turn = new Turn(4, "user", "compact", "Previous session summary", DateTimeOffset.UtcNow);
+        var session = new Session("compact-only", "claude", [turn], turn.Timestamp);
+        var range = Assert.Single(flush.PlanRanges(session, -1, 30, 15_000));
+        Assert.Equal(4, range.End);
+        Assert.Empty(range.Turns);
+        Assert.Equal(turn.Text, range.Compact);
+        Assert.Empty(flush.PlanRanges(session, 4, 30, 15_000));
+    }
+
+    [Fact]
+    public void Y324_SweepReparsesOldUnreadableCodexStampThroughRealFileReader()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "scar-codex-" + Guid.NewGuid().ToString("N"));
+        var transcripts = Path.Combine(root, ".codex", "sessions");
+        Directory.CreateDirectory(transcripts);
+        var path = Path.Combine(transcripts, "codex-test.jsonl");
+        File.WriteAllText(path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-test\"}}\n" + string.Join('\n', Enumerable.Range(0,4).Select(i => JsonSerializer.Serialize(new { type = "response_item", timestamp = "2026-09-01T00:00:00Z", payload = new { type = "message", role = "user", content = new[] { new { type = "input_text", text = "A real user message " + i } } } }))));
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddDays(-10));
+        using var state = new State(null, null, Path.Combine(root, "state.db"));
+        var settings = OomSettings.Defaults(root) with { Sweep = new SweepSettings(8, 8, 3, 20, [transcripts]) };
+        var sweep = new SweepRun(root, settings, new Flush(), state);
+        var candidate = Assert.Single(sweep.Discover());
+        state.WriteStamp(path, candidate.ModifiedAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture), candidate.Size, "unreadable");
+        var report = sweep.Execute(true);
+        Assert.Equal(1, report.Changed);
+        Assert.Equal(FlushOutcome.Ok, Assert.Single(report.Result.Results).Outcome);
+    }
+
+    [Fact]
+    public void Y325_ShortHubTagsDoNotMatchInsideUnrelatedWords()
+    {
+        var root = ScarFixture.TempDirectory();
+        Directory.CreateDirectory(Path.Combine(root, ".oom"));
+        File.WriteAllText(Path.Combine(root, ".oom", "hub-config.json"), """{"catch_all":"genel","hubs":[{"id":"unreal","tags":["vr"],"title_keys":["unreal"]},{"id":"genel","tags":[],"title_keys":[]}]}""");
+        var map = new RootMap(root);
+        Assert.Equal(["genel"], map.Assign("Bu kavram günlük yaşamı anlatır."));
+        Assert.Equal(["unreal"], map.Assign("VR başlık kullanımı."));
+    }
 }

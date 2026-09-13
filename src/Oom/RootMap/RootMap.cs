@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
 
@@ -72,7 +73,7 @@ public sealed class RootMap
         var corpus = Migrate(configuration, LoadCorpus());
         var buckets = configuration.Hubs.ToDictionary(hub => hub.Id, _ => new List<Note>(), StringComparer.Ordinal);
         foreach (var note in corpus)
-            foreach (var id in HubsFor(configuration, note.Title + "\n" + note.Body, note.Tags))
+            foreach (var id in HubsFor(configuration, note.Name + "\n" + note.Title, note.Tags))
                 buckets[id].Add(note);
 
         var index = BuildIndex(configuration, buckets);
@@ -84,12 +85,12 @@ public sealed class RootMap
     }
 
     public IReadOnlyList<string> Assign(string dailyText)
-        => HubsFor(Configuration, dailyText ?? string.Empty, []);
+        => HubsFor(Configuration, dailyText ?? string.Empty, [], scanTextTags: true);
 
     internal IReadOnlyList<string> HubsForNote(Note note)
-        => HubsFor(Configuration, note.Title + "\n" + note.Body, note.Tags);
+        => HubsFor(Configuration, note.Name + "\n" + note.Title, note.Tags);
 
-    private IReadOnlyList<string> HubsFor(HubConfiguration configuration, string text, IReadOnlyList<string> tags)
+    private IReadOnlyList<string> HubsFor(HubConfiguration configuration, string text, IReadOnlyList<string> tags, bool scanTextTags = false)
     {
         var folded = _fold.Fold(text);
         var foldedTags = tags.Select(tag => _fold.Fold(tag)).ToHashSet(StringComparer.Ordinal);
@@ -98,7 +99,7 @@ public sealed class RootMap
         {
             if (string.Equals(hub.Id, configuration.CatchAll, StringComparison.Ordinal))
                 continue;
-            var hit = hub.Tags.Any(tag => foldedTags.Contains(_fold.Fold(tag)) || folded.Contains(_fold.Fold(tag), StringComparison.Ordinal))
+            var hit = hub.Tags.Any(tag => foldedTags.Contains(_fold.Fold(tag)) || (scanTextTags && Regex.IsMatch(folded, @"(?<![\p{L}\p{N}])" + Regex.Escape(_fold.Fold(tag)) + @"(?![\p{L}\p{N}])")))
                 || hub.TitleKeys.Any(key => folded.Contains(_fold.Fold(key), StringComparison.Ordinal));
             if (hit)
                 matched.Add(hub.Id);
@@ -141,7 +142,7 @@ public sealed class RootMap
                 continue;
             }
 
-            hub = needsHub ? HubsFor(configuration, note.Title + "\n" + note.Body, note.Tags)[0] : hub!;
+            hub = needsHub ? HubsFor(configuration, note.Name + "\n" + note.Title, note.Tags)[0] : hub!;
             var path = Path.Combine(_vault, "knowledge", "concepts", Path.GetFileName(note.Name));
             if (!File.Exists(path))
             {

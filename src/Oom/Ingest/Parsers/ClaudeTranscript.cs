@@ -49,7 +49,7 @@ internal static class ClaudeTranscript
             if (ReadText(root, message) is not { Length: > 0 } text)
                 continue;
 
-            var kind = Classify(Text(root, "kind") ?? "text", text);
+            var kind = Flag(root, "isCompactSummary") ? "compact" : Classify(Text(root, "kind") ?? "text", text);
             var position = root.TryGetProperty("index", out var declared) && declared.TryGetInt32(out var parsed) ? parsed : index;
             turns.Add(new Turn(position, role, kind, text, Stamp(root, clock)));
             index++;

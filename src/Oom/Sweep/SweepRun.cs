@@ -82,6 +82,8 @@ public sealed class SweepRun
                 continue;
 
             var stamp = _state?.ReadStamp(candidate.Path);
+            if (candidate.Source == "codex" && stamp?.Outcome == "unreadable")
+                stamp = null;
             if (stamp is { } previous && previous.Mtime == Stamp(candidate.ModifiedAt) && previous.Size == candidate.Size)
             {
                 skipped++;
@@ -219,7 +221,7 @@ public sealed class SweepRun
         if (ranges.Count == 0)
             return FlushOutcome.NoNewTurns;
 
-        return ranges[0].Turns.Count < _settings.Sweep.MinTurns ? FlushOutcome.NoTurns : FlushOutcome.Ok;
+        return ranges[0].Turns.Count < _settings.Sweep.MinTurns && ranges[0].Compact is null ? FlushOutcome.NoTurns : FlushOutcome.Ok;
     }
 
     private void Write(SweepCandidate candidate, string outcome, bool dryRun)
