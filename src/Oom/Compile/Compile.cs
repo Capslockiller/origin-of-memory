@@ -84,13 +84,14 @@ public sealed class Compile
         if (gated.Refused)
             return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, gated.Findings), GuardReason(gated.Findings));
 
-        if (!gated.Text.Contains(DoneMarker, StringComparison.Ordinal))
-            return new CompileResult("retry", [], false, false, null, $"model çıktısında '{DoneMarker}' imi yok");
+        var truncated = !gated.Text.Contains(DoneMarker, StringComparison.Ordinal);
 
         IReadOnlyDictionary<string, string> files;
         try
         {
-            files = ParseFiles(gated.Text);
+            files = ParseFiles(gated.Text, allowTrailingIncomplete: truncated);
+            if (truncated && files.Count == 0)
+                return new CompileResult("retry", [], false, false, null, $"model çıktısında '{DoneMarker}' imi yok");
             foreach (var (path, body) in files)
             {
                 var note = _guards.Gate(body, Direction.Out, ComponentKind.Compile);
@@ -110,7 +111,7 @@ public sealed class Compile
 
         AppendLog(dailyName, publication.VisibleNotes);
         _bridge.Refresh();
-        return new CompileResult("ok", publication.VisibleNotes, true, true);
+        return new CompileResult("ok", publication.VisibleNotes, true, true, Reason: truncated ? "truncated=1" : null);
     }
 
     public CompileDecision MaybeCompile(DateTimeOffset now, DateTimeOffset? lastSuccess, bool hasPending)
@@ -208,8 +209,12 @@ public sealed class Compile
     }
 
     internal IReadOnlyDictionary<string, string> ParseFiles(string modelOutput)
+        => ParseFiles(modelOutput, allowTrailingIncomplete: false);
+
+    private IReadOnlyDictionary<string, string> ParseFiles(string modelOutput, bool allowTrailingIncomplete)
     {
-        ValidateOutputPaths(modelOutput);
+        if (!allowTrailingIncomplete)
+            ValidateOutputPaths(modelOutput);
         var files = new Dictionary<string, string>(StringComparer.Ordinal);
         var lines = Lines(modelOutput);
         for (var index = 0; index < lines.Length; index++)
@@ -233,7 +238,18 @@ public sealed class Compile
                 body.Append(lines[cursor]).Append('\n');
             }
             if (!closed)
+            {
+                if (allowTrailingIncomplete && cursor == lines.Length)
+                    break;
                 throw new ArgumentException($"'{path}' bloğu '{EndFileMarker}' ile kapatılmamış; bütün koşum reddedildi.", nameof(modelOutput));
+            }
+            if (allowTrailingIncomplete)
+            {
+                if (!ConceptPath.IsMatch(path))
+                    throw new ArgumentException($"Model çıktısındaki '{path}' yolu izin verilen kavram deseniyle eşleşmiyor; bütün koşum reddedildi.", nameof(modelOutput));
+                if (files.ContainsKey(path))
+                    throw new ArgumentException($"'{path}' yolu tek koşumda iki kez yazılıyor; bütün koşum reddedildi.", nameof(modelOutput));
+            }
             files[path] = body.ToString().TrimEnd('\n');
             index = cursor;
         }

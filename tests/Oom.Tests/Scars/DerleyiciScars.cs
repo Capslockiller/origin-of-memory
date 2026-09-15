@@ -141,7 +141,7 @@ public sealed class DerleyiciScars
         Assert.False(string.IsNullOrWhiteSpace(duplicate.Reason));
         Assert.Contains("knowledge/concepts/a.md", duplicate.Reason!, StringComparison.Ordinal);
 
-        var retry = compile.Run("2026-09-10.md", "daily", "=== FILE: knowledge/concepts/a.md ===\nx\n=== END FILE ===");
+        var retry = compile.Run("2026-09-10.md", "daily", "=== FILE: knowledge/concepts/a.md ===\nx");
         Assert.Equal("retry", retry.Status);
         Assert.Contains("=== DONE ===", retry.Reason!, StringComparison.Ordinal);
 
@@ -192,6 +192,61 @@ public sealed class DerleyiciScars
         }
         finally { ScarFixture.Remove(directory); }
     }
+
+    [Fact(DisplayName = "Y-334 · Kesilen derlemede kapanmış iki dosya yayınlanır, son kesik parça atılır")]
+    public void Y334_TruncatedCompilePublishesClosedFilesAndDropsTrailingFragment()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            var retrieve = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: Path.Combine(vault, "index.db")));
+            var compile = new Compile(vault, retrieve: retrieve);
+            var output = FileBlock("bir.md", "Bir") + FileBlock("iki.md", "İki") +
+                         "=== FILE: knowledge/concepts/kesik.md ===\n---\ntitle: Kesik";
+
+            var result = compile.Run("2026-09-13.md", "daily", output);
+
+            Assert.Equal("ok", result.Status);
+            Assert.Equal(["knowledge/concepts/bir.md", "knowledge/concepts/iki.md"], result.WrittenPaths);
+            Assert.Equal("truncated=1", result.Reason);
+            Assert.True(File.Exists(Path.Combine(vault, "knowledge", "concepts", "bir.md")));
+            Assert.True(File.Exists(Path.Combine(vault, "knowledge", "concepts", "iki.md")));
+            Assert.False(File.Exists(Path.Combine(vault, "knowledge", "concepts", "kesik.md")));
+
+            using var state = new State(null, null, Path.Combine(vault, "compile.db"));
+            state.WriteDailyIngest("2026-09-13.md", result.Status, ScarFixture.Now, result.Reason);
+            Assert.Equal("ingested", state.ReadColumn("SELECT status FROM daily_ingest WHERE name = '2026-09-13.md'").Single());
+            Assert.Contains("truncated=1", state.ReadColumn("SELECT reasons FROM daily_ingest WHERE name = '2026-09-13.md'").Single(), StringComparison.Ordinal);
+        }
+        finally { ScarFixture.Remove(vault); }
+    }
+
+    [Fact(DisplayName = "Y-335 · Hiç kapanmış dosyası olmayan kesik derleme eskisi gibi retry olur")]
+    public void Y335_TruncatedCompileWithoutClosedFilesStillRetries()
+    {
+        var vault = ScarFixture.TempDirectory();
+        try
+        {
+            var compile = new Compile(vault);
+            var output = "=== FILE: knowledge/concepts/kesik.md ===\n---\ntitle: Kesik";
+
+            var result = compile.Run("2026-09-13.md", "daily", output);
+
+            Assert.Equal("retry", result.Status);
+            Assert.Empty(result.WrittenPaths);
+            Assert.False(result.SourceIngested);
+            Assert.Contains("=== DONE ===", result.Reason!, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(vault, "knowledge", "concepts")));
+        }
+        finally { ScarFixture.Remove(vault); }
+    }
+
+    private static string FileBlock(string name, string title) =>
+        $"=== FILE: knowledge/concepts/{name} ===\n" +
+        $"---\ntitle: {title}\naliases: []\ntags: []\nsources: [2026-09-13.md]\n" +
+        "created: 2026-09-13\nupdated: 2026-09-13\ntype: concept\nhub: genel\n---\n" +
+        $"# {title}\nKalıcı bilgi.\n\n## İlgili Kavramlar\n- [[ilk]] ilk bağlantı gerekçesi\n" +
+        "- [[ikinci]] ikinci bağlantı gerekçesi\n=== END FILE ===\n";
 
     private sealed class Y312ProcessRunner : IProcessRunner
     {

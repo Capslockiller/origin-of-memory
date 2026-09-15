@@ -13,6 +13,13 @@ public sealed class SemaScars
         ]}
         """;
 
+    private const string ExpandedHubConfig = """
+        {"catch_all": "gunluk-yasam", "hubs": [
+          {"id": "kisisel-saglik", "ad": "Kişisel Sağlık", "kapsam": "Kişisel yaşam ve sağlık", "tags": ["kisisel"], "title_keys": []},
+          {"id": "gunluk-yasam", "ad": "Günlük Yaşam", "kapsam": "Henüz başka bir hub'a eşleşmeyen kavramlar", "tags": [], "title_keys": []}
+        ]}
+        """;
+
     private static readonly UTF8Encoding Utf8 = new(false);
 
     private const string LegacyConcept = """
@@ -214,4 +221,87 @@ public sealed class SemaScars
             ScarFixture.Remove(vault);
         }
     }
+
+    [Fact(DisplayName = "Y-336 · Catch-all kavram yeni etiket eşleşmesi gelince doğru hub'a taşınır")]
+    public void Y336_CatchAllConceptMovesWhenConfigurationGainsMatchingTag()
+    {
+        var vault = Vault();
+        try
+        {
+            var path = Path.Combine(vault, "knowledge", "concepts", "kisisel-not.md");
+            var configurationPath = Path.Combine(vault, ".oom", "hub-config.json");
+            var original = HubbedConcept("gunluk-yasam", "kisisel");
+            File.WriteAllText(path, original, Utf8);
+            File.WriteAllText(configurationPath, ExpandedHubConfig.Replace("\"tags\": [\"kisisel\"]", "\"tags\": []", StringComparison.Ordinal), Utf8);
+
+            new RootMap(vault).Regenerate();
+            Assert.Equal(original, File.ReadAllText(path, Utf8));
+
+            File.WriteAllText(configurationPath, ExpandedHubConfig, Utf8);
+
+            new RootMap(vault).Regenerate();
+
+            var rewritten = File.ReadAllText(path, Utf8);
+            Assert.NotEqual(original, rewritten);
+            Assert.Contains("hub: kisisel-saglik\n---", rewritten, StringComparison.Ordinal);
+            Assert.DoesNotContain("hub: gunluk-yasam", rewritten, StringComparison.Ordinal);
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    [Fact(DisplayName = "Y-337 · Catch-all'da kalan kavramın dosyası yeniden yazılmaz")]
+    public void Y337_CatchAllConceptIsNotRewrittenWhenItStillMatchesNothing()
+    {
+        var vault = Vault();
+        try
+        {
+            var path = Path.Combine(vault, "knowledge", "concepts", "eslesmeyen-not.md");
+            var original = HubbedConcept("gunluk-yasam", "sozluk-disi");
+            File.WriteAllText(path, original, Utf8);
+            File.WriteAllText(Path.Combine(vault, ".oom", "hub-config.json"), ExpandedHubConfig, Utf8);
+            var timestamp = new DateTime(2020, 1, 2, 3, 4, 6, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(path, timestamp);
+
+            new RootMap(vault).Regenerate();
+
+            Assert.Equal(original, File.ReadAllText(path, Utf8));
+            Assert.Equal(timestamp, File.GetLastWriteTimeUtc(path));
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    [Fact(DisplayName = "Y-338 · Geçerli catch-all olmayan hub'a sahip kavrama dokunulmaz")]
+    public void Y338_ValidNonCatchAllHubRemainsUntouched()
+    {
+        var vault = Vault();
+        try
+        {
+            var path = Path.Combine(vault, "knowledge", "concepts", "sabit-not.md");
+            var original = HubbedConcept("kisisel-saglik", "sozluk-disi");
+            File.WriteAllText(path, original, Utf8);
+            File.WriteAllText(Path.Combine(vault, ".oom", "hub-config.json"), ExpandedHubConfig, Utf8);
+            var timestamp = new DateTime(2020, 1, 2, 3, 4, 6, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(path, timestamp);
+
+            new RootMap(vault).Regenerate();
+
+            Assert.Equal(original, File.ReadAllText(path, Utf8));
+            Assert.Equal(timestamp, File.GetLastWriteTimeUtc(path));
+        }
+        finally
+        {
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    private static string HubbedConcept(string hub, string tag) =>
+        $"---\ntitle: Kisisel not\naliases: []\ntags: [{tag}]\nsources: [2026-09-15.md]\n" +
+        $"created: 2026-09-15\nupdated: 2026-09-15\ntype: concept\nhub: {hub}\n---\n" +
+        "# Kisisel not\n\nKalici bilgi.\n";
 }

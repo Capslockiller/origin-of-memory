@@ -134,7 +134,9 @@ public sealed class RootMap
         foreach (var note in corpus)
         {
             var hub = note.Hub;
-            var needsHub = string.IsNullOrWhiteSpace(hub) || !configuration.Hubs.Any(entry => string.Equals(entry.Id, hub, StringComparison.Ordinal));
+            var needsHub = string.IsNullOrWhiteSpace(hub)
+                || string.Equals(hub, configuration.CatchAll, StringComparison.Ordinal)
+                || !configuration.Hubs.Any(entry => string.Equals(entry.Id, hub, StringComparison.Ordinal));
             var needsType = !string.Equals(note.Type, "concept", StringComparison.Ordinal);
             if (!needsHub && !needsType)
             {
@@ -143,6 +145,12 @@ public sealed class RootMap
             }
 
             hub = needsHub ? HubsFor(configuration, note.Name + "\n" + note.Title, note.Tags)[0] : hub!;
+            if (!needsType && string.Equals(hub, note.Hub, StringComparison.Ordinal))
+            {
+                migrated.Add(note);
+                continue;
+            }
+
             var path = Path.Combine(_vault, "knowledge", "concepts", Path.GetFileName(note.Name));
             if (!File.Exists(path))
             {
