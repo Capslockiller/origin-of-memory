@@ -756,16 +756,36 @@ internal static class Program
         Console.WriteLine("""
             oom [--vault <path>] <command>
 
-              context [--json]                                   print the session-start memory block
-              nudge [--session <id>]                             count prompts, remind the session to record
-              flush [--session <id>] [--reason <r>]              summarise one session into daily/
-              sweep [--dry-run]                                  flush every changed transcript under sweep.roots
-              compile [--dry-run]                                fold daily/ into knowledge/ concept notes
-              retrieve --query <q> [--json] [--top N] [--batch <f>]   BM25 search over the notes
-              doctor [--fix] [--json] [--quiet]                  health table
-              save "<text>" | --session-json                     append a record to today's daily
-              mcp                                                read-only MCP server over stdio
-              install [--uninstall]                              write .oom/ and the four hooks in .claude/settings.json
+              --vault <path>                                     use <path> as the vault
+
+              context [--json]                                   print session-start memory context
+                --json                                            emit the sections and text as JSON
+              nudge [--session <id>]                             record a prompt and print session timing context
+                --session <id>                                   use this session instead of the hook session
+              flush [--session <id>] [--reason <r>]              summarize a session transcript into daily/
+                --session <id>                                   select the session to summarize
+                --transcript <file>                              read this transcript instead of the hook transcript
+                --reason <r>                                     set the flush reason (precompact, sweep, or ingest)
+                --detached                                        process directly instead of starting a detached flush
+              sweep [--dry-run]                                  flush changed transcripts under configured sweep roots
+                --dry-run                                         report without flushing, reindexing, or compiling
+              compile [--dry-run]                                compile pending daily logs into knowledge notes
+                --dry-run                                         show compilation plans without compiling daily logs
+              retrieve --query <q> [--json] [--top N] [--batch <file>]  search indexed notes
+                --query <q>                                      search for this query
+                --json                                            emit search hits as JSON
+                --top N                                           return at most N hits
+                --batch <file>                                   search one query per line from this file
+                --session <id>                                   label searches with this session identifier
+              doctor [--fix] [--json] [--quiet]                  check vault, index, hook, and state health
+                --fix                                             repair state, root map, and search index
+                --json                                            emit the health result as JSON
+                --quiet                                           print only warnings and errors to standard error
+              save "<text>" | --session-json <file>              append a checkpoint to today's daily log
+                --session-json <file>                             import a checkpoint from a session JSON file
+              mcp                                                 serve the read-only MCP interface over standard I/O
+              install [--uninstall]                              install or remove Claude hook registrations
+                --uninstall                                       remove this executable's Claude hook registrations
             """);
     }
 }
