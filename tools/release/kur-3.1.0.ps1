@@ -84,10 +84,20 @@ function Copy-Dizin {
     }
 }
 
+# SHA-256 through .NET, not Get-FileHash: Windows PowerShell started from PowerShell 7
+# (as on CI runners) inherits a PSModulePath that hides Microsoft.PowerShell.Utility.
+function Get-Sha256 {
+    param([string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '') }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
+
 function Get-DizinOzeti {
     param([string]$Root)
     Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
-        ForEach-Object { $_.FullName.Substring($Root.Length).TrimStart('\') + ":" + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } |
+        ForEach-Object { $_.FullName.Substring($Root.Length).TrimStart('\') + ":" + (Get-Sha256 -Path $_.FullName) } |
         Sort-Object
 }
 

@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Henüz 3.1.0'dan sonra yayınlanmamış bir değişiklik yok.
+### Düzeltildi
+- Sayı ve yüzde biçimi (`doctor`'daki "%6,1" gibi) artık makinenin bölge ayarından bağımsız: araç her zaman tr-TR biçimiyle yazar. İngilizce bölge ayarlı bir makinede farklı biçim basılıyordu.
+- `tools/release/kur-3.1.0.ps1` SHA-256'yı .NET ile hesaplar; PowerShell 7'den başlatılan Windows PowerShell'de `Get-FileHash` bulunamıyordu.
 
 ## 3.1.0 — 2026-09-28
 

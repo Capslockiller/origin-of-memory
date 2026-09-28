@@ -61,12 +61,16 @@ public sealed class DoctorFinalKabul
     [Fact(DisplayName = "O14 · PATH'te bulunan claude için hook-failed kaydı gizlenmez ve sonraki başarı iyileştirir")]
     public void ReachableClaude_DoesNotHideFailedSubprocess_AndSuccessHealsIt()
     {
-        var reach = new Doctor().CheckClaudeReachability(Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
-        Assert.Equal(HealthLevel.Info, reach.Level);
-
         var root = NewDirectory("o14");
         try
         {
+            // A PATH of our own with a stub claude.cmd: the test must not depend on the machine
+            // having the Claude CLI installed (a CI runner does not).
+            var stubBin = Directory.CreateDirectory(Path.Combine(root, "stub-bin")).FullName;
+            File.WriteAllText(Path.Combine(stubBin, "claude.cmd"), "@echo off\r\n");
+            var reach = new Doctor().CheckClaudeReachability(stubBin);
+            Assert.Equal(HealthLevel.Info, reach.Level);
+
             var vault = BuildUnitVault(root);
             var settings = Settings(vault, Path.Combine(root, "transcripts"));
             var request = new ProcessRequest(reach.Key, [], root, new Dictionary<string, string>(), string.Empty);

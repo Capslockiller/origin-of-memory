@@ -25,6 +25,14 @@ internal static partial class Program
         if (OperatingSystem.IsWindows())
             SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 
+        // The tool speaks Turkish; numbers and percentages ("%6,1") must not change with the
+        // machine's regional settings (measured: an en-US CI runner printed a different form).
+        var turkish = System.Globalization.CultureInfo.GetCultureInfo("tr-TR");
+        System.Globalization.CultureInfo.DefaultThreadCurrentCulture = turkish;
+        System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = turkish;
+        System.Globalization.CultureInfo.CurrentCulture = turkish;
+        System.Globalization.CultureInfo.CurrentUICulture = turkish;
+
         try
         {
             return dispatch(args);

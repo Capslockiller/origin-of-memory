@@ -69,6 +69,9 @@ public sealed class KabulHarness : IDisposable
         Directory.CreateDirectory(LocalAppData);
         UserProfile = Path.Combine(_root, "userprofile");
         Directory.CreateDirectory(UserProfile);
+        // The default sweep root (%USERPROFILE%/.claude/projects) must exist in the isolated
+        // profile, or doctor on a machine without one (a CI runner) reports every root missing.
+        Directory.CreateDirectory(Path.Combine(UserProfile, ".claude", "projects"));
     }
 
     /// <summary>
@@ -172,7 +175,11 @@ public sealed class KabulHarness : IDisposable
         // Environment.SpecialFolder.UserProfile, i.e. this developer's REAL ~/.claude and
         // kit installation (Program.Doctor.UserProfileRoot / Program.Kit.HomeRoot both
         // read it). Defaults to this harness's own isolated, empty UserProfile.
-        startInfo.Environment["OOM_USERPROFILE"] = string.IsNullOrEmpty(userProfile) ? UserProfile : userProfile;
+        var profile = string.IsNullOrEmpty(userProfile) ? UserProfile : userProfile;
+        startInfo.Environment["OOM_USERPROFILE"] = profile;
+        // Default sweep roots expand %USERPROFILE% itself; without this the child scanned the
+        // developer's real ~/.claude/projects and a CI runner's empty profile gave other results.
+        startInfo.Environment["USERPROFILE"] = profile;
         if (fakeNow is { } now)
             startInfo.Environment["OOM_FAKE_NOW"] = now.ToString("O");
 
