@@ -109,6 +109,10 @@ public sealed class VaultPathKabul
             startInfo.ArgumentList.Add("--fix");
             startInfo.Environment.Remove("OOM_INVOKED_BY");
             startInfo.Environment["OOM_LOCALAPPDATA"] = harness.LocalAppData;
+            // Same profile isolation as KabulHarness.Run: default sweep roots expand
+            // %USERPROFILE%, which on a CI runner has no ~/.claude/projects at all.
+            startInfo.Environment["OOM_USERPROFILE"] = harness.UserProfile;
+            startInfo.Environment["USERPROFILE"] = harness.UserProfile;
 
             using var process = new Process { StartInfo = startInfo };
             process.Start();
