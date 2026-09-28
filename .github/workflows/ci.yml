@@ -14,4 +14,9 @@ jobs:
           dotnet-version: "9.0.x"
       - run: dotnet restore Oom.sln
       - run: dotnet build Oom.sln --no-restore -c Release
-      - run: dotnet test Oom.sln --no-build -c Release
+      # SPEC R11 final gate: everything runs except the IntentionalRed canary (fails by
+      # design) and the tests that need private data no CI runner has: Kabul=OzelVault
+      # and Kabul=RetrieveSet (OOM_KABUL_PRIVATE / OOM_KABUL_VAULT / OOM_KABUL_EVAL_SET).
+      # tools/release/yerel-kapi.ps1 runs those locally, so LocalGateKabul (which runs that
+      # script) is left out here too. No pipe: the step fails when dotnet test fails.
+      - run: dotnet test Oom.sln --no-build -c Release --filter "Kabul!=OzelVault&Kabul!=RetrieveSet&Category!=IntentionalRed&FullyQualifiedName!~Oom.Tests.Kabul.LocalGateKabul"

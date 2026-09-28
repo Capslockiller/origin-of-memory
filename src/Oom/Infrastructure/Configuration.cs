@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-public sealed record SweepSettings(int EveryHours, int SinceHours, int MinTurns, int MaxSessionsPerRun, IReadOnlyList<string> Roots);
+public sealed record SweepSettings(int MinTurns, int MaxSessionsPerRun, IReadOnlyList<string> Roots);
 
 public sealed record FlushSettings(string Mode, int SliceTurns);
 
@@ -12,13 +12,18 @@ public sealed record ClaudeSettings(string Fast, string Smart);
 
 public sealed record BackendSettings(ClaudeSettings Claude);
 
-public sealed record CompileOptions(int EveningHour, int MinIntervalHours, int MaxDailiesPerRun);
+public sealed record CompileOptions(int MaxDailiesPerRun);
 
 public sealed record ExtensionSettings(string Name, string ContextLine);
 
+/// <summary>A settings key whose JSON value had the wrong shape for its reader (e.g. a
+/// string where a number was expected, or an unrecognised flush.mode). Kept separate from
+/// <see cref="OomSettings.UnknownKeys"/> (genuinely unrecognised key NAMES) so a key that
+/// happens to contain ": " can never be mis-split back apart when reported.</summary>
+public sealed record InvalidSetting(string Key, string Value, string Fallback);
+
 public sealed record OomSettings(
     BackendSettings Backend,
-    string RetrieveMode,
     SweepSettings Sweep,
     CompileOptions Compile,
     ContextOptions Context,
@@ -27,7 +32,7 @@ public sealed record OomSettings(
     IReadOnlyList<ExtensionSettings> Extensions)
 {
     public static readonly string[] KnownKeys =
-        ["backend", "retrieveMode", "sweep", "compile", "context", "retrieve", "mcp", "extensions", "nudgeEvery", "reflectionMinPrompts", "flush"];
+        ["backend", "sweep", "compile", "context", "retrieve", "mcp", "extensions", "nudgeEvery", "reflectionMinPrompts", "flush"];
 
     public int NudgeEvery { get; init; } = 15;
 
@@ -45,15 +50,16 @@ public sealed record OomSettings(
 
     public IReadOnlyList<string> UnknownKeys { get; init; } = [];
 
+    public IReadOnlyList<InvalidSetting> InvalidValues { get; init; } = [];
+
     public string? LoadError { get; init; }
 
     public static readonly string[] DefaultRoots = [@"%USERPROFILE%\.claude\projects", @"%USERPROFILE%\.codex\sessions"];
 
     public static OomSettings Defaults(string? vault = null) => new(
         new BackendSettings(new ClaudeSettings("claude-haiku-4-5-20251001", "claude-sonnet-5")),
-        "bm25",
-        new SweepSettings(8, 8, 3, 20, [.. DefaultRoots.Select(Expand)]),
-        new CompileOptions(18, 20, 3),
+        new SweepSettings(3, 20, [.. DefaultRoots.Select(Expand)]),
+        new CompileOptions(3),
         new ContextOptions(),
         new RetrieveOptions(VaultPath: vault),
         true,
@@ -68,16 +74,13 @@ public sealed record OomSettings(
             {
                 claude = new { fast = defaults.Backend.Claude.Fast, smart = defaults.Backend.Claude.Smart }
             },
-            retrieveMode = defaults.RetrieveMode,
             sweep = new
             {
-                everyHours = defaults.Sweep.EveryHours,
-                sinceHours = defaults.Sweep.SinceHours,
                 minTurns = defaults.Sweep.MinTurns,
                 maxSessionsPerRun = defaults.Sweep.MaxSessionsPerRun,
                 roots = DefaultRoots
             },
-            compile = new { eveningHour = defaults.Compile.EveningHour, minIntervalHours = defaults.Compile.MinIntervalHours, maxDailiesPerRun = defaults.Compile.MaxDailiesPerRun },
+            compile = new { maxDailiesPerRun = defaults.Compile.MaxDailiesPerRun },
             context = new { companionDir = defaults.Context.CompanionDir, capChars = defaults.Context.CapChars },
             retrieve = new
             {
@@ -102,23 +105,26 @@ public sealed record OomSettings(
 
         try
         {
-            var warnings = new List<string>();
+            var invalid = new List<InvalidSetting>();
             using var document = JsonDocument.Parse(File.ReadAllText(path, Utf8).TrimStart('﻿'));
             var root = document.RootElement;
+            if (root.ValueKind is not JsonValueKind.Object)
+                return defaults with { LoadError = $"{path}: kök bir JSON nesnesi değil ({root.ValueKind})" };
+
             return new OomSettings(
-                ReadBackend(Section(root, "backend"), defaults.Backend),
-                Text(root, "retrieveMode", defaults.RetrieveMode),
-                ReadSweep(Section(root, "sweep"), defaults.Sweep),
-                ReadCompile(Section(root, "compile"), defaults.Compile),
-                ReadContext(Section(root, "context"), defaults.Context),
-                ReadRetrieve(Section(root, "retrieve"), defaults.Retrieve),
-                Flag(Section(root, "mcp"), "enabled", defaults.McpEnabled),
+                ReadBackend(Section(root, "backend"), defaults.Backend, invalid),
+                ReadSweep(Section(root, "sweep"), defaults.Sweep, invalid),
+                ReadCompile(Section(root, "compile"), defaults.Compile, invalid),
+                ReadContext(Section(root, "context"), defaults.Context, invalid),
+                ReadRetrieve(Section(root, "retrieve"), defaults.Retrieve, invalid),
+                Flag(Section(root, "mcp"), "enabled", defaults.McpEnabled, "mcp", invalid),
                 ReadExtensions(root))
             {
-                Flush = ReadFlush(Section(root, "flush"), defaults.Flush, warnings),
-                UnknownKeys = [.. Unknown(root), .. warnings],
-                NudgeEvery = Number(root, "nudgeEvery", defaults.NudgeEvery),
-                ReflectionMinPrompts = Number(root, "reflectionMinPrompts", defaults.ReflectionMinPrompts)
+                Flush = ReadFlush(Section(root, "flush"), defaults.Flush, invalid),
+                UnknownKeys = Unknown(root),
+                InvalidValues = invalid,
+                NudgeEvery = Number(root, "nudgeEvery", defaults.NudgeEvery, string.Empty, invalid),
+                ReflectionMinPrompts = Number(root, "reflectionMinPrompts", defaults.ReflectionMinPrompts, string.Empty, invalid)
             };
         }
         catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException or FormatException)
@@ -127,46 +133,42 @@ public sealed record OomSettings(
         }
     }
 
-    private static BackendSettings ReadBackend(JsonElement element, BackendSettings fallback) =>
-        new(ReadClaude(Section(element, "claude"), fallback.Claude));
+    private static BackendSettings ReadBackend(JsonElement element, BackendSettings fallback, List<InvalidSetting> invalid) =>
+        new(ReadClaude(Section(element, "claude"), fallback.Claude, invalid));
 
-    private static ClaudeSettings ReadClaude(JsonElement element, ClaudeSettings fallback) => new(
-        Text(element, "fast", fallback.Fast),
-        Text(element, "smart", fallback.Smart));
+    private static ClaudeSettings ReadClaude(JsonElement element, ClaudeSettings fallback, List<InvalidSetting> invalid) => new(
+        Text(element, "fast", fallback.Fast, "backend.claude", invalid),
+        Text(element, "smart", fallback.Smart, "backend.claude", invalid));
 
-    private static SweepSettings ReadSweep(JsonElement element, SweepSettings fallback) => new(
-        Number(element, "everyHours", fallback.EveryHours),
-        Number(element, "sinceHours", fallback.SinceHours),
-        Number(element, "minTurns", fallback.MinTurns),
-        Number(element, "maxSessionsPerRun", fallback.MaxSessionsPerRun),
+    private static SweepSettings ReadSweep(JsonElement element, SweepSettings fallback, List<InvalidSetting> invalid) => new(
+        Number(element, "minTurns", fallback.MinTurns, "sweep", invalid),
+        Number(element, "maxSessionsPerRun", fallback.MaxSessionsPerRun, "sweep", invalid),
         [.. Strings(element, "roots", fallback.Roots).Select(Expand)]);
 
-    private static FlushSettings ReadFlush(JsonElement element, FlushSettings fallback, List<string> warnings)
+    private static FlushSettings ReadFlush(JsonElement element, FlushSettings fallback, List<InvalidSetting> invalid)
     {
-        var mode = Text(element, "mode", fallback.Mode);
+        var mode = Text(element, "mode", fallback.Mode, "flush", invalid);
         if (!FlushModes.Contains(mode, StringComparer.Ordinal))
         {
-            warnings.Add($"flush.mode: {mode}");
+            invalid.Add(new InvalidSetting("flush.mode", mode, DefaultFlushMode));
             mode = DefaultFlushMode;
         }
 
-        return new FlushSettings(mode, Number(element, "sliceTurns", fallback.SliceTurns));
+        return new FlushSettings(mode, Number(element, "sliceTurns", fallback.SliceTurns, "flush", invalid));
     }
 
-    private static CompileOptions ReadCompile(JsonElement element, CompileOptions fallback) => new(
-        Number(element, "eveningHour", fallback.EveningHour),
-        Number(element, "minIntervalHours", fallback.MinIntervalHours),
-        Number(element, "maxDailiesPerRun", fallback.MaxDailiesPerRun));
+    private static CompileOptions ReadCompile(JsonElement element, CompileOptions fallback, List<InvalidSetting> invalid) => new(
+        Number(element, "maxDailiesPerRun", fallback.MaxDailiesPerRun, "compile", invalid));
 
-    private static ContextOptions ReadContext(JsonElement element, ContextOptions fallback) => new(
-        Text(element, "companionDir", fallback.CompanionDir),
-        Number(element, "capChars", fallback.CapChars));
+    private static ContextOptions ReadContext(JsonElement element, ContextOptions fallback, List<InvalidSetting> invalid) => new(
+        Text(element, "companionDir", fallback.CompanionDir, "context", invalid),
+        Number(element, "capChars", fallback.CapChars, "context", invalid));
 
-    private static RetrieveOptions ReadRetrieve(JsonElement element, RetrieveOptions fallback) => fallback with
+    private static RetrieveOptions ReadRetrieve(JsonElement element, RetrieveOptions fallback, List<InvalidSetting> invalid) => fallback with
     {
-        Top = Number(element, "top", fallback.Top),
-        PerNoteChars = Number(element, "perNoteChars", fallback.PerNoteChars),
-        TotalChars = Number(element, "totalChars", fallback.TotalChars)
+        Top = Number(element, "top", fallback.Top, "retrieve", invalid),
+        PerNoteChars = Number(element, "perNoteChars", fallback.PerNoteChars, "retrieve", invalid),
+        TotalChars = Number(element, "totalChars", fallback.TotalChars, "retrieve", invalid)
     };
 
     private static IReadOnlyList<ExtensionSettings> ReadExtensions(JsonElement root)
@@ -176,14 +178,45 @@ public sealed record OomSettings(
 
         return [.. value.EnumerateArray()
             .Where(item => item.ValueKind is JsonValueKind.Object)
-            .Select(item => new ExtensionSettings(Text(item, "name", string.Empty), Text(item, "contextLine", string.Empty)))
+            .Select(item => new ExtensionSettings(Text(item, "name", string.Empty, string.Empty, []), Text(item, "contextLine", string.Empty, string.Empty, [])))
             .Where(extension => extension.Name.Length > 0 && extension.ContextLine.Length > 0)];
     }
 
-    private static IReadOnlyList<string> Unknown(JsonElement root) =>
-        root.ValueKind is JsonValueKind.Object
-            ? [.. root.EnumerateObject().Select(property => property.Name).Where(name => !KnownKeys.Contains(name, StringComparer.Ordinal))]
-            : [];
+    private static IReadOnlyList<string> Unknown(JsonElement root)
+    {
+        if (root.ValueKind is not JsonValueKind.Object)
+            return [];
+
+        var unknown = root.EnumerateObject()
+            .Select(property => property.Name)
+            .Where(name => !KnownKeys.Contains(name, StringComparer.Ordinal))
+            .ToList();
+
+        AddUnknown(Section(root, "backend"), ["claude"], unknown);
+        AddUnknown(Section(Section(root, "backend"), "claude"), ["fast", "smart"], unknown);
+        AddUnknown(Section(root, "sweep"), ["minTurns", "maxSessionsPerRun", "roots"], unknown);
+        AddUnknown(Section(root, "compile"), ["maxDailiesPerRun"], unknown);
+        AddUnknown(Section(root, "context"), ["companionDir", "capChars"], unknown);
+        AddUnknown(Section(root, "retrieve"), ["top", "perNoteChars", "totalChars"], unknown);
+        AddUnknown(Section(root, "mcp"), ["enabled"], unknown);
+        AddUnknown(Section(root, "flush"), ["mode", "sliceTurns"], unknown);
+
+        if (Section(root, "extensions") is { ValueKind: JsonValueKind.Array } extensions)
+            foreach (var extension in extensions.EnumerateArray())
+                AddUnknown(extension, ["name", "contextLine"], unknown);
+
+        return [.. unknown.Distinct(StringComparer.Ordinal)];
+    }
+
+    private static void AddUnknown(JsonElement element, IReadOnlyList<string> known, List<string> unknown)
+    {
+        if (element.ValueKind is not JsonValueKind.Object)
+            return;
+
+        unknown.AddRange(element.EnumerateObject()
+            .Select(property => property.Name)
+            .Where(name => !known.Contains(name, StringComparer.Ordinal)));
+    }
 
     private static string Expand(string value) => Environment.ExpandEnvironmentVariables(value);
 
@@ -198,16 +231,48 @@ public sealed record OomSettings(
         return [.. value.EnumerateArray().Where(item => item.ValueKind is JsonValueKind.String).Select(item => item.GetString()!)];
     }
 
-    private static string Text(JsonElement element, string name, string fallback) =>
-        element.ValueKind is JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.String
-            ? value.GetString() ?? fallback
-            : fallback;
+    private static string Text(JsonElement element, string name, string fallback, string section, List<InvalidSetting> invalid)
+    {
+        if (element.ValueKind is not JsonValueKind.Object || !element.TryGetProperty(name, out var value))
+            return fallback;
+        if (value.ValueKind is JsonValueKind.String)
+            return value.GetString() ?? fallback;
 
-    private static int Number(JsonElement element, string name, int fallback) =>
-        element.ValueKind is JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.TryGetInt32(out var parsed) ? parsed : fallback;
+        invalid.Add(new InvalidSetting(Key(section, name), Describe(value), fallback));
+        return fallback;
+    }
 
-    private static bool Flag(JsonElement element, string name, bool fallback) =>
-        element.ValueKind is JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
-            ? value.GetBoolean()
-            : fallback;
+    private static int Number(JsonElement element, string name, int fallback, string section, List<InvalidSetting> invalid)
+    {
+        if (element.ValueKind is not JsonValueKind.Object || !element.TryGetProperty(name, out var value))
+            return fallback;
+        // JsonElement.TryGetInt32 THROWS InvalidOperationException for a non-Number
+        // element (it does not just return false) — the ValueKind check must come first,
+        // or e.g. {"sweep":{"minTurns":"8"}} crashes every guarded command.
+        if (value.ValueKind is JsonValueKind.Number && value.TryGetInt32(out var parsed))
+            return parsed;
+
+        invalid.Add(new InvalidSetting(Key(section, name), Describe(value), fallback.ToString()));
+        return fallback;
+    }
+
+    private static bool Flag(JsonElement element, string name, bool fallback, string section, List<InvalidSetting> invalid)
+    {
+        if (element.ValueKind is not JsonValueKind.Object || !element.TryGetProperty(name, out var value))
+            return fallback;
+        if (value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            return value.GetBoolean();
+
+        invalid.Add(new InvalidSetting(Key(section, name), Describe(value), fallback ? "true" : "false"));
+        return fallback;
+    }
+
+    private static string Key(string section, string name) => section.Length == 0 ? name : $"{section}.{name}";
+
+    private static string Describe(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString() ?? string.Empty,
+        JsonValueKind.Null => "null",
+        _ => value.GetRawText()
+    };
 }

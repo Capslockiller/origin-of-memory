@@ -5,7 +5,8 @@ public static class CommandLine
     public static readonly string[] ValueOptions =
     [
         "--vault", "--session", "--transcript", "--reason", "--query", "--top", "--batch", "--max",
-        "--session-json", "--backend", "--transcripts", "--dailies", "--transcript-dir", "--daily-dir", "--out"
+        "--session-json", "--backend", "--transcripts", "--dailies", "--transcript-dir", "--daily-dir", "--out",
+        "--kit", "--only"
     ];
 
     public static IReadOnlyList<string> Positionals(IReadOnlyList<string> args)

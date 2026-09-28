@@ -6,7 +6,37 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <Version>3.1.0</Version>
+    <AssemblyVersion>3.1.0.0</AssemblyVersion>
+    <FileVersion>3.1.0.0</FileVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <Target Name="SetBuildRevision" BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo">
+    <Exec Command="git rev-parse --short HEAD"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true"
+          IgnoreExitCode="true"
+          StandardOutputImportance="Low"
+          StandardErrorImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="BuildRevisionOutput" />
+      <Output TaskParameter="ExitCode" PropertyName="BuildRevisionExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <BuildRevision>@(BuildRevisionOutput)</BuildRevision>
+      <!-- R17: fall back to 'unknown' unless git actually succeeded (exit 0) AND printed a
+           7+ hex-digit short hash. A non-zero exit, empty output, or garbage on stdout must
+           never leak into the informational version. -->
+      <BuildRevision Condition="'$(BuildRevisionExitCode)' != '0'">unknown</BuildRevision>
+      <BuildRevision Condition="'$(BuildRevision)' != 'unknown' AND !$([System.Text.RegularExpressions.Regex]::IsMatch('$(BuildRevision)', '^[0-9a-fA-F]{7,40}$'))">unknown</BuildRevision>
+      <SourceRevisionId>$(BuildRevision)</SourceRevisionId>
+      <InformationalVersion>$(Version)+$(BuildRevision)</InformationalVersion>
+    </PropertyGroup>
+    <!-- Review finding (should #4): the fallback was silent, so a CI checkout or build
+         machine where git fails (dubious ownership, no git on PATH, shallow clone) would
+         quietly ship "3.1.0+unknown" with nothing in the build log to explain why. -->
+    <Warning Condition="'$(BuildRevision)' == 'unknown'" Text="oom: git rev-parse başarısız; sürüm 3.1.0+unknown" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />

@@ -1,0 +1,110 @@
+{
+  "meta": {
+    "set_id": "kabul-sentetik-arama-seti",
+    "created": "2026-09-28",
+    "author": "L0-oracle-sets (independent of the implementing lanes)",
+    "vault_source": "generated in code: tests/Oom.Tests/Kabul/RetrieveSetKabul.cs (SyntheticVault.Build)",
+    "note": "SYNTHETIC — no real personal facts; every name, number and place is invented. Same schema as the private O2 set (queries[].kind/expected, vault-relative paths, the part before '#' is compared) plus two CI-only fields: 'required' (this positive must hit on its own, SPEC F2-2) and kind 'first-not' (the first hit's file name must not be 'first_not', SPEC F2-3). Positives: 3 daily-only, 1 Duzeltmeler-only, 4 knowledge/concepts-only, 2 both. Negatives are measured and printed, never gated (SPEC R7)."
+  },
+  "queries": [
+    {
+      "id": "S1",
+      "query": "Mercan paneli siparişinin numarası neydi?",
+      "kind": "positive",
+      "required": true,
+      "where_fact_lives": "daily-only (daily/2026-09-22.md, Alınan Kararlar) — no concept note mentions Mercan",
+      "expected": ["daily/2026-09-22.md"]
+    },
+    {
+      "id": "S2",
+      "query": "Turna şeridi kaç ayrı testle ölçüldü?",
+      "kind": "positive",
+      "where_fact_lives": "daily-only (daily/2026-09-24.md)",
+      "expected": ["daily/2026-09-24.md"]
+    },
+    {
+      "id": "S3",
+      "query": "Fener kulesinin boyası neden ertelendi?",
+      "kind": "positive",
+      "where_fact_lives": "daily-only (daily/2026-09-25.md)",
+      "expected": ["daily/2026-09-25.md"]
+    },
+    {
+      "id": "S4",
+      "query": "Toplantı saatleri hangi saat dilimiyle yazılmalı?",
+      "kind": "positive",
+      "where_fact_lives": "Duzeltmeler-only (🔮 850-Companion/Duzeltmeler.md, 'Toplantı saati yazımı' block)",
+      "expected": ["🔮 850-Companion/Duzeltmeler.md"]
+    },
+    {
+      "id": "S5",
+      "query": "Pusula projesinin rota çizelgesi hangi durakları sırayla izliyor?",
+      "kind": "positive",
+      "where_fact_lives": "knowledge/concepts-only (pusula-rota-cizelgesi.md)",
+      "expected": ["knowledge/concepts/pusula-rota-cizelgesi.md"]
+    },
+    {
+      "id": "S6",
+      "query": "Kestane deposunda raf sıcaklığı kaç dereceyi geçince havalandırma açılır?",
+      "kind": "positive",
+      "where_fact_lives": "knowledge/concepts-only (kestane-deposu-sicaklik-kurali.md)",
+      "expected": ["knowledge/concepts/kestane-deposu-sicaklik-kurali.md"]
+    },
+    {
+      "id": "S7",
+      "query": "Lamba atölyesinde vardiya düzeni nasıl kurulmuştu?",
+      "kind": "positive",
+      "where_fact_lives": "knowledge/concepts-only (lamba-atolyesi-vardiya-duzeni.md)",
+      "expected": ["knowledge/concepts/lamba-atolyesi-vardiya-duzeni.md"]
+    },
+    {
+      "id": "S8",
+      "query": "Yelken kulübüne üyelik akışı hangi adımlardan oluşuyor?",
+      "kind": "positive",
+      "where_fact_lives": "knowledge/concepts-only (yelken-kulubu-uyelik-akisi.md)",
+      "expected": ["knowledge/concepts/yelken-kulubu-uyelik-akisi.md"]
+    },
+    {
+      "id": "S9",
+      "query": "Kartal sunucusu ne amaçla kuruldu?",
+      "kind": "positive",
+      "where_fact_lives": "both — concept (kartal-sunucusu.md) and daily/2026-09-23.md",
+      "expected": ["knowledge/concepts/kartal-sunucusu.md", "daily/2026-09-23.md"]
+    },
+    {
+      "id": "S10",
+      "query": "Ceviz uygulaması kimin için yapılıyor?",
+      "kind": "positive",
+      "where_fact_lives": "both — concept (ceviz-uygulamasi.md) and daily/2026-09-21.md",
+      "expected": ["knowledge/concepts/ceviz-uygulamasi.md", "daily/2026-09-21.md"]
+    },
+    {
+      "id": "E1",
+      "query": "Eylül",
+      "kind": "first-not",
+      "where_fact_lives": "'Eylül' appears in one Duzeltmeler block, in a concept note and in a daily; SPEC F2-3: the first hit is not Duzeltmeler",
+      "first_not": "Duzeltmeler.md"
+    },
+    {
+      "id": "N1",
+      "query": "Denizaltı müzesinin bilet fiyatı ne kadar?",
+      "kind": "negative",
+      "where_fact_lives": "yok — no denizaltı/müze in the synthetic vault",
+      "expected": []
+    },
+    {
+      "id": "N2",
+      "query": "Kripto cüzdanı hangi borsada tutuluyor?",
+      "kind": "negative",
+      "where_fact_lives": "yok — no kripto/borsa in the synthetic vault",
+      "expected": []
+    },
+    {
+      "id": "N3",
+      "query": "Buzul kampına kayıt ne zaman açılıyor?",
+      "kind": "negative",
+      "where_fact_lives": "yok — no buzul/kamp in the synthetic vault",
+      "expected": []
+    }
+  ]
+}

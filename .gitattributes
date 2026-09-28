@@ -5,3 +5,15 @@
 
 *.cmd text eol=crlf
 *.wsb text eol=crlf
+
+# kit/manifest.json's sha256 values are over the CRLF checkout bytes of these
+# files (tools/kit/manifest-hash.ps1 hashes the working-tree copy at generation
+# time); the installed bin/kit copy read by Kit.cs at install/status time must
+# be a byte copy of that checkout. Pin the checkout line ending on the text
+# types kit/ actually holds so the recorded hashes hold on every platform and
+# config, not only this machine's CRLF checkout. Scoped to text extensions,
+# not kit/**, so a binary asset added under kit/ later is not silently
+# corrupted by line-ending conversion.
+kit/**/*.md text eol=crlf
+kit/**/*.json text eol=crlf
+kit/**/*.txt text eol=crlf

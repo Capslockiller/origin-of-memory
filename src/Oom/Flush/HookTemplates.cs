@@ -1,11 +1,14 @@
-using System.Text.Json;
-
 namespace Oom.Contracts;
 
 public sealed record HookRegistration(string Event, string Command, int TimeoutSeconds);
 
 public static class HookTemplates
 {
+    // Double quotes make & ' ^ | < > ( ) ; and spaces literal under both bash -c and cmd /c.
+    // These four stay live inside them: '"' ends the quotes, bash expands '$' and '`',
+    // cmd expands '%'. No single form is safe for both shells, so such a path is refused.
+    private static readonly char[] Unquotable = ['"', '$', '`', '%'];
+
     public static IReadOnlyList<HookRegistration> Build(string executablePath, string vault)
     {
         var prefix = Quote(executablePath) + " --vault " + Quote(vault);
@@ -18,27 +21,8 @@ public static class HookTemplates
         ];
     }
 
-    public static string Render(string executablePath, string vault)
-    {
-        var hooks = Build(executablePath, vault).ToDictionary(
-            registration => registration.Event,
-            registration => new[]
-            {
-                new
-                {
-                    hooks = new[]
-                    {
-                        new { type = "command", command = registration.Command, timeout = registration.TimeoutSeconds }
-                    }
-                }
-            });
+    public static char? UnquotableCharacter(string path) =>
+        path.IndexOfAny(Unquotable) is var index and >= 0 ? path[index] : null;
 
-        return JsonSerializer.Serialize(new { hooks }, new JsonSerializerOptions { WriteIndented = true });
-    }
-
-    private static string Quote(string path)
-    {
-        var forward = path.Replace('\\', '/');
-        return forward.Contains(' ', StringComparison.Ordinal) ? $"\"{forward}\"" : forward;
-    }
+    private static string Quote(string path) => $"\"{path.Replace('\\', '/')}\"";
 }

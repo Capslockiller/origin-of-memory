@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+Henüz 3.1.0'dan sonra yayınlanmamış bir değişiklik yok.
+
+## 3.1.0 — 2026-09-28
+
+Tez: yeni kullanıcı özelliği yok. Günlük kullanılan çekirdek (kanca→bağlam→tarama→derleme→arama→doctor) küçültüldü ve her parçası ölçülebilir bir kontrolle kanıtlandı; kanıtlanamayan kesildi.
+
+### Eklendi
+- `oom --version` artık `3.1.0+<commit>` basar (git etiketi yoksa `+unknown`); MCP `initialize` yanıtı aynı dizgiyi taşır.
+- Bağlam enjeksiyonu tek bütçeye alındı: dokuz bölüm, bu sırayla — `[Bildirim]`, `[Zaman]`, `[Hafıza — Son Oturum]`, `[Hafıza — Aktif Threadler]`, `[Hafıza — Kurallar]`, `[Hafıza — Düzeltmeler]`, `[Hafıza — Son Journal]`, `[Bilgi Tabanı — Arama]` (eski İndeks bölümünün yerine, çalışan `oom.exe`'nin tam yoluyla hazır bir `retrieve --query` satırı) ve `[Bugünün Logu]` —, toplam ≤ 8.000 karakter / ≤ 8.500 bayt; Kurallar ve Düzeltmeler hiç kesilmez, `context.capChars` bu tavanın üstüne çıkamaz.
+- Arama korpusu genişledi: `knowledge/concepts` ve `Duzeltmeler.md`'nin yanına `daily/` blokları ve el katmanı (`Last-Session.md`, `Threads.md`, `Journal.md`) eklendi; düzeltme isabeti ×4 çarpan yerine düz BM25 + sabit 0,25 ek puan alır. `Kurallar.md` indekslenmez.
+- Guards, `flush` ve `compile`'ın modelden aldığı her çıktıyı talimat enjeksiyonuna karşı denetler; yakalanan metin `daily/`'ye ya da bir kavram notuna hiç yazılmaz, sırları maskelenmiş olarak karantinaya alınır: `flush` çıktısı `%LOCALAPPDATA%\oom\<vault-hash>\red\` altına (yanında `.reason` dosyasıyla), `compile` çıktısı `<vault>\.oom\quarantine\` altına. `oom save` bu kapıdan geçmez, metni olduğu gibi yazar. Redactor bilinen sır biçimlerini (`ghp_`/`sk-ant-`/`AKIA`, URL içi `user:pass@`, anahtar/şifre yakını jetonlar) flush, compile, retrieve ve MCP çıktısında maskeler.
+- `doctor` artık son 7 günün gerçek penceresini, sayısal kapsamayı yaşıyla, 'son tarama'/'son derleme' satırlarını basar; kırmızı bir satır varsa exit 1 (`--json`'daki `exit_code` alanı kabuk çıkış koduyla aynıdır). Kapsama %95'in altındaysa (pencerede en az 5 oturum varken) satır sarı değil kırmızıdır — elle koşulan taramada bu, dürüst bir sinyaldir.
+- Kabul (acceptance) süiti: enjekte edilebilir durum kökü (`OOM_LOCALAPPDATA`), sabit saat (`OOM_FAKE_NOW`), profil kökü (`OOM_USERPROFILE`: `doctor`'ın kanca denetimi ve `kit`), tarama dışlama kökü (`OOM_TEST_ROOT`, varsayılan `%TEMP%`), süreç sınırında gerçek `oom.exe`'yi süren `KabulHarness`, ve eski koda karşı en az 8 testin kırmızı olduğunu kanıtlayan `tests/REGRESYON-KANITI.md`.
+
+### Değişti
+- `oom sweep` artık hiçbir saatte derleme başlatmaz; derleme yalnız `oom compile` ile, bekleyeni her koşumda katlar. `compile --dry-run` gerçek son-derleme zamanını `daily_ingest`'ten basar; eski "karar" (evening/interval) satırı kalktı.
+- `doctor`'ın varsayılan görünümü uyarı/hata satırlarına ek olarak altı sabit başlık satırını (`coverage`/`rejection-rate`/`refused`/`last-sweep`/`last-compile`/`pending` — yeşil olsalar bile) ve "`N` yeşil" özetini gösterir; diğer her yeşil satır yalnız `--all` ile görünür (`kit` satırları dahil).
+- Vault yolu artık diskteki gerçek harf büyüklüğüne çözülür (`E:\OdenaOS`, `e:\odenaos`, `E:/OdenaOS/` aynı durum dizinini paylaşır); bilinmeyen bir `oom.json` anahtarı sessizce kabul edilmez, stderr'e `bilinmeyen ayar: <anahtar>` yazar.
+- `save` serbest metni kabul eder; zorunlu üç alan kuralı kalktı.
+- `sweep.roots`'taki bir kök, kaynağı Codex olarak sınıflandırmak için yolunda tam olarak `.codex` adlı bir segment taşımalı (büyük/küçük harf duyarsız); yoksa döküm `claude` kaynaklı sayılır.
+
+### Kaldırıldı
+- `doctor`'ın bu sürüm içinde eklenip sonra tamamen kaldırılan `arac` bileşeni (codebase-memory-mcp/Agent Reach sağlık satırları) — OoM artık yalnız kendi üzerine raporlar, başka hiçbir programı çalıştırmaz.
+- `retrieve --session` (no-op'tu); `oom.json`'daki `extensions[].contextLine` artık hiç çalıştırılmaz, yalnız yok sayıldığını bildirir.
+- Ölü kod ve onu "kontrol var" gösteren testler (bkz. SPEC-3.1.0.md Cut bölümü); `sweep.everyHours` ve kök düzeyi `retrieveMode` anahtarları artık ölü, ayarlanırsa uyarır.
+
+### Eklendi (kit)
+- `oom kit status` and `oom kit install` read a kit directory's `manifest.json` (given with `--kit <dizin>`) and compare a skill, agent or rule against its installed copy by SHA-256 (`kuru`/`güncel`/`farklı`/`bozuk`); a malformed or unreadable manifest is reported as a clear error on the command line. This repository ships the kit engine only; kit content is not distributed here.
+
+### Düzeltildi (kit)
+- A link (junction/symlink) anywhere in a component's source subtree, in the destination subtree, or in any ancestor between the home root and the destination — including `.claude`, `.claude/skills`, `.agents/skills`, and the backup root `.claude/.oom-kit-yedek` — is walked without being followed and makes the row `bozuk`, naming the link; install refuses such rows. Two manifest entries resolving to the same destination are both `bozuk: hedef çakışması` and nothing is written for either; a file destination is copied with no-overwrite semantics and a skill (directory) destination is staged in a temp sibling and moved into place only if the destination still doesn't exist, with every row re-checked after install. A `null` entry in the manifest's `components` array, or a component `path` that makes `Path.GetFullPath` throw (an embedded NUL, for example), is reported as a manifest-level error or a single `bozuk` row instead of an unhandled `NullReferenceException`/`ArgumentException` — every other component's row is unaffected.
+
+### Belgeler
+- README/SECURITY/CONTRIBUTING ölçülen davranışla senkronlandı; komut tablosu artık `oom --help` çıktısının birebir kopyası. Her davranış cümlesi `docs/iddialar.md`'de bir teste ya da komuta bağlanır (bkz. `tests/Oom.Tests/Kabul/DocsKabul.cs`).
+
+### Tarihsel not — geri alınan iş
+- `oom doctor` (ve `doctor --json`) bu sürüm içinde kısa süreliğine bir `arac` bileşeni taşıdı: codebase-memory-mcp ve Agent Reach sağlığını raporluyordu (araç yoksa `kurulu değil`, codebase-memory-mcp için proje başına satır, Agent Reach için sürüm — her biri 15 saniyelik zaman aşımı arkasında, `doctor`'ı hiç düşürmeden), ve bir düzeltme turu `nodes`/`edges` gibi bozuk bir değerin diğer aracın satırlarını da götürmesini önlemişti. Yukarıdaki "Kaldırıldı" bölümünün söylediği gibi, `arac` aynı 3.1.0 döngüsü içinde tamamen kaldırıldı — bu not yalnız geçmiş kaydı içindir, `arac` kod tabanında artık yoktur ve `--all` dahil hiçbir `doctor` görünümünde beklenmemelidir.
+
 ## 3.0.4 — 2026-09-13
 
 ### Fixed

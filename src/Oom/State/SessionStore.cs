@@ -139,6 +139,11 @@ public sealed partial class State
     {
         lock (_gate)
         {
+            // Defect 4: a legacy state.db with no `health` table has no reflection debt to
+            // take; treat the absent table as "nothing owed" instead of failing the read.
+            if (!StateStore.TableExists(_connection, "health"))
+                return null;
+
             using var read = Command("SELECT detail FROM health WHERE component = 'hafiza' AND code = 'yansima-borcu' ORDER BY rowid DESC LIMIT 1", []);
             string? detail;
             using (var reader = read.ExecuteReader())

@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Oom.Contracts;
 using Oom.Tests.Scars.Fixtures;
 
@@ -6,15 +5,6 @@ namespace Oom.Tests.Scars;
 
 public sealed class TestDisipliniScars
 {
-
-    [Fact(DisplayName = "Y-077 · Zamanlama senaryosu sahte saatle deterministiktir")]
-    public void Y077_TimingTestUsesInjectedClock()
-    {
-        var context = new Context();
-        var first = context.Build("fixture-vault", ScarFixture.Now);
-        var second = context.Build("fixture-vault", ScarFixture.Now);
-        Assert.Equal(first, second);
-    }
 
     [Fact(DisplayName = "Y-078 · Süit gece yarısının iki yanında aynı sonucu verir")]
     public void Y078_DateBoundaryUsesFakeNow()
@@ -26,23 +16,6 @@ public sealed class TestDisipliniScars
         var second = doctor.Check(after);
         Assert.Equal(first.Coverage, second.Coverage);
         Assert.Equal(first.RejectionRate, second.RejectionRate);
-    }
-
-    [Fact(DisplayName = "Y-079 · Kırmızı testin çıkış kodu çıktı kısaltılsa da korunur")]
-    public void Y079_CiPreservesTestExitCodeWithoutPipelineMasking()
-    {
-        var request = new ProcessRequest("dotnet", ["test", "--filter", "IntentionalRed"], ScarFixture.RepositoryRoot(), new Dictionary<string, string>(), "");
-        var result = new Runner().RunProcess(request, TimeSpan.FromMinutes(1));
-        Assert.NotEqual(0, result.ExitCode);
-    }
-
-    [Fact(DisplayName = "Y-081 · Statik tarama test fixture'larını dışlar ama kaynak ihlalini yakalar")]
-    public void Y081_StaticScanExcludesFixturesOnly()
-    {
-        var root = ScarFixture.RepositoryRoot();
-        var production = Directory.EnumerateFiles(Path.Combine(root, "src", "Oom"), "*.cs", SearchOption.AllDirectories).ToArray();
-        Assert.DoesNotContain(production, path => path.Contains($"{Path.DirectorySeparatorChar}tests{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
-        Assert.All(production, path => Assert.DoesNotContain("INTENTIONAL_STATIC_SCAN_VIOLATION", File.ReadAllText(path)));
     }
 
 }

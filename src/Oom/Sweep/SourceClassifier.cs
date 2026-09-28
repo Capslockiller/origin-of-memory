@@ -22,5 +22,11 @@ internal static class SourceClassifier
         return false;
     }
 
-    public static string FromPath(string path) => path.Contains("codex", System.StringComparison.OrdinalIgnoreCase) ? "codex" : "claude";
+    public static string FromPath(string path)
+    {
+        var segments = path.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        return segments.Contains(".codex", StringComparer.OrdinalIgnoreCase) ? "codex" : "claude";
+    }
 }

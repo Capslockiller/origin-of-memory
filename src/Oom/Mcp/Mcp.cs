@@ -10,6 +10,7 @@ public sealed class Mcp
     private readonly string vaultPath;
     private readonly Func<string>? rootMapProvider;
     private readonly Func<string, string?>? noteProvider;
+    private readonly Redactor redactor = new();
 
     public Mcp(Guards? guards = null, Retrieve? retrieve = null, string? vaultPath = null,
         Func<string>? rootMapProvider = null, Func<string, string?>? noteProvider = null)
@@ -63,7 +64,7 @@ public sealed class Mcp
             {
                 return method switch
                 {
-                    "initialize" => Result(id, new { protocolVersion = "2025-06-18", capabilities = new { tools = new { } }, serverInfo = new { name = "oom", version = "2.0" } }),
+                    "initialize" => Result(id, new { protocolVersion = "2025-06-18", capabilities = new { tools = new { } }, serverInfo = new { name = "oom", version = BuildInfo.Version } }),
                     "notifications/initialized" => string.Empty,
                     "ping" => Result(id, new { }),
                     "tools/list" => Result(id, new { tools = ToolDefinitions() }),
@@ -96,15 +97,21 @@ public sealed class Mcp
         var name = parameters.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
         var arguments = parameters.TryGetProperty("arguments", out var argumentsElement) && argumentsElement.ValueKind == JsonValueKind.Object
             ? argumentsElement : default;
+        // S2: every tool hands vault text to the client, so every tool's text is fenced as data
+        // (memory_search is fenced by Retrieve.Render already). An empty answer stays empty.
         var text = name switch
         {
             "memory_search" => Search(arguments),
-            "memory_root_map" => MemoryRootMap(),
-            "memory_note" => MemoryNote(RequiredString(arguments, "name")),
+            "memory_root_map" => Fenced(MemoryRootMap()),
+            "memory_note" => Fenced(MemoryNote(RequiredString(arguments, "name"))),
             _ => throw new ArgumentException("Bilinmeyen hafıza aracı.")
         };
+        // B6: every tool's text is masked on the way out, the same masker the index uses.
+        text = redactor.Mask(text).Text;
         return Result(id, new { content = new[] { new { type = "text", text } }, isError = false });
     }
+
+    private static string Fenced(string text) => text.Length == 0 ? text : Retrieve.FenceAsData(text);
 
     private string Search(JsonElement arguments)
     {

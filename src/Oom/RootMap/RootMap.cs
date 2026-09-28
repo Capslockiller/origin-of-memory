@@ -22,7 +22,7 @@ public sealed class RootMap
     private HubConfiguration? _configuration;
     private IReadOnlyList<string>? _vocabulary;
 
-    public RootMap() : this(LaneCVaultPaths.ResolveVault())
+    public RootMap() : this(VaultFiles.ResolveVault())
     {
     }
 
@@ -77,9 +77,9 @@ public sealed class RootMap
                 buckets[id].Add(note);
 
         var index = BuildIndex(configuration, buckets);
-        LaneCVaultPaths.WriteAtomic(Path.Combine(_vault, "knowledge", "index.md"), index, _files);
+        VaultFiles.WriteAtomic(Path.Combine(_vault, "knowledge", "index.md"), index, _files);
         foreach (var hub in configuration.Hubs)
-            LaneCVaultPaths.WriteAtomic(Path.Combine(_vault, "knowledge", "hubs", hub.Id + ".md"), BuildHubFile(hub, buckets[hub.Id]), _files);
+            VaultFiles.WriteAtomic(Path.Combine(_vault, "knowledge", "hubs", hub.Id + ".md"), BuildHubFile(hub, buckets[hub.Id]), _files);
         WriteFullTable(corpus);
         return index;
     }
@@ -134,7 +134,9 @@ public sealed class RootMap
         foreach (var note in corpus)
         {
             var hub = note.Hub;
-            var needsHub = string.IsNullOrWhiteSpace(hub) || !configuration.Hubs.Any(entry => string.Equals(entry.Id, hub, StringComparison.Ordinal));
+            var needsHub = string.IsNullOrWhiteSpace(hub)
+                || string.Equals(hub, configuration.CatchAll, StringComparison.Ordinal)
+                || !configuration.Hubs.Any(entry => string.Equals(entry.Id, hub, StringComparison.Ordinal));
             var needsType = !string.Equals(note.Type, "concept", StringComparison.Ordinal);
             if (!needsHub && !needsType)
             {
@@ -143,6 +145,12 @@ public sealed class RootMap
             }
 
             hub = needsHub ? HubsFor(configuration, note.Name + "\n" + note.Title, note.Tags)[0] : hub!;
+            if (!needsType && string.Equals(hub, note.Hub, StringComparison.Ordinal))
+            {
+                migrated.Add(note);
+                continue;
+            }
+
             var path = Path.Combine(_vault, "knowledge", "concepts", Path.GetFileName(note.Name));
             if (!File.Exists(path))
             {
@@ -150,14 +158,7 @@ public sealed class RootMap
                 continue;
             }
 
-            try
-            {
-                LaneCVaultPaths.WriteAtomic(path, Rewrite(LaneCVaultPaths.ReadText(path), hub), _files);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-            }
-
+            VaultFiles.WriteAtomic(path, Rewrite(VaultFiles.ReadText(path), hub), _files);
             migrated.Add(note with { Type = "concept", Hub = hub, Body = HubLinked(note.Body, hub) });
         }
 
@@ -206,7 +207,7 @@ public sealed class RootMap
         var rows = new Dictionary<string, string>(StringComparer.Ordinal);
         var order = new List<string>();
         if (File.Exists(path))
-            foreach (var line in LaneCVaultPaths.ReadText(path).Split('\n'))
+            foreach (var line in VaultFiles.ReadText(path).Split('\n'))
             {
                 var cells = line.Split('|');
                 if (cells.Length < 6 || line.Contains("---", StringComparison.Ordinal) || line.Contains("Makale", StringComparison.Ordinal))
@@ -230,7 +231,7 @@ public sealed class RootMap
         var builder = new StringBuilder("| Makale | Özet | Kaynak | Güncellendi |\n| --- | --- | --- | --- |\n");
         foreach (var key in order.Where(live.Contains))
             builder.Append(rows[key]).Append('\n');
-        LaneCVaultPaths.WriteAtomic(path, builder.ToString(), _files);
+        VaultFiles.WriteAtomic(path, builder.ToString(), _files);
     }
 
     private IReadOnlyList<Note> LoadCorpus()
@@ -243,7 +244,7 @@ public sealed class RootMap
         {
             try
             {
-                corpus.Add(_notes.Parse("knowledge/concepts/" + Path.GetFileName(file), LaneCVaultPaths.ReadText(file)));
+                corpus.Add(_notes.Parse("knowledge/concepts/" + Path.GetFileName(file), VaultFiles.ReadText(file)));
             }
             catch (Exception error) when (error is FormatException or IOException)
             {
@@ -254,13 +255,15 @@ public sealed class RootMap
 
     private HubConfiguration Configuration => _configuration ??= LoadConfiguration();
 
+    /// S7: a hub-config.json that exists but cannot be read is an error naming the file,
+    /// never a silent fall back to 'genel'.
     private HubConfiguration LoadConfiguration()
     {
         var path = Path.Combine(_vault, ".oom", "hub-config.json");
         if (File.Exists(path))
             try
             {
-                using var document = JsonDocument.Parse(LaneCVaultPaths.ReadText(path));
+                using var document = JsonDocument.Parse(VaultFiles.ReadText(path));
                 var root = document.RootElement;
                 var catchAll = root.TryGetProperty("catch_all", out var value) ? value.GetString() ?? "genel" : "genel";
                 var hubs = new List<HubDefinition>();
@@ -277,8 +280,9 @@ public sealed class RootMap
                     return new HubConfiguration(catchAll, [.. hubs.Where(hub => !ReferenceEquals(hub, tail)), tail]);
                 }
             }
-            catch (Exception error) when (error is JsonException or IOException)
+            catch (Exception error) when (error is JsonException or IOException or InvalidOperationException)
             {
+                throw new InvalidDataException($"hub-config.json okunamadı: {path} — {error.Message}", error);
             }
         return new HubConfiguration("genel", [DefaultCatchAll("genel")]);
     }

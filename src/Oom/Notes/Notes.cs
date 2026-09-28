@@ -151,6 +151,63 @@ public sealed class Notes
         return builder.ToString();
     }
 
+    /// <summary>F2: a daily log split into its '### ' blocks, each named 'daily/&lt;file&gt;#&lt;n&gt;'
+    /// with n the block's position in the file. Text before the first '### ' is not a block.</summary>
+    public static IReadOnlyList<Note> ParseDailyBlocks(string path, string text, DateOnly fallbackDate)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(text);
+
+        var file = Path.GetFileName(path);
+        var date = DateOnly.TryParseExact(Path.GetFileNameWithoutExtension(path), "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out var parsed) ? parsed : fallbackDate;
+        return SplitBlocks($"daily/{file}", file, text, "### ", date, keepLead: false);
+    }
+
+    /// <summary>R19: a hand-layer file (Last-Session and Threads split at '### ', Journal at '## ')
+    /// as blocks named '&lt;anchor&gt;#&lt;n&gt;', n the block's position among its headings. The text
+    /// before the first heading is block #0 when it holds more than headings, so nothing the
+    /// hand layer wrote falls out of the corpus.</summary>
+    public static IReadOnlyList<Note> ParseHandBlocks(string anchor, string text, string heading, DateOnly updated)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(anchor);
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentException.ThrowIfNullOrWhiteSpace(heading);
+
+        return SplitBlocks(anchor, Path.GetFileName(anchor), text, heading, updated, keepLead: true);
+    }
+
+    private static IReadOnlyList<Note> SplitBlocks(string anchor, string source, string text, string heading, DateOnly date, bool keepLead)
+    {
+        var parts = ("\n" + text.TrimStart('\uFEFF').Replace("\r\n", "\n")).Split("\n" + heading);
+        var notes = new List<Note>();
+        if (keepLead && Lead(parts[0]) is { } lead)
+            notes.Add(new Note($"{anchor}#0", lead.Title, [], [], [source], date, date, lead.Body));
+
+        for (var i = 1; i < parts.Length; i++)
+        {
+            var newline = parts[i].IndexOf('\n');
+            var title = (newline < 0 ? parts[i] : parts[i][..newline]).Trim();
+            var body = newline < 0 ? string.Empty : parts[i][(newline + 1)..].Trim();
+            if (title.Length > 0 || body.Length > 0)
+                notes.Add(new Note($"{anchor}#{i}", title, [], [], [source], date, date, body));
+        }
+
+        return notes;
+    }
+
+    private static (string Title, string Body)? Lead(string text)
+    {
+        var lines = text.Split('\n').Select(line => line.TrimEnd()).Where(line => line.Length > 0).ToList();
+        if (lines.Count > 0 && lines[0] == FrontmatterFence && lines.IndexOf(FrontmatterFence, 1) is var close and > 0)
+            lines = lines[(close + 1)..];
+
+        var heading = lines.FindIndex(line => line.StartsWith('#'));
+        var title = heading < 0 ? string.Empty : lines[heading].TrimStart('#').Trim();
+        var body = lines.Where((_, index) => index != heading).ToList();
+        return body.Any(line => !line.StartsWith('#')) ? (title, string.Join('\n', body)) : null;
+    }
+
     internal static string IndexableBody(Note note)
     {
         var body = HtmlComment.Replace(note.Body, string.Empty);

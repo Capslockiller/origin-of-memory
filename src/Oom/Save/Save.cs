@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
 
@@ -9,33 +8,30 @@ public sealed class Save
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private readonly Guards guards;
     private readonly Flush flush;
-    private readonly Func<string, bool> checkpointWriter;
 
-    public Save(Guards? guards = null, Flush? flush = null, Func<string, bool>? checkpointWriter = null)
+    public Save(Guards? guards = null, Flush? flush = null)
     {
         this.guards = guards ?? new Guards();
         this.flush = flush ?? new Flush();
-        this.checkpointWriter = checkpointWriter ?? VerifiedMemoryWrite;
     }
 
-    public CheckpointResult WriteCheckpoint(string text, IReadOnlyList<string> requiredFields)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-        ArgumentNullException.ThrowIfNull(requiredFields);
-        var missing = requiredFields.Where(field => string.IsNullOrWhiteSpace(field) ||
-            !Regex.IsMatch(text, $@"(?im)^\s*{Regex.Escape(field)}\s*:\s*\S")).ToArray();
-        if (missing.Length > 0)
-            return new CheckpointResult(false, false, $"Kontrol noktası eksik alan içeriyor: {string.Join(", ", missing)}.");
-        var gated = guards.Gate(text, Direction.In, ComponentKind.Flush);
-        if (gated.Refused) return new CheckpointResult(false, false, "Kontrol noktası güvenlik kapısında reddedildi.");
-        var verified = checkpointWriter(gated.Text);
-        return new CheckpointResult(verified, verified, verified ? null : "Kontrol noktası yazıldıktan sonra doğrulanamadı.");
-    }
-
-    public CheckpointResult WriteCheckpointToVault(string vault, string text, IReadOnlyList<string> requiredFields, DateTimeOffset now)
+    /// <summary>
+    /// Writes free text to the vault's daily file (SPEC-3.1.0.md F6-2, Cut: save's
+    /// mandatory 3-field rule — `oom save` no longer requires "karar"/"düzeltme"/"devir"
+    /// fields). The text passes through <see cref="Guards.Gate"/> once (inside
+    /// <see cref="FormatDailyBlock"/>, which also does this for its other caller) for
+    /// unicode folding and directive detection only — save is ungated free text (F6-2,
+    /// SECURITY.md), so Direction.In here never refuses — and is then appended under a
+    /// "### Kayıt (HH:mm)" heading, never written as-is.
+    /// </summary>
+    public CheckpointResult WriteToVault(string vault, string text, DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(vault);
-        return new Save(guards, flush, block => AppendToDaily(vault, block, now)).WriteCheckpoint(text, requiredFields);
+        ArgumentNullException.ThrowIfNull(text);
+        if (string.IsNullOrWhiteSpace(text))
+            return new CheckpointResult(false, false, "Kayıt metni boş olamaz.");
+        var written = AppendToDaily(vault, text, now);
+        return new CheckpointResult(written, written, written ? null : "Kayıt günlük dosyaya yazılamadı.");
     }
 
     private bool AppendToDaily(string vault, string text, DateTimeOffset now)
@@ -62,11 +58,20 @@ public sealed class Save
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
         var gated = guards.Gate(text, Direction.In, ComponentKind.Flush);
-        if (gated.Refused) throw new InvalidOperationException("Kayıt güvenlik kapısında reddedildi.");
         return $"### Kayıt ({now:HH:mm})\n{gated.Text.Trim()}\n";
     }
 
-    public FlushResult SaveSessionJson(string json)
+    /// <summary>
+    /// R36/#7: <paramref name="durableDirectory"/> is where the temp transcript this
+    /// builds from <paramref name="json"/> is written when the flush does NOT finish
+    /// terminally (Retry/Parked) — i.e. a retry_queue row now references it. Defaults to
+    /// the OS temp directory (unchanged behaviour) when null, which is what every caller
+    /// with no durable <see cref="State"/> configured (both real callers with VaultPaths
+    /// cleared and every acceptance test that constructs a bare <see cref="Save"/>) still
+    /// gets. The real CLI path (Program.Save.cs) passes the durable state directory so the
+    /// file survives at least as long as the retry row that points at it.
+    /// </summary>
+    public FlushResult SaveSessionJson(string json, string? durableDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
         Session session;
@@ -83,11 +88,12 @@ public sealed class Save
         foreach (var turn in session.Turns)
         {
             var gated = guards.Gate(turn.Text, Direction.In, ComponentKind.Flush);
-            if (gated.Refused) return new FlushResult(FlushOutcome.Retry, -1, null, null, "Dış oturum güvenlik kapısında reddedildi.");
             safeTurns.Add(turn with { Text = gated.Text });
         }
 
-        var tempPath = Path.Combine(Path.GetTempPath(), $"oom-save-{Guid.NewGuid():N}.jsonl");
+        var tempRoot = string.IsNullOrEmpty(durableDirectory) ? Path.GetTempPath() : durableDirectory;
+        Directory.CreateDirectory(tempRoot);
+        var tempPath = Path.Combine(tempRoot, $"oom-save-{Guid.NewGuid():N}.jsonl");
         var lines = safeTurns.Select(turn => JsonSerializer.Serialize(new
         {
             session_id = session.Id,
@@ -98,14 +104,31 @@ public sealed class Save
             timestamp = turn.Timestamp
         }));
         File.WriteAllText(tempPath, string.Join('\n', lines), Utf8);
-        try { return flush.FlushSession(session with { Turns = safeTurns }, tempPath, FlushReason.Ingest); }
-        finally { if (File.Exists(tempPath)) File.Delete(tempPath); }
-    }
+        FlushResult result;
+        try
+        {
+            result = flush.FlushSession(session with { Turns = safeTurns }, tempPath, FlushReason.Ingest);
+        }
+        catch
+        {
+            // Never reached this far with a persisted reference to tempPath — safe to
+            // always clean up on an exception, same as the previous unconditional delete.
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+            throw;
+        }
 
-    private static bool VerifiedMemoryWrite(string text)
-    {
-        var bytes = Utf8.GetBytes(text);
-        var copy = bytes.ToArray();
-        return bytes.AsSpan().SequenceEqual(copy) && Utf8.GetString(copy) == text;
+        // R36/#7: Retry/Parked is the ONLY outcome that writes a retry_queue row (and
+        // sessions.transcript_path) pointing at tempPath — deleting it unconditionally
+        // here left that row (and that session's transcript_path) referencing a file that
+        // no longer existed the instant this call returned, so SweepRun.DrainQueue's
+        // `!File.Exists(path)` guard skipped it FOREVER (permanently orphaned, one of the
+        // 5-row-per-run ReadRetryQueue cap, so a handful of these could starve every other
+        // real retry). Every other outcome (Ok/NoNewTurns/Refused/Unreadable/
+        // MissingTranscript/Locked) never persists a reference to this path, so it is
+        // always safe to delete then.
+        if (result.Outcome is not (FlushOutcome.Retry or FlushOutcome.Parked) && File.Exists(tempPath))
+            File.Delete(tempPath);
+
+        return result;
     }
 }

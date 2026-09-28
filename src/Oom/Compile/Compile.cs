@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Oom.Contracts;
@@ -12,6 +11,7 @@ public sealed class Compile
     private const int RegistryLineCap = 400;
     private const int RegistryRecentCap = 50;
     private const int MaxAttempts = 3;
+    private const double DuplicateSlugThreshold = 0.6;
 
     private static readonly Regex ConceptPath = new(@"^knowledge/concepts/[a-z0-9-]+\.md$", RegexOptions.CultureInvariant);
     private static readonly Regex FileHeader = new(@"^===\s*FILE:\s*(?<path>.+?)\s*===\s*$", RegexOptions.CultureInvariant);
@@ -23,15 +23,11 @@ public sealed class Compile
     private readonly IClock _clock;
     private readonly IFileOperations _fileOperations;
     private readonly Guards _guards;
+    private readonly Redactor _redactor;
     private readonly Notes _notes;
     private readonly RootMap _rootMap;
     private readonly Retrieve _retrieve;
     private readonly Bridge _bridge;
-    private readonly CompileSettings _settings;
-
-    public Compile() : this(LaneCVaultPaths.ResolveVault())
-    {
-    }
 
     public Compile(
         string vaultRoot,
@@ -41,18 +37,20 @@ public sealed class Compile
         Notes? notes = null,
         RootMap? rootMap = null,
         Retrieve? retrieve = null,
-        Bridge? bridge = null)
+        Bridge? bridge = null,
+        string? stateRoot = null,
+        Redactor? redactor = null)
     {
         _vault = vaultRoot;
-        _stateRoot = LaneCVaultPaths.StateRoot(vaultRoot);
+        _stateRoot = stateRoot ?? VaultFiles.StateRoot(vaultRoot);
         _clock = clock ?? SystemClock.Instance;
         _fileOperations = fileOperations ?? new VaultFileOperations();
         _guards = guards ?? new Guards();
+        _redactor = redactor ?? new Redactor();
         _rootMap = rootMap ?? new RootMap(vaultRoot, notes, files: _fileOperations);
         _notes = notes ?? new Notes(_rootMap.HubIds, _rootMap.TagVocabulary());
         _retrieve = retrieve ?? new Retrieve(new RetrieveOptions(VaultPath: vaultRoot, IndexPath: Path.Combine(_stateRoot, "state.db")));
         _bridge = bridge ?? new Bridge(vaultRoot, _rootMap, _fileOperations);
-        _settings = CompileSettings.Load(vaultRoot);
     }
 
     public CompileResult Run(string dailyName, string dailyText, string modelOutput) => Run(dailyName, dailyText, modelOutput, 0);
@@ -76,54 +74,69 @@ public sealed class Compile
         if (!IsPromotable(dailyText))
             return new CompileResult("low-confidence", [], false, false);
 
-        using var runLock = TakeLock();
-        if (runLock is null)
-            return new CompileResult("skip:locked", [], false, false);
+        // BLOCKING review finding (S3/B6/B7): the model can echo back a secret it was
+        // shown in context (daily/root-map/registry text — masked before it goes out in
+        // CompilePrompt.Build, but nothing stopped an echo from reappearing on the way
+        // back in). Mask before Guards.Gate, so quarantine, the parsed note bodies AND
+        // the published files all only ever see the masked text — there is exactly one
+        // place downstream of the model response that could still leak a raw token, and
+        // this closes it.
+        modelOutput = _redactor.Mask(modelOutput).Text;
 
         var gated = _guards.Gate(modelOutput, Direction.Out, ComponentKind.Compile);
         if (gated.Refused)
             return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, gated.Findings), GuardReason(gated.Findings));
 
-        if (!gated.Text.Contains(DoneMarker, StringComparison.Ordinal))
-            return new CompileResult("retry", [], false, false, null, $"model çıktısında '{DoneMarker}' imi yok");
+        var truncated = !gated.Text.Contains(DoneMarker, StringComparison.Ordinal);
 
-        IReadOnlyDictionary<string, string> files;
+        var rejections = new List<string>();
+        IReadOnlyDictionary<string, string> parsed;
         try
         {
-            files = ParseFiles(gated.Text);
-            foreach (var (path, body) in files)
-            {
-                var note = _guards.Gate(body, Direction.Out, ComponentKind.Compile);
-                if (note.Refused)
-                    return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, note.Findings), GuardReason(note.Findings));
-                _notes.Validate(_notes.Parse(path, note.Text));
-            }
+            parsed = ParseFiles(gated.Text, allowTrailingIncomplete: truncated, rejections);
         }
-        catch (Exception error) when (error is ArgumentException or FormatException)
+        catch (ArgumentException error)
         {
             return Rejected(dailyName, attempts, error.Message);
         }
 
+        if (truncated && parsed.Count == 0 && rejections.Count == 0)
+            return new CompileResult("retry", [], false, false, null, $"model çıktısında '{DoneMarker}' imi yok");
+
+        // A malformed block is rejected on its own; the other blocks of the day still publish.
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (path, body) in parsed)
+        {
+            var note = _guards.Gate(body, Direction.Out, ComponentKind.Compile);
+            if (note.Refused)
+                return new CompileResult("quarantined", [], false, false, Quarantine(dailyName, modelOutput, note.Findings), GuardReason(note.Findings));
+            try
+            {
+                _notes.Validate(_notes.Parse(path, note.Text));
+                files[path] = body;
+            }
+            catch (Exception error) when (error is ArgumentException or FormatException)
+            {
+                rejections.Add($"reddedildi: '{path}': {error.Message}");
+            }
+        }
+
+        if (files.Count == 0 && rejections.Count > 0)
+            return Rejected(dailyName, attempts, string.Join(" · ", rejections));
+
+        var duplicates = RemoveNearDuplicates(files);
         var publication = Publish(dailyName, files, failDuringRebuild: false);
         if (publication.SourcePending)
             return new CompileResult("fail:rebuild", [], false, false);
 
         AppendLog(dailyName, publication.VisibleNotes);
         _bridge.Refresh();
-        return new CompileResult("ok", publication.VisibleNotes, true, true);
-    }
 
-    public CompileDecision MaybeCompile(DateTimeOffset now, DateTimeOffset? lastSuccess, bool hasPending)
-    {
-        if (!hasPending)
-            return new CompileDecision(false, "skip:no-pending");
-        if (now.Hour >= _settings.EveningHour)
-            return new CompileDecision(true, "ok:evening");
-        if (lastSuccess is null)
-            return new CompileDecision(false, "skip:fresh-install");
-        return now - lastSuccess.Value >= TimeSpan.FromHours(_settings.MinIntervalHours)
-            ? new CompileDecision(true, "ok:interval")
-            : new CompileDecision(false, "skip:early");
+        var messages = rejections.Concat(duplicates).ToList();
+        if (truncated)
+            messages.Add("truncated=1");
+        return new CompileResult(rejections.Count > 0 ? "partial" : "ok", publication.VisibleNotes, true, true,
+            Reason: messages.Count > 0 ? string.Join(" · ", messages) : null);
     }
 
     public IReadOnlyList<string> ValidateOutputPaths(string modelOutput)
@@ -188,7 +201,7 @@ public sealed class Compile
                     Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
                     File.Copy(target, backup, overwrite: true);
                 }
-                LaneCVaultPaths.WriteAtomic(target, content, _fileOperations);
+                VaultFiles.WriteAtomic(target, content, _fileOperations);
                 replaced.Add((target, backup));
                 written.Add(relative);
             }
@@ -199,17 +212,29 @@ public sealed class Compile
             var code = failDuringRebuild ? "rebuild-failed" : "publication-failed";
             HealthLedger.Record(new HealthItem("compile", HealthLevel.Error, code, dailyName,
                 $"Yayın yenilemesi başarısız oldu: {error.Message}"), _clock.Now);
-            RollBack(replaced);
-            Discard(backupRoot);
-            return new PublicationResult(true, true, true, []);
+            var unrestored = RollBack(replaced);
+            // Do NOT discard the backup when any restore failed: the backup is the only
+            // remaining copy of the pre-publication content. Keep it and report which files
+            // could not be restored so the caller does not claim a clean rollback.
+            if (unrestored.Count == 0)
+            {
+                Discard(backupRoot);
+                return new PublicationResult(true, true, true, []);
+            }
+            HealthLedger.Record(new HealthItem("compile", HealthLevel.Error, "rollback-incomplete", dailyName,
+                "Geri alma tamamlanamadı, yedek korundu: " + string.Join(", ", unrestored)), _clock.Now);
+            return new PublicationResult(false, false, true, []);
         }
         Discard(backupRoot);
         return new PublicationResult(true, false, false, written);
     }
 
-    internal IReadOnlyDictionary<string, string> ParseFiles(string modelOutput)
+    // A block not closed with END FILE is rejected on its own and parsing resumes at the next
+    // header; a disallowed or repeated path still rejects the whole run.
+    private IReadOnlyDictionary<string, string> ParseFiles(string modelOutput, bool allowTrailingIncomplete, List<string> rejections)
     {
-        ValidateOutputPaths(modelOutput);
+        if (!allowTrailingIncomplete)
+            ValidateOutputPaths(modelOutput);
         var files = new Dictionary<string, string>(StringComparer.Ordinal);
         var lines = Lines(modelOutput);
         for (var index = 0; index < lines.Length; index++)
@@ -233,14 +258,78 @@ public sealed class Compile
                 body.Append(lines[cursor]).Append('\n');
             }
             if (!closed)
-                throw new ArgumentException($"'{path}' bloğu '{EndFileMarker}' ile kapatılmamış; bütün koşum reddedildi.", nameof(modelOutput));
+            {
+                if (allowTrailingIncomplete && cursor == lines.Length)
+                {
+                    // BLOCKING review finding (F3-1): a trailing block cut off by the model
+                    // running out of room used to be dropped SILENTLY. When nothing else in
+                    // this run succeeded, that silence is exactly what lets Run() retry the
+                    // whole day (no rejection recorded — see Y-335, unchanged). But once at
+                    // least one other block already closed cleanly, staying silent meant the
+                    // day published as plain "ok" and got marked permanently ingested with a
+                    // block's worth of content simply gone — F3-1 requires every malformed
+                    // block to be reported and the day to come back "partial"/exit 2 (Y-334).
+                    if (files.Count > 0)
+                        rejections.Add($"reddedildi: '{path}' bloğu '{EndFileMarker}' ile kapatılmamış (kesik çıktı)");
+                    break;
+                }
+                rejections.Add($"reddedildi: '{path}' bloğu '{EndFileMarker}' ile kapatılmamış");
+                index = cursor - 1;
+                continue;
+            }
+            if (allowTrailingIncomplete)
+            {
+                if (!ConceptPath.IsMatch(path))
+                    throw new ArgumentException($"Model çıktısındaki '{path}' yolu izin verilen kavram deseniyle eşleşmiyor; bütün koşum reddedildi.", nameof(modelOutput));
+                if (files.ContainsKey(path))
+                    throw new ArgumentException($"'{path}' yolu tek koşumda iki kez yazılıyor; bütün koşum reddedildi.", nameof(modelOutput));
+            }
             files[path] = body.ToString().TrimEnd('\n');
             index = cursor;
         }
         return files;
     }
 
-    private static bool IsPromotable(string dailyText)
+    // A new slug whose '-' tokens have Jaccard >= 0.6 with an existing or already accepted slug
+    // is not written. Rewriting an existing file under its exact name is an update, not a copy.
+    private List<string> RemoveNearDuplicates(Dictionary<string, string> files)
+    {
+        var directory = Path.Combine(_vault, "knowledge", "concepts");
+        var known = Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly).Select(file => Path.GetFileNameWithoutExtension(file)).ToList()
+            : [];
+        var duplicates = new List<string>();
+        foreach (var path in files.Keys.ToArray())
+        {
+            var slug = Path.GetFileNameWithoutExtension(path);
+            if (known.Contains(slug, StringComparer.Ordinal))
+                continue;
+            var match = known.FirstOrDefault(candidate => SlugJaccard(candidate, slug) >= DuplicateSlugThreshold);
+            if (match is null)
+            {
+                known.Add(slug);
+                continue;
+            }
+            files.Remove(path);
+            duplicates.Add("kopya: " + match);
+        }
+
+        return duplicates;
+    }
+
+    private static double SlugJaccard(string a, string b)
+    {
+        var left = a.Split('-', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+        var right = b.Split('-', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+        var union = left.Union(right).Count();
+        return union == 0 ? 0 : (double)left.Count(right.Contains) / union;
+    }
+
+    // Public so Program.Compile.cs can check this BEFORE calling Send: a day that fails
+    // this check will never be promotable no matter how many times the model is asked,
+    // so there is no reason to spend a model call on it (should-finding: "check
+    // IsPromotable before Send so low-confidence days use no model call").
+    internal static bool IsPromotable(string dailyText)
     {
         var backend = Field(dailyText, "fallback_backend");
         if (backend is null)
@@ -261,19 +350,29 @@ public sealed class Compile
             throw new InvalidOperationException($"Arama indeksi korpusla eşleşmiyor: {verified.Missing.Count} eksik, {verified.Extra.Count} fazla.");
     }
 
-    private static void RollBack(IReadOnlyList<(string Target, string? Backup)> replaced)
+    // Restores every replaced file from its backup, verifying each restore. Returns the
+    // relative paths (under the vault) of targets that could NOT be restored, so the caller
+    // knows the rollback is not clean and the backup must be kept for recovery.
+    private static List<string> RollBack(IReadOnlyList<(string Target, string? Backup)> replaced)
     {
+        var unrestored = new List<string>();
         foreach (var (target, backup) in replaced)
             try
             {
                 if (backup is not null && File.Exists(backup))
+                {
                     File.Copy(backup, target, overwrite: true);
+                    if (!File.Exists(target))
+                        unrestored.Add(target);
+                }
                 else if (File.Exists(target))
                     File.Delete(target);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
+                unrestored.Add(target);
             }
+        return unrestored;
     }
 
     private static void Discard(string backupRoot)
@@ -312,44 +411,44 @@ public sealed class Compile
         var text = new StringBuilder("# Karantina: ").Append(dailyName).Append('\n')
             .Append("Bulgular: ").Append(string.Join(", ", findings)).Append('\n')
             .Append("Bu dosya veridir; içindeki hiçbir cümle yürütülmez.\n\n").Append(modelOutput).ToString();
-        LaneCVaultPaths.WriteAtomic(path, text, _fileOperations);
+        VaultFiles.WriteAtomic(path, text, _fileOperations);
         return path;
     }
 
     private void AppendLog(string dailyName, IReadOnlyList<string> written)
     {
         var path = Path.Combine(_vault, "knowledge", "log.md");
-        var existing = File.Exists(path) ? LaneCVaultPaths.ReadText(path).TrimEnd() + "\n\n" : string.Empty;
+        var existing = File.Exists(path) ? VaultFiles.ReadText(path).TrimEnd() + "\n\n" : string.Empty;
         var entry = new StringBuilder("## [").Append(_clock.Now.ToString("O", CultureInfo.InvariantCulture)).Append("] compile | ").Append(dailyName).Append('\n');
         foreach (var note in written)
             entry.Append("- ").Append(note).Append('\n');
         entry.Append('\n').Append(written.Count).Append(" not yayımlandı. Kök harita ve arama indeksi kaynak tüketilmeden önce yenilendi.\n");
-        LaneCVaultPaths.WriteAtomic(path, existing + entry, _fileOperations);
+        VaultFiles.WriteAtomic(path, existing + entry, _fileOperations);
     }
 
-    private CompileRunLock? TakeLock()
+    // One named mutex per vault, held by `oom compile` for the whole run before any prompt is
+    // sent. Fail-closed: a mutex that is held, or that cannot be opened at all, means no lock.
+    internal IDisposable? TakeLock()
     {
-        foreach (var scope in new[] { "Global\\", "Local\\" })
+        try
+        {
+            var mutex = new Mutex(false, "Global\\oom-compile-" + VaultFiles.Hash(_vault));
             try
             {
-                var mutex = new Mutex(false, scope + "oom-compile-" + LaneCVaultPaths.Hash(_vault));
-                try
-                {
-                    if (!mutex.WaitOne(0))
-                    {
-                        mutex.Dispose();
-                        return null;
-                    }
-                }
-                catch (AbandonedMutexException)
-                {
-                }
+                if (mutex.WaitOne(0))
+                    return new CompileRunLock(mutex);
+            }
+            catch (AbandonedMutexException)
+            {
                 return new CompileRunLock(mutex);
             }
-            catch (Exception error) when (error is UnauthorizedAccessException or IOException or NotSupportedException)
-            {
-            }
-        return new CompileRunLock(null);
+            mutex.Dispose();
+            return null;
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or IOException or WaitHandleCannotBeOpenedException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static string? Field(string text, string name)
@@ -364,12 +463,10 @@ public sealed class Compile
         => string.Create(CultureInfo.InvariantCulture,
             $"{_clock.Now:yyyyMMdd-HHmmss}-{Path.GetFileNameWithoutExtension(dailyName)}-{Interlocked.Increment(ref _runCounter):D4}");
 
-    private sealed class CompileRunLock(Mutex? mutex) : IDisposable
+    private sealed class CompileRunLock(Mutex mutex) : IDisposable
     {
         public void Dispose()
         {
-            if (mutex is null)
-                return;
             try
             {
                 mutex.ReleaseMutex();
@@ -380,32 +477,4 @@ public sealed class Compile
             mutex.Dispose();
         }
     }
-}
-
-internal sealed record CompileSettings(int EveningHour, int MinIntervalHours, int MaxDailiesPerRun)
-{
-    internal static CompileSettings Load(string vaultRoot)
-    {
-        var path = Path.Combine(vaultRoot, ".oom", "oom.json");
-        var settings = new CompileSettings(18, 20, 3);
-        if (!File.Exists(path))
-            return settings;
-        try
-        {
-            using var document = JsonDocument.Parse(LaneCVaultPaths.ReadText(path));
-            if (!document.RootElement.TryGetProperty("compile", out var compile))
-                return settings;
-            return new CompileSettings(
-                Number(compile, "eveningHour", settings.EveningHour),
-                Number(compile, "minIntervalHours", settings.MinIntervalHours),
-                Number(compile, "maxDailiesPerRun", settings.MaxDailiesPerRun));
-        }
-        catch (Exception error) when (error is JsonException or IOException)
-        {
-            return settings;
-        }
-    }
-
-    private static int Number(JsonElement element, string name, int fallback)
-        => element.TryGetProperty(name, out var value) && value.TryGetInt32(out var parsed) ? parsed : fallback;
 }

@@ -14,31 +14,18 @@ public static class VaultIdentity
     public static string Hash(string vault)
     {
         ArgumentNullException.ThrowIfNull(vault);
-        return LaneCVaultPaths.Hash(vault);
+        return VaultFiles.Hash(vault);
     }
 
     public static string StateRoot(string vault)
     {
         ArgumentNullException.ThrowIfNull(vault);
-        return LaneCVaultPaths.StateRoot(vault);
+        return VaultFiles.StateRoot(vault);
     }
 
     public static string DatabasePath(string vault) => Path.Combine(StateRoot(vault), DatabaseName);
 
     public static string DescriptorPath(string vault) => Path.Combine(StateRoot(vault), DescriptorName);
-
-    public static string Canonical(string vault)
-    {
-        ArgumentNullException.ThrowIfNull(vault);
-        try
-        {
-            return Path.GetFullPath(vault).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
-        catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return vault.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
-    }
 
     public static string? ExistingDatabase()
     {

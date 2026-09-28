@@ -1,0 +1,7 @@
+{
+  "note": "Accepted release-to-release retrieval score floor per frozen set (SPEC F2-5: a score drop is red). RetrieveSetKabul.cs gates each set on max(8, sets[set_id]). Raise a value only as part of an explicit reviewed release step, after a real measured run beats it — never lower it to make a regression pass.",
+  "sets": {
+    "O2-arama-seti": 8,
+    "kabul-sentetik-arama-seti": 8
+  }
+}

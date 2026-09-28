@@ -52,9 +52,30 @@ internal static class ScarFixture
         return current?.FullName ?? throw new InvalidOperationException("Oom.sln bulunamadı.");
     }
 
+    /// <summary>
+    /// Root for disposable scratch fixtures (Kit homes, sweep vaults, flush transcripts,
+    /// ...). Deliberately independent of <see cref="Flush.TestRoot"/>: that is the
+    /// product's own TEMP-mechanism EXCLUSION seam (OOM_TEST_ROOT), read by
+    /// Flush.IsMechanismTranscript / SweepRun to decide what counts as a mechanism
+    /// artifact. Before this fix, TempDirectory() placed fixtures under that same root
+    /// (same env var, same default of the real OS temp directory), so any transcript a
+    /// test wrote through TempDirectory() sat, by construction, inside the very root
+    /// SweepRun.Discover() treats as a mechanism artifact and silently excludes -
+    /// defeating the F7-1 seam for every caller of this helper (finding: blocking).
+    /// A test that wants a transcript to be *excluded* as a mechanism artifact should
+    /// place it under Flush.TestRoot() (or set OOM_TEST_ROOT) itself, not rely on this
+    /// helper's location. Injectable via OOM_SCAR_ROOT for tests that need to redirect
+    /// it; defaults to a subfolder of this test assembly's own build output, never the
+    /// real OS temp directory, so it never collides with the default mechanism root.
+    /// </summary>
+    internal static string ScarRoot() =>
+        Environment.GetEnvironmentVariable("OOM_SCAR_ROOT") is { Length: > 0 } injected
+            ? injected
+            : Path.Combine(AppContext.BaseDirectory, "scar-root");
+
     internal static string TempDirectory()
     {
-        var path = Path.Combine(Path.GetTempPath(), "oom-scar-" + Guid.NewGuid().ToString("N")[..12]);
+        var path = Path.Combine(ScarRoot(), "oom-scar-" + Guid.NewGuid().ToString("N")[..12]);
         Directory.CreateDirectory(path);
         return path;
     }

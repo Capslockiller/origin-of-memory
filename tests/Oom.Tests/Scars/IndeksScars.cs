@@ -354,6 +354,58 @@ public sealed class IndeksScars
         }
     }
 
+    [Fact(DisplayName = "F2/B6 · Daily '### ' blokları çapayla indekslenir, sır indekse maskeli girer, daily değişince manifest değişir")]
+    public void DailyBlocksAreIndexedMaskedAndPartOfTheManifest()
+    {
+        var vault = ScarFixture.TempDirectory();
+        var index = Path.Combine(vault, "state.db");
+        try
+        {
+            WriteNote(vault, "not.md", "kavram-govdesi");
+            var secret = string.Concat(Enumerable.Repeat("0123456789abcdef", 3));
+            WriteDaily(vault, "2026-09-22", $"panel anahtarı {secret}");
+            var retrieve = new Retrieve(new RetrieveOptions(VaultPath: vault, IndexPath: index));
+            Assert.Equal(0, retrieve.Build().ExitCode);
+            var first = ReadManifest(index);
+
+            Assert.Contains("daily/2026-09-22.md#1", Candidates(index, "sabahbloku"));
+            Assert.Contains("daily/2026-09-22.md#2", Candidates(index, "maskelendi"));
+            Assert.Empty(Candidates(index, secret));
+            Assert.DoesNotContain(StoredBodies(index), body => body.Contains(secret, StringComparison.Ordinal));
+
+            WriteDaily(vault, "2026-09-22", "panel anahtarı değişti");
+            Assert.Equal(0, retrieve.Build().ExitCode);
+            Assert.NotEqual(first.Digest, ReadManifest(index).Digest);
+            Assert.Equal(0, retrieve.VerifyIndex().ExitCode);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            ScarFixture.Remove(vault);
+        }
+    }
+
+    private static void WriteDaily(string vault, string date, string secondBlock)
+    {
+        var daily = Path.Combine(vault, "daily");
+        Directory.CreateDirectory(daily);
+        File.WriteAllText(Path.Combine(daily, date + ".md"),
+            $"---\ntype: daily\ndate: {date}\n---\n# Günlük Log: {date}\n\n## Oturumlar\n\n### Oturum (09:00)\nsabahbloku kaydı\n\n### Oturum (14:30)\n{secondBlock}\n");
+    }
+
+    private static IReadOnlyList<string> StoredBodies(string index)
+    {
+        using var connection = new SqliteConnection($"Data Source={index}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT body FROM notes";
+        using var reader = command.ExecuteReader();
+        var bodies = new List<string>();
+        while (reader.Read())
+            bodies.Add(reader.GetString(0));
+        return bodies;
+    }
+
     private static string WriteNote(string vault, string name, string body, string title = "İndeks notu", string aliases = "", string tags = "")
     {
         var concepts = Path.Combine(vault, "knowledge", "concepts");
