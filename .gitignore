@@ -33,3 +33,6 @@ bench/vm/host.txt
 .brief/
 .nuget/
 *.trx
+
+# gate env kökleri
+.scratch/
