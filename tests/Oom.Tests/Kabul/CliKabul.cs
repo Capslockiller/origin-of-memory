@@ -29,11 +29,11 @@ public sealed class CliKabul
     // English. Regex copied verbatim from the lane brief's oracle assertion 7.
     private static readonly Regex BannedEnglishVerb = new(@"\b(print|search|use this|emit|report|select|serve)\b", RegexOptions.IgnoreCase);
 
-    // SPEC F9-1: 'oom --version' must print exactly '3.1.0+<commit>', where <commit> is
+    // SPEC F9-1 (4.0): 'oom --version' must print exactly '4.0.0[-etiket]+<commit>', where <commit> is
     // either a short git hash or the literal 'unknown' (lane note: when git is unavailable
     // in the build sandbox the build emits '3.1.0+unknown' and the L5 release script
     // refuses that value — refusing it is L5's job, not this lane's).
-    private static readonly Regex VersionPattern = new(@"^3\.1\.0\+(?<commit>[0-9a-f]{7,40}|unknown)\s*$", RegexOptions.IgnoreCase);
+    private static readonly Regex VersionPattern = new(@"^4\.0\.0(-[0-9A-Za-z.]+)?\+(?<commit>[0-9a-f]{7,40}|unknown)\s*$", RegexOptions.IgnoreCase);
 
     [Fact(DisplayName = "F6-6 (1) · oom --help exit 0 ve kullanım metnini basar")]
     public void Help_ExitsZeroAndPrintsUsage()
@@ -49,7 +49,7 @@ public sealed class CliKabul
             $"stderr: {result.Stderr}");
     }
 
-    [Fact(DisplayName = "F9-1 · oom --version exit 0 ve tam olarak '3.1.0+<commit>' basar")]
+    [Fact(DisplayName = "F9-1 · oom --version exit 0 ve tam olarak '4.0.0[-etiket]+<commit>' basar")]
     public void Version_ExitsZeroAndPrintsSemverPlusCommit()
     {
         using var harness = new KabulHarness();
