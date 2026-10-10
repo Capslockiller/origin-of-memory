@@ -9,7 +9,9 @@ internal static class TurSiniflandirma
     [
         "<system-reminder", "<command-", "<task-notification", "<local-command-",
         "Another Claude session sent a message", "[SYSTEM NOTIFICATION", "<agent-",
-        "<subagent", "<recommended_plugins", "<environment_context", "<permissions instructions>"
+        "<subagent", "<recommended_plugins", "<environment_context", "<permissions instructions>",
+        // Codex rollout: AGENTS.md ve ortam metni ilk "user" mesajı olarak gelir (ölçüldü 2026-10-10, gerçek rollout).
+        "# AGENTS.md instructions", "<INSTRUCTIONS>", "<user_instructions>", "<turn_context"
     ];
 
     internal static string Classify(string role, string kind, string text) =>

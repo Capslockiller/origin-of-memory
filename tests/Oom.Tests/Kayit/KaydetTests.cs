@@ -20,6 +20,15 @@ public sealed class KaydetTests
     }
 
     [Fact]
+    public void Kaydet_CodexAgentsMdVeOrtamMetniSahipSayilmaz()
+    {
+        // Gerçek rollout (2026-10-10): Codex ilk "user" mesajı olarak AGENTS.md'yi ve ortam bağlamını gönderir.
+        Assert.Equal("h", TurSiniflandirma.Classify("user", "text", "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n# Codex — Team Context"));
+        Assert.Equal("h", TurSiniflandirma.Classify("user", "text", "<environment_context>\n  <cwd>E:/x</cwd>\n</environment_context>"));
+        Assert.Equal("u", TurSiniflandirma.Classify("user", "text", "agents.md dosyasını güncelle"));
+    }
+
+    [Fact]
     public void Kaydet_ImlecSonUuidCapasindanTurer()
     {
         using var f = new Fixture();
