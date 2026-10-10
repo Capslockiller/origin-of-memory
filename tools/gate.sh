@@ -13,11 +13,12 @@ set -uo pipefail
 LABEL=${1:?etiket}; MODE=${2:-ci}
 TREE="$(pwd)"
 [ -f "$TREE/Oom.sln" ] || { echo "gate: depo kökünden çalıştır (Oom.sln yok: $TREE)"; exit 2; }
-G311="E:/OdenaWorks/30-Kutuphane/Suru/ops/oom311/gate"
 ENVROOT="${OOM_GATE_ENVROOT:-$TREE/.scratch/gate}"
 ENVD="$ENVROOT/$LABEL"
-# Paket önbelleği: 3.1.1 kapısının dolu önbelleği varsa o (ağ gerekmez), yoksa kullanıcının global önbelleği.
-if [ -d "$G311/nuget" ]; then NUGET_DIR="$G311/nuget"; else NUGET_DIR="$(cd ~ && pwd)/.nuget/packages"; fi
+# Paket önbelleği: OOM_GATE_NUGET verilmişse o (ağsız şeritler için dolu bir önbellek), yoksa kullanıcının global önbelleği.
+NUGET_DIR="${OOM_GATE_NUGET:-$(cd ~ && pwd)/.nuget/packages}"
+# leak kipi: OOM_GATE_SNAP, gerçek kökleri karşılaştıran snap.py'nin yolu (yoksa leak kipi ci'ye düşer).
+SNAP="${OOM_GATE_SNAP:-}"; if [ "$MODE" = leak ] && [ ! -f "$SNAP" ]; then echo "gate: OOM_GATE_SNAP yok, leak yerine ci"; MODE=ci; fi
 rm -rf "$ENVD"; mkdir -p "$ENVD"/{localappdata,appdata,profile/AppData/Local,profile/AppData/Roaming,tmp,nuget-http,nuget-plugins,dotnet} "$NUGET_DIR"
 w() { cygpath -w "$1"; }
 for n in $(compgen -e); do
@@ -39,7 +40,7 @@ CIF='Kabul!=OzelVault&Kabul!=RetrieveSet&Category!=IntentionalRed&FullyQualified
 case "$MODE" in ci|leak) FILTER="$CIF";; *) FILTER="($MODE)&$CIF";; esac
 echo "gate: etiket=$LABEL kip=$MODE agac=$TREE nuget=$NUGET_PACKAGES"
 start=$(date +%s)
-if [ "$MODE" = leak ]; then python "$G311/snap.py" snap "$ENVD/before" || exit 2; fi
+if [ "$MODE" = leak ]; then python "$SNAP" snap "$ENVD/before" || exit 2; fi
 dotnet restore Oom.sln --disable-build-servers || { echo "gate: restore failed"; exit 2; }
 dotnet build Oom.sln --no-restore -c Release --disable-build-servers || { echo "gate: build failed"; exit 2; }
 TLOG="$ENVD/test.log"
@@ -48,7 +49,7 @@ if ! grep -q -E "^(Passed!|Failed!)" "$TLOG"; then
   echo "gate: TEST ÖZETİ YOK — koşu geçmiş sayılmaz (exit=$rc, log=$TLOG)"; rc=3
 fi
 if [ "$MODE" = leak ]; then
-  python "$G311/snap.py" diff "$ENVD/before.json"; drc=$?
+  python "$SNAP" diff "$ENVD/before.json"; drc=$?
   [ $drc -eq 3 ] && { echo "gate: LEAK into a real root"; rc=3; }
 fi
 echo "gate: done exit=$rc sure=$(( $(date +%s) - start ))s"
