@@ -79,7 +79,5 @@ Her karar: bağlam · karar · gerekçe · neyi değiştirdiği · geri dönüş
 - **Geri dönüş:** yok; sıradaki iş 07-yol'da.
 
 ## Açık kararlar (sahibin)
-1. Adım 3: ilk 5 kart hangi konular?
-2. Adım 5'ten sonra: `bin.bak-*`, state.db, `%LOCALAPPDATA%\oom`, 245 worktree, 86 dal temizliği (arşiv anlık görüntüsünden sonra).
-3. Kavram arşivi vault'ta mı kalsın, ayrı repoya mı?
-4. İstemci MCP elicitation desteklerse "cevap istemciden" basamağı açılsın mı (04-kart › Gelecek).
+- Yok. 10 Eki 20:20: sahip "ilk 5 kartı neye göre seçmemi bekliyorsun?" dedi; kriter veriden çıkarıldı (son 30 günde ilk mesajda açılan konu × Threads'te canlı × son 7 günde dokunulmuş). Öneri: OoM, SCREENSHOT, 3D disiplin, STBC26, Sürü; ikinci dalga Pipeline ve kanal. Adım 3'te Odena açar, sahip yalnız yürürlük cümlelerine evet/hayır der.
+- Kapatılan eski maddeler: temizlik Adım 5'te arşiv anlık görüntüsünden sonra Odena yapar (veto saklı) · kavram arşivi vault'ta salt okur kalır · istemciden cevap basamağı istemci desteği gelene kadar yok.
