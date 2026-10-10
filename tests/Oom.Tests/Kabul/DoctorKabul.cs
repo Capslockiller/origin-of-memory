@@ -149,65 +149,9 @@ public sealed class DoctorKabul
     // own exit_code field always equals the real process exit code.
     // ------------------------------------------------------------------
 
-    [Fact(DisplayName = "F5-3/F5-4 #3a/#4a · kırmızı repertuvar: son tarama >48 saat, bekleyen daily >7 → satırlar doğru değerlerle basılır ve exit=1 (json exit_code de 1)")]
-    public void RedFixture_ShowsFreshnessLines_AndExitsNonZero_JsonExitCodeMatchesProcessExitCode()
-    {
-        using var harness = new KabulHarness();
-        var vault = BuildMinimalVault(harness.Root);
-        const int pendingCount = 9; // > 7 → 'bekleyen daily' kırmızı (F5-3)
-        for (var day = 1; day <= pendingCount; day++)
-            WriteDaily(vault, $"2026-08-{day:D2}.md");
 
-        SeedState(harness, vault, state =>
-        {
-            // Last real (non-dry-run) sweep 50 hours ago: > 48h → 'son tarama' kırmızı (F5-3).
-            state.RecordCoverage(Today.AddHours(-50), covered: 2, total: 10, windowDays: 7);
-            // A real, past compile exists (so 'son derleme' is a REAL timestamp, not 'hiç') —
-            // the file itself need not exist on disk; CompileQueue.LastCompile reads only the
-            // daily_ingest table.
-            state.WriteDailyIngest("2026-07-01.md", "ingested", Today.AddDays(-5));
-        });
 
-        var textResult = harness.Run(vault, ["doctor"], fakeNow: Today);
-        AssertFreshnessLines(textResult.Stdout, expectHoursAtLeast: 48, expectPending: pendingCount);
-        Assert.Equal(1, textResult.ExitCode);
 
-        var jsonResult = harness.Run(vault, ["doctor", "--json"], fakeNow: Today);
-        Assert.Equal(1, jsonResult.ExitCode);
-        Assert.Equal(jsonResult.ExitCode, ReadJsonExitCode(jsonResult.Stdout));
-    }
-
-    [Fact(DisplayName = "F5-3/F5-4 #3b/#4b · yeşil repertuvar: son tarama <48 saat, bekleyen daily <=7 → satırlar doğru değerlerle basılır ve exit=0 (json exit_code de 0)")]
-    public void GreenFixture_ShowsFreshnessLines_AndExitsZero_JsonExitCodeMatchesProcessExitCode()
-    {
-        using var harness = new KabulHarness();
-        var vault = BuildMinimalVault(harness.Root);
-        const int pendingCount = 3; // <= 7 → 'bekleyen daily' kırmızı değil
-        for (var day = 1; day <= pendingCount; day++)
-            WriteDaily(vault, $"2026-09-{day:D2}.md");
-
-        // Establish a clean search index FIRST (doctor --fix), so the pre-existing,
-        // unrelated "Arama indeksi korpusla eşleşmiyor" Error row (which fires for ANY
-        // vault whose FTS index has never been built) does not make this fixture red for a
-        // reason unrelated to what this test targets.
-        harness.Run(vault, ["doctor", "--fix"], fakeNow: Today);
-
-        SeedState(harness, vault, state =>
-        {
-            // SPEC R22 (driver): coverage below 95 % stays an error row, so the green
-            // repertoire uses full coverage.
-            state.RecordCoverage(Today.AddHours(-2), covered: 10, total: 10, windowDays: 7);
-            state.WriteDailyIngest("2026-09-20.md", "ingested", Today.AddDays(-1));
-        });
-
-        var textResult = harness.Run(vault, ["doctor"], fakeNow: Today);
-        AssertFreshnessLines(textResult.Stdout, expectHoursAtMost: 47, expectPending: pendingCount);
-        Assert.Equal(0, textResult.ExitCode);
-
-        var jsonResult = harness.Run(vault, ["doctor", "--json"], fakeNow: Today);
-        Assert.Equal(0, jsonResult.ExitCode);
-        Assert.Equal(jsonResult.ExitCode, ReadJsonExitCode(jsonResult.Stdout));
-    }
 
     // ------------------------------------------------------------------
     // #5 — NB-9: the default view shows only warning/error rows plus an
@@ -306,35 +250,7 @@ public sealed class DoctorKabul
     // the (unwritable) health table itself.
     // ------------------------------------------------------------------
 
-    [Fact(DisplayName = "S7 #8 · salt okunur state.db: `oom flush --detached` stderr'de 'health yazılamadı' basar, sonraki `oom doctor` 'yazılamadı' satırı gösterir")]
-    public void ReadOnlyStateDb_FlushSurfacesHealthWriteFailure_DoctorShowsItInALaterProcess()
-    {
-        using var harness = new KabulHarness();
-        var vault = BuildMinimalVault(harness.Root);
-        var dbPath = StateDbPath(harness, vault);
 
-        SeedState(harness, vault, state =>
-            state.RecordFlush(Today.AddDays(-1), "seed", "sessionend", "ok", 1, 10, "extractive"));
-
-        File.SetAttributes(dbPath, File.GetAttributes(dbPath) | FileAttributes.ReadOnly);
-        try
-        {
-            var missingTranscript = Path.Combine(harness.NewScratchDirectory("ro-missing"), "does-not-exist.jsonl");
-            var flushResult = harness.Run(vault,
-                ["flush", "--detached", "--transcript", missingTranscript, "--session", "ro-session"], fakeNow: Today);
-
-            Assert.Contains("health yazılamadı", flushResult.Stderr, StringComparison.OrdinalIgnoreCase);
-
-            var doctorResult = harness.Run(vault, ["doctor"], fakeNow: Today);
-            Assert.Contains("yazılamadı", doctorResult.Stdout, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            try { File.SetAttributes(dbPath, File.GetAttributes(dbPath) & ~FileAttributes.ReadOnly); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
-        }
-    }
 
     // ------------------------------------------------------------------
     // #9 — S7: a corrupt hub-config.json is an ERROR (naming the file),
@@ -342,24 +258,7 @@ public sealed class DoctorKabul
     // compile --dry-run.
     // ------------------------------------------------------------------
 
-    [Fact(DisplayName = "S7 #9 · bozuk .oom/hub-config.json `oom doctor` ve `oom compile --dry-run` çıkışını hataya çevirir, dosya adını anar")]
-    public void CorruptHubConfig_MakesDoctorAndCompileDryRun_FailNamingTheFile()
-    {
-        using var harness = new KabulHarness();
-        var vault = BuildMinimalVault(harness.Root);
-        var hubConfigPath = Path.Combine(vault, ".oom", "hub-config.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(hubConfigPath)!);
-        File.WriteAllText(hubConfigPath, "{ bu gecerli json degil, kabul harness fixture'i, gercek icerik degil", Utf8);
-        WriteDaily(vault, "2026-09-20.md"); // compile --dry-run'ın Plan() adımı RootMap'e ancak bekleyen bir daily varsa dokunur.
 
-        var doctorResult = harness.Run(vault, ["doctor"], fakeNow: Today);
-        Assert.NotEqual(0, doctorResult.ExitCode);
-        Assert.Contains("hub-config.json", doctorResult.Stdout + doctorResult.Stderr, StringComparison.OrdinalIgnoreCase);
-
-        var compileResult = harness.Run(vault, ["compile", "--dry-run"], fakeNow: Today);
-        Assert.NotEqual(0, compileResult.ExitCode);
-        Assert.Contains("hub-config.json", compileResult.Stdout + compileResult.Stderr, StringComparison.OrdinalIgnoreCase);
-    }
 
     // ------------------------------------------------------------------
     // Shared helpers

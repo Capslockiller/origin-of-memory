@@ -37,7 +37,7 @@ internal static class ClaudeTranscript
 
             sessionId ??= Text(root, "sessionId") ?? Text(root, "session_id");
             workingDirectory ??= Text(root, "cwd");
-            if (Flag(root, "isSidechain") || Flag(root, "isMeta") || root.TryGetProperty("toolUseResult", out _))
+            if (Flag(root, "isSidechain") || root.TryGetProperty("toolUseResult", out _))
                 continue;
 
             var message = root.TryGetProperty("message", out var value) ? value : default;
@@ -46,12 +46,20 @@ internal static class ClaudeTranscript
             if (role is not ("user" or "assistant"))
                 continue;
 
-            if (ReadText(root, message) is not { Length: > 0 } text)
-                continue;
-
-            var kind = Flag(root, "isCompactSummary") ? "compact" : Classify(Text(root, "kind") ?? "text", text);
+            var content = message.ValueKind is JsonValueKind.Object && message.TryGetProperty("content", out var blocks) ? blocks : default;
+            var tools = content.ValueKind is JsonValueKind.Array
+                ? content.EnumerateArray().Where(b => Text(b, "type") == "tool_use").Select(b => Text(b, "name") ?? "tool").ToArray() : [];
+            var toolResult = content.ValueKind is JsonValueKind.Array && content.EnumerateArray().Any(b => Text(b, "type") == "tool_result");
+            var text = ReadText(root, message) ?? string.Empty;
+            if (text.Length == 0 && tools.Length == 0 && !toolResult) continue;
+            var kind = toolResult ? "tool_result" : text.Length == 0 && tools.Length > 0 ? "tool_use"
+                : Flag(root, "isCompactSummary") ? "compact" : Flag(root, "isMeta") ? "envelope" : Classify(Text(root, "kind") ?? "text", text);
+            if (kind == "tool_use" && turns.LastOrDefault(t => t.Class == "a") is { } previous)
+                turns[turns.IndexOf(previous)] = previous with { Tools = [.. previous.Tools ?? [], .. tools] };
             var position = root.TryGetProperty("index", out var declared) && declared.TryGetInt32(out var parsed) ? parsed : index;
-            turns.Add(new Turn(position, role, kind, text, Stamp(root, clock)));
+            var turnClass = TurSiniflandirma.Classify(role, kind, text);
+            turns.Add(new Turn(position, turnClass == "h" ? "harness" : role, kind, text, Stamp(root, clock),
+                Text(root, "uuid") ?? TurSiniflandirma.Id(sessionId ?? string.Empty, position), turnClass, tools));
             index++;
         }
 
@@ -78,7 +86,7 @@ internal static class ClaudeTranscript
         var blocks = content.EnumerateArray()
             .Where(block => block.ValueKind is JsonValueKind.Object && Text(block, "type") is "text" or "input_text" or "output_text")
             .Select(block => Text(block, "text"))
-            .Where(value => !string.IsNullOrWhiteSpace(value));
+            .Where(value => value is not null);
 
         var joined = string.Join("\n", blocks);
         return joined.Length == 0 ? null : joined;

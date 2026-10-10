@@ -4,7 +4,7 @@ public static class CommandLine
 {
     public static readonly string[] ValueOptions =
     [
-        "--vault", "--session", "--transcript", "--reason", "--query", "--top", "--batch", "--max",
+        "--vault", "--tetik", "--session", "--transcript", "--reason", "--query", "--top", "--batch", "--max",
         "--session-json", "--backend", "--transcripts", "--dailies", "--transcript-dir", "--daily-dir", "--out",
         "--kit", "--only"
     ];

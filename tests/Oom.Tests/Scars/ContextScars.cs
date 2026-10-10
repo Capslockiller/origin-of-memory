@@ -328,20 +328,7 @@ public sealed class ContextScars
 
     /// S6. Red on the old guard `if (settings.Extensions.Count > 0)` in Program.Announce:
     /// settings drop an entry without a name, so this oom.json warned nothing.
-    [Fact(DisplayName = "L1-context S6 · Adsız extensions girdisi de çalıştırılmaz ve stderr'e contextLine uyarısı düşer")]
-    public void NamelessExtensionEntryStillWarns()
-    {
-        using var harness = new KabulHarness();
-        var vault = harness.NewScratchDirectory("vault-ext-nameless");
-        Directory.CreateDirectory(Path.Combine(vault, ".oom"));
-        File.WriteAllText(Path.Combine(vault, ".oom", "oom.json"), "{\"extensions\":[{\"contextLine\":\"cmd /c echo x > marker\"}]}");
 
-        var run = harness.Run(vault, ["context", "--json"], fakeNow: new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.FromHours(3)));
-        Assert.Equal(0, run.ExitCode);
-        Assert.False(File.Exists(Path.Combine(vault, "marker")));
-        Assert.False(File.Exists(Path.Combine(harness.Root, "marker")));
-        Assert.Contains("contextLine", run.Stderr, StringComparison.Ordinal);
-    }
 
     [Fact(DisplayName = "K6 · Companion dosyası var ama başlığı yoksa context tek satır uyarır")]
     public void ContextWarnsWhenCompanionFileCarriesNoMarker()
@@ -362,64 +349,7 @@ public sealed class ContextScars
 
     /// Red on the mutation `using var state = OpenStateForUpdate();` in Program.Announce
     /// (Program.Context.cs): a manual run would then delete the row and print it once.
-    [Fact(DisplayName = "Y-301 · Last-Session.md dokunulmadan kapanan uzun oturum yansıma borcu bırakır; elle koşulan context onu her seferinde basar, silmez")]
-    public void Y301_UntouchedCompanionAfterALongSessionLeavesExactlyOneReflectionDebtRow()
-    {
-        var root = ScarFixture.TempDirectory();
-        var vault = Path.Combine(root, "kasa");
-        var profile = Path.Combine(root, "profil");
-        var companion = Path.Combine(vault, ScarFixture.CompanionDir);
-        Directory.CreateDirectory(companion);
-        try
-        {
-            var settings = OomSettings.Defaults(vault);
-            var stateRoot = Path.Combine(profile, "oom", VaultIdentity.Hash(Path.GetFullPath(vault).TrimEnd(Path.DirectorySeparatorChar)));
-            Directory.CreateDirectory(stateRoot);
-            var database = Path.Combine(stateRoot, VaultIdentity.DatabaseName);
-            var session = "y301-" + Guid.NewGuid().ToString("N")[..8];
-            var started = DateTimeOffset.UtcNow;
 
-            var lastSession = Path.Combine(companion, "Last-Session.md");
-            File.WriteAllText(lastSession, "## Session: eski\n");
-            File.SetLastWriteTimeUtc(lastSession, started.AddDays(-2).UtcDateTime);
-
-            using (var state = new State(null, null, database))
-            {
-                for (var prompt = 0; prompt < settings.ReflectionMinPrompts; prompt++)
-                    Nudge.Count(state, session, started, settings.NudgeEvery);
-
-                Program.RecordReflectionDebt(state, vault, settings, session);
-                Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM health WHERE component = 'hafiza' AND code = 'yansima-borcu'"));
-            }
-
-            SqliteConnection.ClearAllPools();
-            for (var run = 0; run < 2; run++)
-            {
-                var context = GateFixture.RunScoped(profile, "context", "--json", "--vault", vault);
-                Assert.Equal(0, context.ExitCode);
-                var text = JsonDocument.Parse(context.StandardOutput).RootElement.GetProperty("text").GetString()!;
-                Assert.StartsWith("[Bildirim]\n" + Nudge.ReflectionDebt, text, StringComparison.Ordinal);
-            }
-
-            SqliteConnection.ClearAllPools();
-            using (var state = new State(null, null, database))
-            {
-                Assert.Equal(1, state.Scalar("SELECT COUNT(*) FROM health WHERE component = 'hafiza' AND code = 'yansima-borcu'"));
-                Assert.Equal(Nudge.ReflectionDebt, state.TakeReflectionDebt());
-                Assert.Equal(0, state.Scalar("SELECT COUNT(*) FROM health WHERE component = 'hafiza' AND code = 'yansima-borcu'"));
-
-                File.SetLastWriteTimeUtc(lastSession, started.AddMinutes(1).UtcDateTime);
-                Program.RecordReflectionDebt(state, vault, settings, session);
-                Assert.Equal(0, state.Scalar("SELECT COUNT(*) FROM health WHERE component = 'hafiza' AND code = 'yansima-borcu'"));
-                Assert.False(Nudge.OwesReflection(vault, settings.Context.CompanionDir, started, 1, settings.ReflectionMinPrompts));
-            }
-        }
-        finally
-        {
-            SqliteConnection.ClearAllPools();
-            ScarFixture.Remove(root);
-        }
-    }
 
     [Fact(DisplayName = "Y-319 · context açılış bloğu son oturum bitişini bilir, hiç yoksa bilmediğini söyler")]
     public void Y319_ContextOpensWithAClockLine()

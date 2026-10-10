@@ -117,7 +117,7 @@ public sealed partial class Context
 
         var daily = Daily(vaultPath, now);
         var log = daily is null ? null : Neutralize(daily.Value.Text);
-        var zaman = Nudge.LastSession(now, _options.LastSessionEnd);
+        var zaman = SessionTiming.LastSession(now, _options.LastSessionEnd);
         var aktif = RenderThreads(ActiveThreads(files["Threads.md"]), StatusChars);
         var kurallar = Join(files["Kurallar.md"]);
         var duzeltmeler = Join(files["Duzeltmeler.md"]);

@@ -17,9 +17,6 @@ internal static partial class Program
     private static int Announce(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
         var hook = HookPayload.Read(ReadStandardInput());
-        if (Math.Max(settings.Extensions.Count, ExtensionEntries(vault)) is > 0 and var extensions)
-            Console.Error.WriteLine($"context: oom.json extensions[].contextLine artık çalıştırılmıyor — {extensions} uzantı yok sayıldı");
-
         // S5: only the session-start hook consumes the reflection debt; a manual run reads it.
         State? state = null;
         ContextOptions options;

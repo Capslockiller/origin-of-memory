@@ -28,7 +28,7 @@ public sealed record MemoryFreshness(CoverageReading? Coverage, DateTimeOffset? 
     internal static MemoryFreshness Read(string vault, State? state, DateTimeOffset now)
     {
         var coverage = state?.ReadCoverage();
-        return new MemoryFreshness(coverage, CompileQueue.LastCompile(state, now), CompileQueue.Pending(vault, state).Count)
+        return new MemoryFreshness(coverage, null, 0)
         {
             LastSweepFromFlushLog = coverage is null ? state?.ReadLastSweep() : null
         };

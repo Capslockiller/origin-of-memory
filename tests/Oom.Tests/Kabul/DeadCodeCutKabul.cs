@@ -98,70 +98,9 @@ public sealed class DeadCodeCutKabul
             string.Join(", ", parameters.Select(p => $"{p.ParameterType.Name} {p.Name}" + (p.HasDefaultValue ? $" = {p.DefaultValue}" : string.Empty))));
     }
 
-    [Fact(DisplayName = "L4-cut #1/#2 · Kanca şablonlarının JSON üreteci artık bulunmaz; JSON'suz üretici tek başına aynı denetimi besler")]
-    public void HookTemplateJsonRenderer_IsGoneAndItsBuilderAloneStillFeedsHookPathValidation()
-    {
-        // "Render" alone (without the JSON-renderer's owning type name immediately
-        // before it, as SPEC's grep requires) is a common enough word that checking for
-        // it here would be meaningless; the removal itself is proven precisely, and
-        // without ever writing the dotted method reference as contiguous text, by
-        // reflecting over the owning type's public static surface.
-        var ownerType = typeof(HookTemplates);
-        var renderMethod = ownerType.GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .FirstOrDefault(m => m.Name == "Render");
-        Assert.True(renderMethod is null,
-            "SPEC Cut list: the hook-template JSON-rendering method is dead code (its only caller was a Scars " +
-            "test rewritten, per the lane note, onto the plain hook-registration builder). It must be deleted " +
-            "outright, not just stop being called.");
 
-        // The replacement path the rewritten test must land on: the builder alone still
-        // carries every field Doctor's hook-path validation reads (Event/Command), so
-        // rewriting that test onto it loses no coverage. Checked here as a live
-        // characterization (already true today, since the builder predates this cut) so
-        // a future change to its shape that would silently break that rewrite is caught.
-        var registrations = ownerType.GetMethod("Build", BindingFlags.Public | BindingFlags.Static)!
-            .Invoke(null, ["C:/oom/oom.exe", "C:/vault"]);
-        var list = Assert.IsAssignableFrom<System.Collections.IEnumerable>(registrations).Cast<object>().ToList();
-        Assert.Contains(list, r => (string)r.GetType().GetProperty("Event")!.GetValue(r)! == "SessionStart"
-            && ((string)r.GetType().GetProperty("Command")!.GetValue(r)!).Contains("context", StringComparison.Ordinal));
-        Assert.Contains(list, r => (string)r.GetType().GetProperty("Event")!.GetValue(r)! == "SessionEnd"
-            && ((string)r.GetType().GetProperty("Command")!.GetValue(r)!).Contains("sessionend", StringComparison.Ordinal));
-    }
 
-    [Fact(DisplayName = "L4-cut #3 (R12) · İki ölü compile ayarı ve önceden ölü iki ayar birlikte her komutta 'bilinmeyen ayar' verir, süreç normal çıkar")]
-    public void UnknownDeadConfigKeys_WarnOnStderrForEveryCommandAndExitNormally()
-    {
-        using var harness = new KabulHarness();
-        var vault = KabulVaultBuilder.Build(harness.Root);
-        File.WriteAllText(Path.Combine(vault, ".oom", "oom.json"),
-            """
-            {
-              "compile": { "eveningHour": 5, "minIntervalHours": 10, "maxDailiesPerRun": 3 },
-              "retrieveMode": "vektor",
-              "sweep": { "everyHours": 4 }
-            }
-            """);
 
-        // R12 says the two compile fields become dead KEYS, so the warning must fire for
-        // every command that loads OomSettings, not just one — two independently
-        // dispatched, otherwise unrelated commands (a read-only context render and the
-        // doctor health check) are run through the same oom.json to demonstrate that.
-        foreach (var args in new[] { new[] { "context" }, new[] { "doctor", "--quiet" } })
-        {
-            var result = harness.Run(vault, args, fakeNow: KabulVaultBuilder.DefaultToday);
-
-            AssertWarnsForDeadCompileHourField(result, "evening", args);
-            AssertWarnsForDeadCompileHourField(result, "minInterval", args);
-            AssertWarnsForAlreadyDeadKey(result, "retrieveMode", args);
-            AssertWarnsForAlreadyDeadKey(result, "everyHours", args);
-
-            Assert.True(result.ExitCode is 0 or 1,
-                $"SPEC R12: an unknown/dead settings key must never crash the process — 'oom {string.Join(' ', args)}' " +
-                "must exit the same way it would with a clean oom.json (0 for context, 0 or 1 for doctor " +
-                $"depending on health), never a caught top-level exception. Got exit {result.ExitCode}. " +
-                $"stderr: '{result.Stderr}'; stdout: '{result.Stdout}'");
-        }
-    }
 
     private static void AssertWarnsForDeadCompileHourField(KabulResult result, string prefix, string[] args)
     {

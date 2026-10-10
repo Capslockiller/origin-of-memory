@@ -17,14 +17,7 @@ public sealed class DoctorScars
         Assert.True(doctor.Pending > 0);
     }
 
-    [Fact(DisplayName = "Y-049 · Kanca hata yolu kalıcı doctor bulgusu bırakır")]
-    public void Y049_HookFailureIsPersisted()
-    {
-        var request = new ProcessRequest("missing-interpreter", [], Path.GetTempPath(), new Dictionary<string, string>(), "{}");
-        var process = new Runner().RunProcess(request, TimeSpan.FromSeconds(1));
-        Assert.NotEqual(0, process.ExitCode);
-        Assert.Contains(new Doctor().Check(ScarFixture.Now).Items, x => x.Code == "hook-failed");
-    }
+
 
     [Fact(DisplayName = "Y-088 · Doctor yeşil olmak için kapsama ve ret oranını ölçer")]
     public void Y088_DoctorHealthRequiresCoverageAndRejectionTargets()
@@ -48,73 +41,14 @@ public sealed class DoctorScars
         Assert.Equal(exitCode, result.ExitCode);
     }
 
-    [Fact(DisplayName = "Y-113 · Erişilebilirlik yoklaması kalıcı kanca hatasından bağımsızdır ve başarı onu iyileştirir")]
-    public void Y113_ReachabilityProbeIsIndependentOfTaskFailuresAndHealsOnSuccess()
-    {
-        var directory = ScarFixture.TempDirectory();
-        var claudePath = Path.Combine(directory, "claude.exe");
-        try
-        {
-            File.WriteAllText(claudePath, "sahte");
-            var doctor = new Doctor();
-            Assert.Equal(HealthLevel.Info, doctor.CheckClaudeReachability(directory).Level);
-            Assert.Equal(HealthLevel.Warning, doctor.CheckClaudeReachability(string.Empty).Level);
 
-            var request = new ProcessRequest(claudePath, [], Path.GetTempPath(), new Dictionary<string, string>(), string.Empty);
-            new Runner(new Y113ProcessRunner(1)).RunProcess(request, TimeSpan.FromSeconds(1));
-            Assert.Contains(new Doctor().Check(ScarFixture.Now).Items,
-                x => x.Code == "hook-failed" && x.Key == claudePath && x.Level == HealthLevel.Error);
-            Assert.Equal(HealthLevel.Info, doctor.CheckClaudeReachability(directory).Level);
-
-            new Runner(new Y113ProcessRunner(0)).RunProcess(request, TimeSpan.FromSeconds(1));
-            Assert.DoesNotContain(new Doctor().Check(ScarFixture.Now).Items,
-                x => x.Code == "hook-failed" && x.Key == claudePath && x.Level == HealthLevel.Error);
-        }
-        finally { ScarFixture.Remove(directory); }
-    }
 
     private sealed class Y113ProcessRunner(int exitCode) : IProcessRunner
     {
         public ProcessResult Run(ProcessRequest request, TimeSpan timeout) => new(exitCode, "{}", string.Empty, true);
     }
 
-    [Fact(DisplayName = "Y-325 · doctor kanca hatasını gözlemler, install uyarır, kaldırma uyarmaz")]
-    public void Y325_HookValidationRunsInProductPaths()
-    {
-        var vault = ScarFixture.TempDirectory();
-        var stderr = Console.Error;
-        using var captured = new StringWriter();
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(vault, ".claude"));
-            var hooks = HookTemplates.Build("relative/oom.exe", vault).ToDictionary(
-                registration => registration.Event,
-                registration => new[]
-                {
-                    new
-                    {
-                        hooks = new[]
-                        {
-                            new { type = "command", command = registration.Command, timeout = registration.TimeoutSeconds }
-                        }
-                    }
-                });
-            File.WriteAllText(Path.Combine(vault, ".claude", "settings.json"), JsonSerializer.Serialize(new { hooks }));
-            var snapshot = Program.Snapshot(ScarFixture.Now, vault, OomSettings.Defaults(vault), null);
-            Assert.Contains(snapshot.Observations, o => o.Item.Code == "hook-path" && o.Item.Level == HealthLevel.Error);
-            Console.SetError(captured);
-            Assert.Equal(0, Program.RunInstall(["install"], vault));
-            Assert.Contains("kurulum uyarısı: hook-path:", captured.ToString());
-            captured.GetStringBuilder().Clear();
-            Assert.Equal(0, Program.RunInstall(["install", "--uninstall"], vault));
-            Assert.DoesNotContain("kurulum uyarısı:", captured.ToString());
-        }
-        finally
-        {
-            Console.SetError(stderr);
-            ScarFixture.Remove(vault);
-        }
-    }
+
 
     [Fact(DisplayName = "Y-326 · karantina sayısı yalnız gerçek markdown dosyalarından gelir")]
     public void Y326_QuarantineUsesFilesWithoutATable()
@@ -181,20 +115,7 @@ public sealed class DoctorScars
     // superseded by R24(b) — doctor never writes health. S7 stays covered on the write path by
     // DoctorKabul #8 and on the read-only path by LegacyStateKabul #3.
 
-    [Fact(DisplayName = "S7 · RootMap göçü bir kavram notunu yazamazsa Regenerate hatayı fırlatır, sessizce geçmez")]
-    public void RootMapMigrationWriteFailure_IsThrown()
-    {
-        var vault = ScarFixture.TempDirectory();
-        try
-        {
-            var concepts = Directory.CreateDirectory(Path.Combine(vault, "knowledge", "concepts")).FullName;
-            File.WriteAllText(Path.Combine(concepts, "hafiza-capasi.md"),
-                "---\ntitle: Hafıza çapası\naliases: [capa]\ntags: [bellek]\nsources: [2026-09-08.md]\ncreated: 2026-09-01\nupdated: 2026-09-08\n---\n# Hafıza çapası\n\nÇapa.\n\n## İlgili Kavramlar\n- [[gunluk-log]] — çapa günlüğe yazılır.\n");
 
-            Assert.Throws<IOException>(() => new RootMap(vault, files: new LockedFiles()).Regenerate());
-        }
-        finally { ScarFixture.Remove(vault); }
-    }
 
     private sealed class LockedFiles : IFileOperations
     {

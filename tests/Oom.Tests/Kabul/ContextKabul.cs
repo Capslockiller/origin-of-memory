@@ -406,54 +406,14 @@ public sealed class ContextKabul
     // Assertion 9 — S6: extensions[].contextLine is never executed; a warning is
     // written instead, and no injected extension line reaches the context text.
     // ------------------------------------------------------------------
-    [Fact(DisplayName = "L1-context #9 (S6) · extensions[].contextLine artık çalıştırılmaz, marker oluşmaz, stderr'e uyarı düşer")]
-    public void Assertion9_ExtensionContextLineNeverExecuted_WarnsInstead()
-    {
-        using var harness = new KabulHarness();
-        var vault = harness.NewScratchDirectory("vault-ext");
-        Directory.CreateDirectory(Path.Combine(vault, ".oom"));
-        File.WriteAllText(Path.Combine(vault, ".oom", "oom.json"),
-            "{\"extensions\":[{\"name\":\"kabul-oracle-ext\",\"contextLine\":\"cmd /c echo x > marker\"}]}", Utf8);
 
-        var run = harness.Run(vault, ["context", "--json"], fakeNow: KabulVaultBuilder.DefaultToday);
-        Assert.Equal(0, run.ExitCode);
-
-        Assert.False(File.Exists(Path.Combine(vault, "marker")), "extensions[].contextLine hâlâ çalıştırılıyor: marker dosyası oluştu");
-        Assert.True(run.Stderr.Trim().Length > 0, "extensions tanımlıyken stderr'e uyarı beklenir");
-
-        var (_, text) = ContextJson(run);
-        Assert.DoesNotContain("[kabul-oracle-ext]", text, StringComparison.Ordinal);
-    }
 
     // ------------------------------------------------------------------
     // Assertion 10 — S5 (also the black-box replacement for Y-301): manual `oom
     // context` runs never consume the yansıma-borcu notification; only a hook-mode
     // run (stdin carries a hook payload) takes it.
     // ------------------------------------------------------------------
-    [Fact(DisplayName = "L1-context #10 (S5) · İki ardışık elle koşum aynı [Bildirim]'i gösterir; yalnız kanca modu tüketir")]
-    public void Assertion10_ManualRunsKeepNotification_HookConsumesIt()
-    {
-        using var harness = new KabulHarness();
-        var vault = harness.NewScratchDirectory("vault-s5");
-        SeedReflectionDebt(harness, vault);
 
-        var manual1 = harness.Run(vault, ["context", "--json"], fakeNow: KabulVaultBuilder.DefaultToday);
-        Assert.Equal(0, manual1.ExitCode);
-        Assert.Contains(Nudge.ReflectionDebt, ContextJson(manual1).Text, StringComparison.Ordinal);
-
-        var manual2 = harness.Run(vault, ["context", "--json"], fakeNow: KabulVaultBuilder.DefaultToday);
-        Assert.Equal(0, manual2.ExitCode);
-        Assert.Contains(Nudge.ReflectionDebt, ContextJson(manual2).Text, StringComparison.Ordinal);
-
-        var hookPayload = "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"kabul-s5-hook\"}";
-        var hookRun = harness.Run(vault, ["context", "--json"], standardInput: hookPayload, fakeNow: KabulVaultBuilder.DefaultToday);
-        Assert.Equal(0, hookRun.ExitCode);
-        Assert.Contains(Nudge.ReflectionDebt, ContextJson(hookRun).Text, StringComparison.Ordinal);
-
-        var manual3 = harness.Run(vault, ["context", "--json"], fakeNow: KabulVaultBuilder.DefaultToday);
-        Assert.Equal(0, manual3.ExitCode);
-        Assert.DoesNotContain(Nudge.ReflectionDebt, ContextJson(manual3).Text, StringComparison.Ordinal);
-    }
 
     // ==================== helpers ====================
 
@@ -573,19 +533,7 @@ public sealed class ContextKabul
     /// harness's child process will open (same path math as VaultIdentity.StateRoot,
     /// rooted at the harness's isolated OOM_LOCALAPPDATA), bypassing the CLI entirely so
     /// the seed itself cannot depend on the behaviour under test.</summary>
-    private static void SeedReflectionDebt(KabulHarness harness, string vault)
-    {
-        // Mirror VaultPaths.UseVault's exact canonicalization (Path.GetFullPath then trim
-        // a trailing separator) before hashing — that's what the exe hashes internally,
-        // not necessarily the literal string passed on the command line.
-        var canonical = Path.GetFullPath(vault).TrimEnd(Path.DirectorySeparatorChar);
-        var stateRoot = Path.Combine(harness.LocalAppData, "oom", VaultIdentity.Hash(canonical));
-        Directory.CreateDirectory(stateRoot);
-        var dbPath = Path.Combine(stateRoot, VaultIdentity.DatabaseName);
-        using (var state = new State(null, null, dbPath, StateAccess.ReadWrite))
-            state.WriteHealthConcurrently([new HealthItem("hafiza", HealthLevel.Warning, "yansima-borcu", "kabul-seed", Nudge.ReflectionDebt)]);
-        SqliteConnection.ClearAllPools();
-    }
+
 
     /// <summary>Runs a full command line exactly as printed (it already carries its own
     /// quoted exe path and arguments) via `cmd /d /c`, isolated the same way KabulHarness

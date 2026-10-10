@@ -40,23 +40,7 @@ public sealed class LegacyFreshnessKabul
             "expected legacy state.db bytes to stay unchanged after context and doctor");
     }
 
-    [Fact]
-    public void ReadOnlyCompile_ToleratesDailyIngestWithoutDigest_AndDoesNotMigrate()
-    {
-        using var harness = new KabulHarness();
-        var vault = BuildVault(harness.Root);
-        File.WriteAllText(Path.Combine(vault, "daily", "2026-09-27.md"), "gunluk");
-        var dbPath = StateDbPath(harness, vault);
-        CreateLegacyStateWithoutDigest(dbPath, includeHealth: true);
-        var before = File.ReadAllBytes(dbPath);
 
-        var result = harness.Run(vault, ["compile", "--dry-run"], fakeNow: Now);
-
-        Assert.True(result.ExitCode == 0,
-            $"expected compile --dry-run exit=0 on missing digest; actual exit={result.ExitCode}, stderr={result.Stderr.Trim()}");
-        Assert.True(before.AsSpan().SequenceEqual(File.ReadAllBytes(dbPath)),
-            "expected read-only compile not to migrate state.db");
-    }
 
     [Fact]
     public void ReadOnlyContext_ToleratesMissingHealthTable_AndDoesNotCreateIt()

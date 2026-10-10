@@ -15,9 +15,6 @@ internal static partial class Program
         CompanionDir = settings.Context.CompanionDir
     });
 
-    private static Runner MakeRunner(string vault, OomSettings settings) =>
-        new(new RunnerProfile(vault, settings.Backend.Claude));
-
     private static State OpenState() => new(null, null, VaultPaths.EnsureStateDatabase(), StateAccess.ReadWrite);
 
     private static State? OpenStateForReading() => State.OpenReadOnly();
@@ -36,14 +33,6 @@ internal static partial class Program
     private static string ReadIfPresent(string path) => File.Exists(path) ? File.ReadAllText(path, Utf8) : string.Empty;
 
     private static string Executable() => Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "oom.exe");
-
-    private static FlushReason Reason(string reason) => reason switch
-    {
-        "precompact" => FlushReason.PreCompact,
-        "sweep" => FlushReason.Sweep,
-        "ingest" => FlushReason.Ingest,
-        _ => FlushReason.SessionEnd
-    };
 
     private static string Command(string[] args) => CommandLine.Command(args);
 

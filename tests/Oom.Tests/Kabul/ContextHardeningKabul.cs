@@ -194,29 +194,7 @@ public sealed class ContextHardeningKabul
     // row already exists for it — CompileQueue.IsPending must re-read the file to compare
     // digests, and used a plain File.ReadAllText that conflicts with the same held handle.
     // ------------------------------------------------------------------
-    [Fact(DisplayName = "B2-2 (R31/R34) · Bugünün daily'si eklemek için açıkken (ingested v2 digest satırı var) elle ve kanca bağlamı çökmez")]
-    public void TodaysDailyHeldForAppend_WithIngestedDigestRow_ContextDoesNotCrash()
-    {
-        using var harness = new KabulHarness();
-        var vault = WriteMinimalVault(harness, "vault-b2-daily-held");
-        var dailyPath = Path.Combine(vault, "daily", $"{Today:yyyy-MM-dd}.md");
-        var dailyContent = $"# {Today:yyyy-MM-dd}\n\n- log satırı 001: sentetik günlük kaydı, B2 fixture'ı.\n";
-        File.WriteAllText(dailyPath, dailyContent, Utf8);
 
-        SeedState(harness, vault, state =>
-            state.WriteDailyIngest($"{Today:yyyy-MM-dd}.md", "ingested", Today, digest: CompileQueue.ContentDigest(dailyContent)));
-
-        using var writer = new FileStream(dailyPath, FileMode.Open, FileAccess.Write, FileShare.Read);
-
-        var manual = harness.Run(vault, ["context"], fakeNow: Today);
-        Assert.True(manual.ExitCode == 0, $"elle: exit={manual.ExitCode}; stdout={manual.Stdout.Length} bayt; stderr={manual.Stderr}");
-        Assert.False(string.IsNullOrWhiteSpace(manual.Stdout), "elle koşumda daily tutulduğunda bağlam boş kaldı");
-
-        var hookPayload = "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"b2-daily-held-hook\"}";
-        var hook = harness.Run(vault, ["context"], standardInput: hookPayload, fakeNow: Today);
-        Assert.True(hook.ExitCode == 0, $"kanca: exit={hook.ExitCode}; stdout={hook.Stdout.Length} bayt; stderr={hook.Stderr}");
-        Assert.False(string.IsNullOrWhiteSpace(hook.Stdout), "kanca koşumunda daily tutulduğunda bağlam boş kaldı");
-    }
 
     // ------------------------------------------------------------------
     // B2 (3) — R34: TakeReflectionDebt reads AND deletes the yansıma-borcu health row in
@@ -229,36 +207,7 @@ public sealed class ContextHardeningKabul
     // not show it again (consumed exactly once, same life cycle ContextKabul's Assertion10
     // already covers for the non-degraded path).
     // ------------------------------------------------------------------
-    [Fact(DisplayName = "B2-3 (R34) · Bağlamı çökertecek koşulda bile yansıma borcu satırı kaybolmaz, o koşumda gösterilir ve bir daha tekrarlanmaz")]
-    public void ReflectionDebtSurvivesAFailedContext_AndIsShownExactlyOnce()
-    {
-        using var harness = new KabulHarness();
-        var vault = WriteMinimalVault(harness, "vault-b2-debt-survives");
-        SeedReflectionDebt(harness, vault);
 
-        var knowledgeDir = Path.Combine(vault, "knowledge");
-        Directory.CreateDirectory(knowledgeDir);
-        var logPath = Path.Combine(knowledgeDir, "log.md");
-        File.WriteAllText(logPath, "# Log\n", Utf8);
-
-        var hookPayload = "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"b2-debt-survives-hook\"}";
-        string additionalContext;
-        using (new FileStream(logPath, FileMode.Open, FileAccess.Write, FileShare.Read))
-        {
-            var hook = harness.Run(vault, ["context"], standardInput: hookPayload, fakeNow: Today);
-            Assert.True(hook.ExitCode == 0, $"exit={hook.ExitCode}; stdout={hook.Stdout.Length} bayt; stderr={hook.Stderr}");
-            additionalContext = JsonDocument.Parse(hook.Stdout).RootElement
-                .GetProperty("hookSpecificOutput").GetProperty("additionalContext").GetString()!;
-        }
-
-        Assert.Contains(Nudge.ReflectionDebt, additionalContext, StringComparison.Ordinal);
-
-        // Consumed exactly once by the run above — never silently deleted with nothing
-        // ever shown for it, and never re-shown on a later run either.
-        var again = harness.Run(vault, ["context", "--json"], fakeNow: Today);
-        Assert.Equal(0, again.ExitCode);
-        Assert.DoesNotContain(Nudge.ReflectionDebt, ContextJson(again).Text, StringComparison.Ordinal);
-    }
 
     // ------------------------------------------------------------------
     // Minor — Program.Context.cs:100-103 at eb19f02: QuarantineNotifications queries the
@@ -322,24 +271,7 @@ public sealed class ContextHardeningKabul
     // read-only (R24(b)) but crashed with an IOException the moment IsPending needed to
     // re-read a held daily to compare its content digest.
     // ------------------------------------------------------------------
-    [Fact(DisplayName = "Minor (R31) · compile --dry-run, tutulan bir daily üzerinde çökmez")]
-    public void CompileDryRun_OnAHeldDaily_DoesNotCrash()
-    {
-        using var harness = new KabulHarness();
-        var vault = WriteMinimalVault(harness, "vault-compile-dryrun-held");
-        var dailyPath = Path.Combine(vault, "daily", $"{Today:yyyy-MM-dd}.md");
-        var dailyContent = $"# {Today:yyyy-MM-dd}\n\n- log satırı 001: sentetik günlük kaydı, dry-run fixture'ı.\n";
-        File.WriteAllText(dailyPath, dailyContent, Utf8);
 
-        SeedState(harness, vault, state =>
-            state.WriteDailyIngest($"{Today:yyyy-MM-dd}.md", "ingested", Today, digest: CompileQueue.ContentDigest(dailyContent)));
-
-        using var writer = new FileStream(dailyPath, FileMode.Open, FileAccess.Write, FileShare.Read);
-        var run = harness.Run(vault, ["compile", "--dry-run"], fakeNow: Today);
-
-        Assert.True(run.ExitCode == 0, $"exit={run.ExitCode}; stdout={run.Stdout.Length} bayt; stderr={run.Stderr}");
-        Assert.Contains("derleme planı (kuru koşum)", run.Stdout, StringComparison.Ordinal);
-    }
 
     // ------------------------------------------------------------------
     // Minor — Program.Context.cs:52 at eb19f02: the hook JSON path used JsonSerializer's
@@ -475,12 +407,5 @@ public sealed class ContextHardeningKabul
 
     /// <summary>Mirrors ContextKabul.SeedReflectionDebt: seeds a single 'yansima-borcu'
     /// health row directly into the state.db the harness's child process will open.</summary>
-    private static void SeedReflectionDebt(KabulHarness harness, string vault)
-    {
-        var dbPath = StateDbPath(harness, vault);
-        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        using (var state = new State(null, null, dbPath, StateAccess.ReadWrite))
-            state.WriteHealthConcurrently([new HealthItem("hafiza", HealthLevel.Warning, "yansima-borcu", "kabul-seed", Nudge.ReflectionDebt)]);
-        SqliteConnection.ClearAllPools();
-    }
+
 }

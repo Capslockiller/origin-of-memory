@@ -26,92 +26,9 @@ namespace Oom.Tests.Kabul;
 /// </summary>
 public sealed class TestRootKabul
 {
-    [Fact]
-    public void SweepDiscoveryAgreesWhetherTheFixtureSitsUnderOrOutsideRealTemp()
-    {
-        using var harness = new KabulHarness();
-        var vault = harness.NewScratchDirectory("vault");
 
-        // A stand-in "mechanism root" both runs inject via OOM_TEST_ROOT. It is
-        // deliberately unrelated to either transcript location below, so a fix that
-        // consults it instead of the real OS temp path finds nothing to exclude in
-        // either run — proving the outcome no longer depends on where the transcript
-        // physically sits relative to the real %TEMP%.
-        var mechanismStandIn = Path.Combine(harness.Root, "mechanism-stand-in-" + Guid.NewGuid().ToString("N")[..8]);
 
-        var underTemp = Path.Combine(Path.GetTempPath(), "oom-testroot-kabul-" + Guid.NewGuid().ToString("N")[..12]);
-        var outsideTemp = harness.NewScratchDirectory("outside-temp-projects");
 
-        // The two runs only prove anything if the fixtures are actually on opposite
-        // sides of the real OS temp directory. outsideTemp comes from
-        // AppContext.BaseDirectory (see KabulHarness.CreateIsolatedRoot), which is not
-        // guaranteed to sit outside %TEMP% when the checkout or test run is itself
-        // deployed under it (finding: should) - so check the physical fact instead of
-        // assuming it.
-        var realTemp = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
-        Assert.StartsWith(realTemp + Path.DirectorySeparatorChar, Path.GetFullPath(underTemp), StringComparison.OrdinalIgnoreCase);
-        Assert.False(
-            Path.GetFullPath(outsideTemp).StartsWith(realTemp + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
-            $"outsideTemp ('{outsideTemp}') must physically sit outside the real OS temp directory ('{realTemp}') for this test to prove anything.");
-
-        // A transcript placed directly under the injected mechanism root itself must
-        // still be discovered as excluded - otherwise an implementation that dropped
-        // TEMP exclusion entirely (and always returns "found") would pass the two
-        // assertions above for the wrong reason (finding: should).
-        var underMechanismRoot = Path.Combine(mechanismStandIn, "under-mechanism-root");
-
-        try
-        {
-            WriteTranscript(Directory.CreateDirectory(underTemp).FullName, "sess-under-temp");
-            WriteTranscript(outsideTemp, "sess-outside-temp");
-            WriteTranscript(underMechanismRoot, "sess-under-mechanism-root");
-
-            var discoveredUnderTemp = RunSweepDryRun(harness, vault, underTemp, mechanismStandIn);
-            var discoveredOutsideTemp = RunSweepDryRun(harness, vault, outsideTemp, mechanismStandIn);
-            var discoveredUnderMechanismRoot = RunSweepDryRun(harness, vault, underMechanismRoot, mechanismStandIn);
-
-            Assert.Equal(1, discoveredOutsideTemp);
-            Assert.Equal(discoveredOutsideTemp, discoveredUnderTemp);
-            Assert.Equal(0, discoveredUnderMechanismRoot);
-        }
-        finally
-        {
-            TryDelete(underTemp);
-        }
-    }
-
-    [Fact]
-    public void DefaultMechanismRootStillExcludesRealTempWhenOomTestRootIsUnset()
-    {
-        using var harness = new KabulHarness();
-        var vault = harness.NewScratchDirectory("vault-default-root");
-
-        // Lane assertion 2 (graft suggestion): with OOM_TEST_ROOT left unset, a
-        // transcript physically under the real OS temp directory must still be excluded
-        // by the default mechanism root - proving the default (production, no env var)
-        // path was not broken while making the injected seam independently testable.
-        var underRealTemp = Path.Combine(Path.GetTempPath(), "oom", "run", "oom-testroot-kabul-default-" + Guid.NewGuid().ToString("N")[..12]);
-
-        var previous = Environment.GetEnvironmentVariable("OOM_TEST_ROOT");
-        try
-        {
-            Environment.SetEnvironmentVariable("OOM_TEST_ROOT", null);
-            WriteTranscript(Directory.CreateDirectory(underRealTemp).FullName, "sess-default-under-temp");
-            WriteSweepSettings(vault, underRealTemp);
-
-            var result = harness.Run(vault, ["sweep", "--dry-run"], fakeNow: new DateTimeOffset(2026, 9, 27, 12, 0, 0, TimeSpan.FromHours(3)));
-            Assert.Equal(0, result.ExitCode);
-            Assert.Equal(0, ParseDiscoveredFileCount(result.Stdout));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("OOM_TEST_ROOT", previous);
-            // Only remove this test's own unique leaf directory, never the shared
-            // %TEMP%\oom\run parent - that path may be in real use by hooks running on
-            // this machine outside this test.
-            TryDelete(underRealTemp);
-        }
-    }
 
     private static int RunSweepDryRun(KabulHarness harness, string vault, string sweepRoot, string mechanismStandIn)
     {

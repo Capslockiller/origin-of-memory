@@ -58,38 +58,7 @@ public sealed class DoctorFinalKabul
         Assert.Contains("oturum", Text(session, "detail"), StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact(DisplayName = "O14 · PATH'te bulunan claude için hook-failed kaydı gizlenmez ve sonraki başarı iyileştirir")]
-    public void ReachableClaude_DoesNotHideFailedSubprocess_AndSuccessHealsIt()
-    {
-        var root = NewDirectory("o14");
-        try
-        {
-            // A PATH of our own with a stub claude.cmd: the test must not depend on the machine
-            // having the Claude CLI installed (a CI runner does not).
-            var stubBin = Directory.CreateDirectory(Path.Combine(root, "stub-bin")).FullName;
-            File.WriteAllText(Path.Combine(stubBin, "claude.cmd"), "@echo off\r\n");
-            var reach = new Doctor().CheckClaudeReachability(stubBin);
-            Assert.Equal(HealthLevel.Info, reach.Level);
 
-            var vault = BuildUnitVault(root);
-            var settings = Settings(vault, Path.Combine(root, "transcripts"));
-            var request = new ProcessRequest(reach.Key, [], root, new Dictionary<string, string>(), string.Empty);
-            new Runner(new FixedProcessRunner(1)).RunProcess(request, TimeSpan.FromSeconds(1));
-
-            Assert.Contains(Program.Snapshot(Today, vault, settings, null).Observations,
-                observation => observation.Item is { Component: "hooks", Code: "hook-failed", Level: HealthLevel.Error }
-                    && observation.Item.Key == reach.Key);
-
-            new Runner(new FixedProcessRunner(0)).RunProcess(request, TimeSpan.FromSeconds(1));
-            Assert.DoesNotContain(Program.Snapshot(Today, vault, settings, null).Observations,
-                observation => observation.Item is { Component: "hooks", Code: "hook-failed", Level: HealthLevel.Error }
-                    && observation.Item.Key == reach.Key);
-        }
-        finally
-        {
-            Remove(root);
-        }
-    }
 
     [Fact(DisplayName = "O15/D1 · boş ve bozuk settings sessiz geçmez; olmayan oom.exe reddedilir")]
     public void HookValidation_ReportsMissingMalformedAndMissingExecutables()

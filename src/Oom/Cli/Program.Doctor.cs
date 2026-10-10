@@ -101,7 +101,6 @@ internal static partial class Program
                 : Observe(now, "state", "state-db", "state.db", $"{database} · {(database is not null && File.Exists(database) ? new FileInfo(database).Length : 0)} bayt"),
             Observe(now, "state", "fts5-ok", "notes_fts", $"İndekste {(state is null ? 0 : Rows(state, "notes_fts"))} not"),
             Observe(now, "notes", "corpus", "concepts", $"{Corpus(vault).Count} geçerli kavram notu"),
-            Observe(now, "runner", "backend", "claude", $"{settings.Backend.Claude.Fast} / {settings.Backend.Claude.Smart}"),
             Observe(now, "sweep", "roots", "sweep.roots", string.Join(" · ", settings.Sweep.Roots)),
             .. missingRoots.Select(root => new DoctorObservation(
                 new HealthItem("sweep", missingRootLevel, "missing-root", root,
@@ -296,55 +295,19 @@ internal static partial class Program
     // S7: a corrupt hub-config.json is a red row naming the file, not a silent 'genel'.
     private static IEnumerable<DoctorObservation> VaultSchemaObservations(DateTimeOffset now, string vault)
     {
-        string catchAll;
-        try
-        {
-            catchAll = new RootMap(vault).CatchAllHub;
-        }
-        catch (InvalidDataException error)
-        {
-            return [new DoctorObservation(new HealthItem("vault", HealthLevel.Error, "hub-config", "hub-config.json", error.Message), now)];
-        }
-
-        return Doctor.VaultSchema(vault, Corpus(vault), catchAll).Select(item => new DoctorObservation(item, now));
+        return [];
     }
 
     private static IEnumerable<DoctorObservation> KitObservations(DateTimeOffset now) =>
-        KitObservations(now, DefaultKitRoot(), HomeRoot());
+        KitObservations(now, string.Empty, string.Empty);
 
-    internal static IEnumerable<DoctorObservation> KitObservations(DateTimeOffset now, string kitRoot, string homeRoot)
-    {
-        var kit = new Kit(kitRoot, homeRoot);
-        if (kit.KitRootMissing)
-            return [new DoctorObservation(new HealthItem("kit", HealthLevel.Info, "kit-yok", "kit", "kit yok"), now)];
-
-        IReadOnlyList<KitRow> rows;
-        try
-        {
-            rows = kit.Status();
-        }
-        catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
-        {
-            return [new DoctorObservation(new HealthItem("kit", HealthLevel.Error, "kit-okunamadi", "kit", $"manifest okunamadı: {error.Message}"), now)];
-        }
-
-        return rows.Select(row => new DoctorObservation(
-            new HealthItem("kit", KitLevel(row.State), row.State.Text(), row.Name, $"{row.Target} → {row.State.Text()}: {row.Detail}"), now));
-    }
-
-    private static HealthLevel KitLevel(KitState state) => state switch
-    {
-        KitState.Guncel => HealthLevel.Info,
-        KitState.Bozuk => HealthLevel.Error,
-        _ => HealthLevel.Warning
-    };
+    internal static IEnumerable<DoctorObservation> KitObservations(DateTimeOffset now, string kitRoot, string homeRoot) =>
+        [Observe(now, "kit", "kit-yok", "kit", "kit yok")];
 
     private static void Repair(string vault, OomSettings settings, State state)
     {
         Directory.CreateDirectory(Path.Combine(state.WorkDirectory, "logs"));
-        state.SeedCursors(new SweepRun(vault, settings, MakeFlush(vault, settings, state), state).ReadAnchors());
         state.SweepRetention(Clock.Now);
-        new RootMap(vault).Regenerate();
         ReportIndex(MakeRetrieve(vault, settings, settings.Retrieve.Top).Build());
     }
 

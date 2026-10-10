@@ -34,7 +34,8 @@ public enum Direction { In, Out, Egress }
 public enum HealthLevel { Info, Warning, Error }
 public enum UsageSourceKind { Unknown = 0, Estimate = 1, Measured = 2 }
 
-public sealed record Turn(int Index, string Role, string Kind, string Text, DateTimeOffset Timestamp);
+public sealed record Turn(int Index, string Role, string Kind, string Text, DateTimeOffset Timestamp,
+    string Uuid = "", string Class = "u", IReadOnlyList<string>? Tools = null);
 public sealed record Session(string Id, string Source, IReadOnlyList<Turn> Turns, DateTimeOffset StartedAt);
 public sealed record TurnRange(int Start, int End, IReadOnlyList<Turn> Turns, int Characters, string? Compact = null);
 /// <summary>

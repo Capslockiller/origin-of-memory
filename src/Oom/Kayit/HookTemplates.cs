@@ -15,9 +15,9 @@ public static class HookTemplates
         return
         [
             new("SessionStart", prefix + " context", 15),
-            new("UserPromptSubmit", prefix + " nudge", 5),
-            new("SessionEnd", prefix + " flush --reason sessionend", 15),
-            new("PreCompact", prefix + " flush --reason precompact", 15)
+            new("UserPromptSubmit", prefix + " kaydet --tetik mesaj", 5),
+            new("SessionEnd", prefix + " kaydet --tetik kapanis", 15),
+            new("PreCompact", prefix + " kaydet --tetik compact", 15)
         ];
     }
 

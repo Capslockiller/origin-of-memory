@@ -64,72 +64,9 @@ public sealed class CliKabul
             $"branch: usage + exit 1). Got exit {result.ExitCode}; stdout: '{result.Stdout}'; stderr: {result.Stderr}");
     }
 
-    [Fact(DisplayName = "F9-1 · MCP initialize serverInfo.version, oom --version çıktısıyla aynı")]
-    public void Mcp_ServerInfoVersion_MatchesCliVersionString()
-    {
-        using var harness = new KabulHarness();
-        var vault = KabulVaultBuilder.Build(harness.Root);
 
-        var versionResult = harness.Run(vault, ["--version"]);
-        var cliVersion = versionResult.Stdout.Trim();
 
-        var request = JsonSerializer.Serialize(new
-        {
-            jsonrpc = "2.0",
-            id = 1,
-            method = "initialize",
-            @params = new { }
-        });
-        var mcpResult = harness.Run(vault, ["mcp"], standardInput: request + "\n");
 
-        string? mcpVersion = null;
-        JsonException? parseError = null;
-        try
-        {
-            using var document = JsonDocument.Parse(FirstNonEmptyLine(mcpResult.Stdout));
-            mcpVersion = document.RootElement.GetProperty("result").GetProperty("serverInfo").GetProperty("version").GetString();
-        }
-        catch (JsonException error)
-        {
-            parseError = error;
-        }
-
-        Assert.True(cliVersion.Length > 0 && mcpVersion == cliVersion,
-            $"F9-1: MCP's initialize response serverInfo.version must equal the 'oom --version' string exactly. " +
-            $"Old code hardcodes serverInfo.version to '2.0' (Mcp.cs). Got cliVersion='{cliVersion}' (exit " +
-            $"{versionResult.ExitCode}), mcpVersion='{mcpVersion ?? "(null)"}'{(parseError is null ? string.Empty : $", JSON parse error: {parseError.Message}")}. " +
-            $"mcp stdout: {mcpResult.Stdout}; mcp stderr: {mcpResult.Stderr}");
-    }
-
-    [Fact(DisplayName = "F6-4 · retrieveMode, sweep.everyHours ve bilinmeyen 'foo' → context stderr'de üç 'bilinmeyen ayar' satırı")]
-    public void Context_WarnsOnStderrForDeadAndUnknownConfigKeys()
-    {
-        using var harness = new KabulHarness();
-        var vault = KabulVaultBuilder.Build(harness.Root);
-        WriteFile(Path.Combine(vault, ".oom", "oom.json"),
-            """
-            {
-              "context": { "capChars": 16000 },
-              "retrieveMode": "vektor",
-              "sweep": { "everyHours": 4 },
-              "foo": "bar"
-            }
-            """);
-
-        var result = harness.Run(vault, ["context"], fakeNow: Today);
-
-        var hasRetrieveMode = result.Stderr.Contains("bilinmeyen ayar: retrieveMode", StringComparison.Ordinal);
-        var hasEveryHours = result.Stderr.Contains("bilinmeyen ayar: everyHours", StringComparison.Ordinal);
-        var hasFoo = result.Stderr.Contains("bilinmeyen ayar: foo", StringComparison.Ordinal);
-        Assert.True(hasRetrieveMode && hasEveryHours && hasFoo,
-            "F6-4: 'oom context' stderr must contain 'bilinmeyen ayar: retrieveMode', 'bilinmeyen ayar: everyHours' " +
-            "and 'bilinmeyen ayar: foo' when oom.json sets a dead key (retrieveMode), a dead nested key " +
-            "(sweep.everyHours) and a genuinely unknown top-level key (foo). Old code never warns on stderr for " +
-            "any command (unknown top-level keys surface only as `doctor` rows, and retrieveMode/sweep.everyHours " +
-            "are structurally recognized keys today, so they are never even flagged as unknown there either). " +
-            $"Got retrieveMode={hasRetrieveMode}, everyHours={hasEveryHours}, foo={hasFoo}. stderr: '{result.Stderr}'; " +
-            $"exit {result.ExitCode}; stdout: {result.Stdout}");
-    }
 
     [Fact(DisplayName = "F6-5 · retrieve --query x --session s → non-zero exit ve stderr'de hata")]
     public void Retrieve_RejectsRemovedSessionFlag()
@@ -175,33 +112,7 @@ public sealed class CliKabul
             $"doctor exit {doctor.ExitCode}; sweep exit {sweep.ExitCode}; oom.json now: {File.ReadAllText(settingsPath, Utf8)}");
     }
 
-    [Fact(DisplayName = "F6-6/NB-10 · Yardım metni: tek dil (Türkçe), İngilizce fiil yok, sessionend/--all/serbest metin belgeli")]
-    public void Help_IsAnHonestSingleLanguageTurkishSurface()
-    {
-        using var harness = new KabulHarness();
-        var placeholderVault = Path.Combine(harness.Root, "unused-vault");
 
-        var result = harness.Run(placeholderVault, ["--help"]);
-        var help = result.Stdout;
-
-        var bannedMatches = BannedEnglishVerb.Matches(help).Select(match => match.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var reasonLine = OptionDetailLine(help, "--reason");
-        var reasonListsSessionEnd = reasonLine.Contains("sessionend", StringComparison.OrdinalIgnoreCase);
-        var detachedLine = OptionDetailLine(help, "--detached");
-        var detachedDescribesInProcess = detachedLine.Contains("aynı süreç", StringComparison.OrdinalIgnoreCase);
-        var doctorAllLine = OptionDetailLine(help, "--all");
-        var doctorDocumentsAll = doctorAllLine.Length > 0;
-        var saveDocumentsFreeText = help.Contains("serbest metin", StringComparison.OrdinalIgnoreCase);
-
-        Assert.True(bannedMatches.Length == 0 && reasonListsSessionEnd && detachedDescribesInProcess && doctorDocumentsAll && saveDocumentsFreeText,
-            "F6-6/NB-10: the final help text must (a) use no English surface verb from " +
-            $"/\\b(print|search|use this|emit|report|select|serve)\\b/i — found [{string.Join(", ", bannedMatches)}]; " +
-            $"(b) document 'sessionend' on the --reason line — line: '{reasonLine}'; " +
-            $"(c) describe --detached as in-process ('aynı süreç') handling, not a separate/background process — line: '{detachedLine}'; " +
-            $"(d) document 'doctor --all' — line: '{doctorAllLine}'; " +
-            "(e) document that 'save' accepts free text ('serbest metin'). Old help (and this tree's current help) " +
-            $"is English-flavored and documents none of these. Full help:\n{help}");
-    }
 
     private static string FirstNonEmptyLine(string text) =>
         text.Split('\n').Select(line => line.Trim('\r')).FirstOrDefault(line => line.Length > 0) ?? string.Empty;

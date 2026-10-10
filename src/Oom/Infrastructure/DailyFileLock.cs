@@ -19,7 +19,7 @@ internal static class DailyFileLock
             {
                 return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
-            catch (IOException) when (elapsed.Elapsed < TimeSpan.FromSeconds(10))
+            catch (IOException) when (elapsed.Elapsed < TimeSpan.FromSeconds(2))
             {
                 Thread.Sleep(100);
             }

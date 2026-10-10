@@ -5,12 +5,18 @@ namespace Oom.Contracts;
 
 internal static class CodexParser
 {
-    internal static Session Parse(string jsonl)
+    internal static Session Parse(string jsonl, bool capture = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(jsonl);
         var turns = new List<Turn>();
         string? sessionId = null;
         DateTimeOffset? sessionStarted = null;
+        var responseMessages = Lines(jsonl).Any(line =>
+        {
+            try { using var doc = JsonDocument.Parse(line); return String(doc.RootElement, "type") == "response_item"
+                && doc.RootElement.TryGetProperty("payload", out var item) && String(item, "type") == "message" && String(item, "role") is "user" or "assistant"; }
+            catch (JsonException) { return false; }
+        });
 
         foreach (var line in Lines(jsonl))
         {
@@ -24,7 +30,7 @@ internal static class CodexParser
                 var outerTimestamp = Timestamp(root, "timestamp");
                 if (!root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object)
                 {
-                    AddFlat(root, turns);
+                    AddFlat(root, turns, sessionId ?? string.Empty);
                     continue;
                 }
 
@@ -41,25 +47,37 @@ internal static class CodexParser
 
                 if (outerType == "response_item")
                 {
+                    if (payloadType is "function_call" or "custom_tool_call")
+                    {
+                        if (turns.LastOrDefault(t => t.Class == "a") is { } previous)
+                            turns[turns.IndexOf(previous)] = previous with { Tools = [.. previous.Tools ?? [], String(payload, "name") ?? "tool"] };
+                        continue;
+                    }
                     if (payloadType != "message") continue;
                     var messageRole = String(payload, "role");
                     if (messageRole is not ("user" or "assistant")) continue;
                     var body = Content(payload);
                     if (string.IsNullOrWhiteSpace(body)) continue;
-                    if (messageRole == "user" && body.TrimStart()[0] == '<') continue;
+                    if (!capture && messageRole == "user" && body.TrimStart()[0] == '<') continue;
                     var position = Integer(root, "ordinal") ?? Integer(root, "index") ?? turns.Count;
-                    turns.Add(new Turn(position, messageRole, "text", body, outerTimestamp ?? sessionStarted ?? DateTimeOffset.UnixEpoch.AddTicks(position)));
+                    var turnClass = TurSiniflandirma.Classify(messageRole, "text", body);
+                    turns.Add(new Turn(position, turnClass == "h" ? "harness" : messageRole, "text", body,
+                        outerTimestamp ?? sessionStarted ?? DateTimeOffset.UnixEpoch.AddTicks(position),
+                        String(payload, "id") ?? String(root, "id") ?? TurSiniflandirma.Id(sessionId ?? string.Empty, position), turnClass));
                     continue;
                 }
 
-                if (outerType != "event_msg") continue;
+                if (outerType != "event_msg" || responseMessages) continue;
 
                 sessionId ??= String(payload, "session_id");
                 var role = payloadType switch { "user_message" => "user", "agent_message" or "assistant_message" => "assistant", _ => null };
                 var message = String(payload, "message") ?? String(payload, "text");
                 if (role is null || string.IsNullOrWhiteSpace(message)) continue;
                 var index = Integer(payload, "index") ?? Integer(root, "index") ?? turns.Count;
-                turns.Add(new Turn(index, role, "text", message, outerTimestamp ?? sessionStarted ?? DateTimeOffset.UnixEpoch.AddTicks(index)));
+                var classification = TurSiniflandirma.Classify(role, "text", message);
+                turns.Add(new Turn(index, classification == "h" ? "harness" : role, "text", message,
+                    outerTimestamp ?? sessionStarted ?? DateTimeOffset.UnixEpoch.AddTicks(index),
+                    String(payload, "id") ?? String(root, "id") ?? TurSiniflandirma.Id(sessionId ?? string.Empty, index), classification));
             }
         }
 
@@ -69,14 +87,16 @@ internal static class CodexParser
         return new Session(sessionId, "codex", ordered, sessionStarted ?? ordered.Min(turn => turn.Timestamp));
     }
 
-    private static void AddFlat(JsonElement root, ICollection<Turn> turns)
+    private static void AddFlat(JsonElement root, ICollection<Turn> turns, string sessionId)
     {
         var role = String(root, "role");
         var kind = String(root, "kind") ?? "text";
         var text = String(root, "text");
         if (role is not ("user" or "assistant") || kind != "text" || string.IsNullOrWhiteSpace(text)) return;
         var index = Integer(root, "index") ?? turns.Count;
-        turns.Add(new Turn(index, role, kind, text, Timestamp(root, "timestamp") ?? DateTimeOffset.UnixEpoch.AddTicks(index)));
+        var classification = TurSiniflandirma.Classify(role, kind, text);
+        turns.Add(new Turn(index, classification == "h" ? "harness" : role, kind, text, Timestamp(root, "timestamp") ?? DateTimeOffset.UnixEpoch.AddTicks(index),
+            String(root, "id") ?? TurSiniflandirma.Id(sessionId, index), classification));
     }
 
     private static string? Content(JsonElement payload)
@@ -87,7 +107,7 @@ internal static class CodexParser
         var blocks = content.EnumerateArray()
             .Where(block => block.ValueKind == JsonValueKind.Object && String(block, "type") is "text" or "input_text" or "output_text")
             .Select(block => String(block, "text"))
-            .Where(value => !string.IsNullOrWhiteSpace(value));
+            .Where(value => value is not null);
         var joined = string.Join("\n", blocks);
         return joined.Length == 0 ? null : joined;
     }

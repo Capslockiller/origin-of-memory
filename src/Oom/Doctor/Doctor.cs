@@ -303,10 +303,7 @@ public sealed class Doctor
 
     public HealthItem CheckClaudeReachability(string pathValue)
     {
-        var resolved = new Runner().ResolveExecutable("claude", pathValue);
-        return Path.IsPathRooted(resolved)
-            ? Item("runner", HealthLevel.Info, "claude-reachable", resolved, $"Claude CLI erişilebilir: {resolved}")
-            : Item("runner", HealthLevel.Warning, "claude-reachable", "claude", "Claude CLI PATH içinde bulunamadı.");
+        return Item("runner", HealthLevel.Info, "runner-yok", "claude", "model çalıştırıcı yok");
     }
 
     private static DoctorObservation Observe(DateTimeOffset now, string component, string code, string key, string detail) =>

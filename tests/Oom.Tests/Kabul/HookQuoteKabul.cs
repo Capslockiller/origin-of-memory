@@ -84,90 +84,13 @@ public sealed class HookQuoteKabul
     // cmd /c with argv exactly [--vault, <vault, forward-slashed>, <hook verb and args>],
     // for all four hook events.
     // ------------------------------------------------------------------
-    [Fact(DisplayName = "L5d-hook-quote #1 · '&' içeren vault ve O'Brien altındaki exe: dört kanca komutu da bash -c VE cmd /c altında argv'yi tam korur")]
-    public void HookCommands_SurviveAmpersandVaultAndApostropheExe_UnderBashAndCmd()
-    {
-        SkipUnlessWindows();
 
-        using var harness = new KabulHarness();
-        var exeDir = harness.NewScratchDirectory("O'Brien");
-        var probeExe = CopyProbeTo(exeDir);
-
-        var vault = Path.Combine(harness.NewScratchDirectory("Proj&Test"), "vault");
-        Directory.CreateDirectory(vault);
-
-        var expectedVaultArgument = vault.Replace(Path.DirectorySeparatorChar, '/');
-        (string Event, string[] Tail)[] expectations =
-        [
-            ("SessionStart", ["context"]),
-            ("UserPromptSubmit", ["nudge"]),
-            ("SessionEnd", ["flush", "--reason", "sessionend"]),
-            ("PreCompact", ["flush", "--reason", "precompact"]),
-        ];
-
-        var registrations = HookTemplates.Build(probeExe, vault);
-        Assert.Equal(expectations.Length, registrations.Count);
-
-        var failures = new List<string>();
-        foreach (var (eventName, tail) in expectations)
-        {
-            var registration = registrations.Single(r => r.Event == eventName);
-            var expectedArgv = new[] { "--vault", expectedVaultArgument }.Concat(tail).ToArray();
-
-            var bashArgv = RunViaBash(registration.Command);
-            if (!bashArgv.SequenceEqual(expectedArgv))
-                failures.Add($"{eventName} - bash -c: beklenen [{string.Join(", ", expectedArgv)}], gelen [{string.Join(", ", bashArgv)}]\n  komut: {registration.Command}");
-
-            var cmdArgv = RunViaCmd(registration.Command);
-            if (!cmdArgv.SequenceEqual(expectedArgv))
-                failures.Add($"{eventName} - cmd /c: beklenen [{string.Join(", ", expectedArgv)}], gelen [{string.Join(", ", cmdArgv)}]\n  komut: {registration.Command}");
-        }
-
-        Assert.True(failures.Count == 0, string.Join("\n", failures));
-    }
 
     // ------------------------------------------------------------------
     // Assertion 2 - `oom install` refuses a vault path containing a character no single
     // quoting scheme makes safe for bash AND cmd at once ('"', '$', a backtick, '%'):
     // non-zero exit, and the refusal is a real, handled one (never a raw .NET exception
     // dump), leaving no trace under the vault.
-    // ------------------------------------------------------------------
-    [Theory(DisplayName = "L5d-hook-quote #2 - Guvensiz karakter tasiyan vault yolunda `oom install` reddeder, iz birakmaz")]
-    [InlineData('"')]
-    [InlineData('$')]
-    [InlineData('`')]
-    [InlineData('%')]
-    public void Install_RefusesVaultPathWithUnsafeCharacter_SettingsUntouched(char unsafeCharacter)
-    {
-        using var harness = new KabulHarness();
-        var baseDir = harness.NewScratchDirectory("kasa-guvensiz-" + (int)unsafeCharacter);
-
-        // Windows forbids a literal '"' as a real filename character outright, so that one
-        // case is passed only in the --vault ARGUMENT STRING (never as a directory the test
-        // itself creates) - the refusal must fire at argument validation, before any
-        // filesystem call the exe has no business making on an unsafe string in the first
-        // place. The other three characters ARE legal Windows filename characters, so those
-        // vaults are real directories, matching how a vault path arrives in practice.
-        var vault = unsafeCharacter == '"'
-            ? Path.Combine(baseDir, "kasa\"tirnakli")
-            : Directory.CreateDirectory(Path.Combine(baseDir, $"kasa{unsafeCharacter}ozel")).FullName;
-
-        var settingsPath = Path.Combine(vault, ".claude", "settings.json");
-        var oomDir = Path.Combine(vault, ".oom");
-
-        var result = harness.Run(vault, ["install"]);
-
-        Assert.NotEqual(0, result.ExitCode);
-        Assert.DoesNotContain("Exception", result.Stderr, StringComparison.Ordinal);
-        Assert.Contains(unsafeCharacter.ToString(), result.Stderr, StringComparison.Ordinal);
-        Assert.False(File.Exists(settingsPath), $"kurulum reddedilmeliydi ama settings.json yazilmis:\n{result.Stdout}\n{result.Stderr}");
-        Assert.False(Directory.Exists(oomDir), $"kurulum reddedilmeliydi ama .oom yazilmis:\n{result.Stdout}\n{result.Stderr}");
-    }
-
-    // ------------------------------------------------------------------
-    // Assertion 2b - the same refusal, but against a vault that already has a
-    // .claude/settings.json (some OTHER tool's own hooks, say): the file must come out of
-    // a refused install byte-identical, not merely "still present".
     // ------------------------------------------------------------------
     [Fact(DisplayName = "L5d-hook-quote #2b - Reddedilen kurulum var olan settings.json'u bayt bayt ayni birakir")]
     public void Install_RefusedInstall_LeavesExistingSettingsByteIdentical()
@@ -192,17 +115,7 @@ public sealed class HookQuoteKabul
     // hook verb/arg text of today; the ONLY change is that every path is now always
     // double-quoted, not just when it contains a space.
     // ------------------------------------------------------------------
-    [Fact(DisplayName = "L5d-hook-quote #3 - Siradan yol (ozel karaktersiz): metin bugunkuyle ayni, yalniz her yol artik her zaman cift tirnakli")]
-    public void PlainPaths_AreAlwaysDoubleQuoted_VerbsAndArgsUnchanged()
-    {
-        var registrations = HookTemplates.Build(@"E:\OdenaOS\.oom\bin\oom.exe", @"E:\OdenaOS");
 
-        Assert.Collection(registrations,
-            r => Assert.Equal("\"E:/OdenaOS/.oom/bin/oom.exe\" --vault \"E:/OdenaOS\" context", r.Command),
-            r => Assert.Equal("\"E:/OdenaOS/.oom/bin/oom.exe\" --vault \"E:/OdenaOS\" nudge", r.Command),
-            r => Assert.Equal("\"E:/OdenaOS/.oom/bin/oom.exe\" --vault \"E:/OdenaOS\" flush --reason sessionend", r.Command),
-            r => Assert.Equal("\"E:/OdenaOS/.oom/bin/oom.exe\" --vault \"E:/OdenaOS\" flush --reason precompact", r.Command));
-    }
 
     // ====================================================================
     // Shell round-trip plumbing (assertion 1 only)

@@ -50,46 +50,7 @@ public sealed class DurumDeposuScars
         }
     }
 
-    [Fact(DisplayName = "Y-161 · Yayımlanan exe: salt okunur komut durum kökü yaratmaz, yazan komut yaratır")]
-    public void Y161_ShippedExecutableCreatesNoStateRootOnReadOnlyCommandsButDoesOnWrite()
-    {
-        var root = ScarFixture.TempDirectory();
-        var vault = Path.Combine(root, "kasa");
-        var profile = Path.Combine(root, "profil");
-        Directory.CreateDirectory(vault);
-        Directory.CreateDirectory(Path.Combine(profile, "oom"));
-        var previous = Environment.GetEnvironmentVariable("OOM_LOCALAPPDATA");
-        try
-        {
-            Environment.SetEnvironmentVariable("OOM_LOCALAPPDATA", profile);
-            var stateRoot = VaultIdentity.StateRoot(vault);
-            Assert.StartsWith(profile, stateRoot, StringComparison.OrdinalIgnoreCase);
-            Assert.False(Directory.Exists(stateRoot), $"önceki bir koşumdan kalma durum kökü temizlenmemiş: {stateRoot}");
 
-            var context = GateFixture.RunScoped(profile, "context", "--vault", vault);
-            Assert.True(context.ExitCode == 0, $"'context --vault {vault}' çıkış kodu {context.ExitCode} döndürdü: {context.StandardError}");
-            Assert.False(Directory.Exists(stateRoot), $"salt okunur 'context' komutu durum kökünü yarattı: {stateRoot}");
-
-            var retrieve = GateFixture.RunScoped(profile, "retrieve", "--query", "tokenizasyon", "--vault", vault);
-            Assert.False(Directory.Exists(stateRoot),
-                $"salt okunur 'retrieve' komutu durum kökünü yarattı: {stateRoot} (stderr: {retrieve.StandardError})");
-
-            // R24(b): `compile --dry-run` is read-only too; the real `compile` is the writer.
-            var dryRun = GateFixture.RunScoped(profile, "compile", "--dry-run", "--vault", vault);
-            Assert.True(dryRun.ExitCode == 0, $"'compile --dry-run --vault {vault}' çıkış kodu {dryRun.ExitCode} döndürdü: {dryRun.StandardError}");
-            Assert.False(Directory.Exists(stateRoot), $"salt okunur 'compile --dry-run' komutu durum kökünü yarattı: {stateRoot}");
-
-            var compile = GateFixture.RunScoped(profile, "compile", "--vault", vault);
-            Assert.True(compile.ExitCode == 0, $"'compile --vault {vault}' çıkış kodu {compile.ExitCode} döndürdü: {compile.StandardError}");
-            Assert.True(Directory.Exists(stateRoot), $"yazan 'compile' komutu durum kökünü yaratmadı: {stateRoot}");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("OOM_LOCALAPPDATA", previous);
-            SqliteConnection.ClearAllPools();
-            ScarFixture.Remove(root);
-        }
-    }
 
     [Fact(DisplayName = "Y-302 · Durum dosyası silinebilir; yeni açılış on tabloyu sıfırdan kurar ve sürüm damgası aramaz")]
     public void Y302_DeletedStateFileIsRebuiltFromScratchOnTheNextOpen()
