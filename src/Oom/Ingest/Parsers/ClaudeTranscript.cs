@@ -6,6 +6,7 @@ namespace Oom.Contracts;
 public sealed record TranscriptRead(string? SessionId, string? WorkingDirectory, IReadOnlyList<Turn> Turns)
 {
     internal HashSet<string> OwnerAnswers { get; init; } = new(StringComparer.Ordinal);
+    internal Dictionary<string, long> LineOffsets { get; init; } = new(StringComparer.Ordinal);
 }
 
 internal static class ClaudeTranscript
@@ -15,16 +16,17 @@ internal static class ClaudeTranscript
         "<task-notification", "<system-reminder", "<local-command-stdout", "<command-message", "<command-name"
     ];
 
-    internal static TranscriptRead Read(string jsonl, IClock clock, string? requestedId = null, int startIndex = 0)
+    internal static TranscriptRead Read(string jsonl, IClock clock, string? requestedId = null, int startIndex = 0, long startByte = 0,
+        IReadOnlyList<long>? lineOffsets = null)
     {
         var turns = new List<Turn>();
         string? sessionId = null;
         string? workingDirectory = null;
         var index = startIndex;
-        var questions = new HashSet<string>(StringComparer.Ordinal);
         var answers = new HashSet<string>(StringComparer.Ordinal);
+        var offsets = new Dictionary<string, long>(StringComparer.Ordinal);
 
-        foreach (var line in (jsonl ?? string.Empty).Split('\n'))
+        foreach (var (line, offset) in TranskriptKuyruk.Lines(jsonl ?? string.Empty, startByte, lineOffsets))
         {
             var trimmed = line.Trim().TrimStart('﻿');
             if (trimmed.Length == 0 || trimmed[0] != '{')
@@ -56,10 +58,7 @@ internal static class ClaudeTranscript
                 continue;
 
             var content = message.ValueKind is JsonValueKind.Object && message.TryGetProperty("content", out var blocks) ? blocks : default;
-            if (role == "assistant" && content.ValueKind == JsonValueKind.Array)
-                foreach (var block in content.EnumerateArray().Where(b => Text(b, "type") == "tool_use" && Text(b, "name") == "AskUserQuestion"))
-                    if (Text(block, "id") is { } question) questions.Add(question);
-            var answer = role == "user" ? OwnerAnswer(content, questions) : null;
+            var answer = role == "user" ? OwnerAnswer(content) : null;
             if (answer is null && root.TryGetProperty("toolUseResult", out _)) continue;
             var tools = content.ValueKind is JsonValueKind.Array
                 ? content.EnumerateArray().Where(b => Text(b, "type") == "tool_use").Select(b => Text(b, "name") ?? "tool").ToArray() : [];
@@ -75,13 +74,14 @@ internal static class ClaudeTranscript
             turns.Add(new Turn(position, turnClass == "h" ? "harness" : role, kind, text, Stamp(root, clock),
                 Text(root, "uuid") ?? TurSiniflandirma.Id(sessionId ?? string.Empty, position), turnClass, tools));
             if (answer is not null) answers.Add(turns[^1].Uuid);
+            offsets.TryAdd(turns[^1].Uuid, offset);
             index++;
         }
 
-        return new TranscriptRead(sessionId, workingDirectory, turns) { OwnerAnswers = answers };
+        return new TranscriptRead(sessionId, workingDirectory, turns) { OwnerAnswers = answers, LineOffsets = offsets };
     }
 
-    private static string? OwnerAnswer(JsonElement content, HashSet<string> questions)
+    private static string? OwnerAnswer(JsonElement content)
     {
         if (content.ValueKind != JsonValueKind.Array) return null;
         foreach (var block in content.EnumerateArray().Where(b => Text(b, "type") == "tool_result"))
@@ -91,7 +91,7 @@ internal static class ClaudeTranscript
                 : result.ValueKind == JsonValueKind.Array ? string.Join("\n", result.EnumerateArray()
                     .Where(b => Text(b, "type") == "text").Select(b => Text(b, "text") ?? "")) : "";
             if (text.StartsWith("User has approved your plan", StringComparison.Ordinal)) continue;
-            if (questions.Contains(Text(block, "tool_use_id") ?? "") || text.StartsWith("The user answered:", StringComparison.Ordinal)
+            if (text.StartsWith("The user answered:", StringComparison.Ordinal)
                 || text.Contains("To tell you how to proceed, the user said:", StringComparison.Ordinal)) return text;
         }
         return null;

@@ -2,60 +2,62 @@ using System.Text;
 
 namespace Oom.Contracts;
 
-// Byte offsets keep UTF-8 characters intact even when a chunk splits one.
+// Only a verified line offset can distinguish an original record from a replay.
 internal static class TranskriptKuyruk
 {
-    internal sealed record Input(string Text, long Bytes, bool Tail = false, int StartIndex = 0, string? RemovedCursor = null, string? Project = null);
+    internal sealed record Input(string Text, long Bytes, bool Tail = false, int StartIndex = 0, string? RemovedCursor = null, string? Project = null,
+        long StartByte = 0, IReadOnlyList<long>? LineOffsets = null);
 
     internal static Input Read(string path, Imlec.Cursor? cursor)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        if (cursor is null)
+        long attempted = 0;
+        if (cursor?.ByteOffset is { } offset && offset >= 0 && offset < stream.Length)
         {
-            using var reader = new StreamReader(stream);
-            var text = reader.ReadToEnd();
-            return new(text, stream.Position);
-        }
-        var needle = Encoding.ASCII.GetBytes("\"uuid\":\"" + cursor.Last + "\"");
-        var chunks = new List<byte[]>();
-        var overlap = Array.Empty<byte>();
-        var position = stream.Length;
-        long bytes = 0;
-        while (position > 0)
-        {
-            var size = (int)Math.Min(64 * 1024, position);
-            position -= size;
-            stream.Position = position;
-            var chunk = new byte[size];
-            stream.ReadExactly(chunk);
-            bytes += size;
-            chunks.Add(chunk);
-            var search = new byte[size + overlap.Length];
-            chunk.CopyTo(search, 0);
-            overlap.CopyTo(search, size);
-            var match = search.AsSpan().IndexOf(needle);
-            if (match >= 0)
+            stream.Position = offset;
+            using var line = new MemoryStream();
+            while (stream.ReadByte() is var value && value >= 0)
             {
-                var buffer = Join(chunks);
-                var newline = Array.IndexOf(buffer, (byte)'\n', match + needle.Length);
-                var start = newline < 0 ? buffer.Length : newline + 1;
-                return new(Encoding.UTF8.GetString(buffer, start, buffer.Length - start), bytes, true, cursor.End + 1, cursor.Last, cursor.Project);
+                line.WriteByte((byte)value);
+                if (value == '\n') break;
             }
-            overlap = search[..Math.Min(search.Length, needle.Length - 1)];
+            attempted = stream.Position - offset;
+            var needle = Encoding.UTF8.GetBytes("\"uuid\":\"" + cursor.Last + "\"");
+            if (line.GetBuffer().AsSpan(0, (int)line.Length).IndexOf(needle) >= 0)
+            {
+                var start = stream.Position;
+                var tail = ReadRemaining(stream);
+                return new(tail.Text, stream.Position - offset, true, cursor.End + 1, cursor.Last, cursor.Project, start, tail.Offsets);
+            }
         }
-        // A removed or rewritten cursor must preserve the full-parse fallback.
-        return new(Encoding.UTF8.GetString(Join(chunks)).TrimStart('\uFEFF'), bytes);
+        // Legacy anchors, malformed offsets and rewritten files use the first UUID occurrence.
+        stream.Position = 0;
+        var full = ReadRemaining(stream);
+        return new(full.Text, attempted + stream.Position, LineOffsets: full.Offsets);
     }
 
-    private static byte[] Join(List<byte[]> chunks)
+    private static (string Text, long[] Offsets) ReadRemaining(FileStream stream)
     {
-        var buffer = new byte[chunks.Sum(c => c.Length)];
-        var offset = 0;
-        for (var i = chunks.Count - 1; i >= 0; i--)
+        var start = stream.Position;
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        var bytes = buffer.GetBuffer().AsSpan(0, (int)buffer.Length);
+        var bom = start == 0 && bytes.StartsWith(Encoding.UTF8.Preamble) ? Encoding.UTF8.Preamble.Length : 0;
+        var offsets = new List<long> { start + bom };
+        // Count raw bytes before decoding: incomplete UTF-8 may produce replacement characters.
+        for (var i = bom; i < bytes.Length; i++)
+            if (bytes[i] == '\n') offsets.Add(start + i + 1);
+        return (Encoding.UTF8.GetString(bytes[bom..]), offsets.ToArray());
+    }
+
+    internal static IEnumerable<(string Text, long Offset)> Lines(string text, long offset = 0, IReadOnlyList<long>? lineOffsets = null)
+    {
+        var index = 0;
+        foreach (var line in text.Split('\n'))
         {
-            chunks[i].CopyTo(buffer, offset);
-            offset += chunks[i].Length;
+            yield return (line, lineOffsets is null ? offset : lineOffsets[index]);
+            if (lineOffsets is null) offset += Encoding.UTF8.GetByteCount(line) + 1;
+            index++;
         }
-        return buffer;
     }
 }

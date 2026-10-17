@@ -5,14 +5,16 @@ namespace Oom.Contracts;
 
 internal static class Blok
 {
-    internal static string Compose(Session session, IReadOnlyList<Turn> turns, string project, DateTimeOffset now, Redactor redactor, IReadOnlySet<string>? answers = null)
+    internal static string Compose(Session session, IReadOnlyList<Turn> turns, string project, DateTimeOffset now, Redactor redactor, IReadOnlySet<string>? answers = null,
+        long? lastByte = null)
     {
         var first = turns[0];
         var end = turns[^1];
         var text = new StringBuilder();
         var source = session.Source == "codex" ? "codex" : "claude-code";
         text.AppendLine($"## kayit · oturum {session.Id} · {source} · {Line(redactor.Mask(project).Text)} · {Time(first.Timestamp, now)}–{Time(end.Timestamp, now)} · tur {first.Index}–{end.Index}");
-        text.AppendLine($"<!-- session:{session.Id} ts:{now.ToString("O", CultureInfo.InvariantCulture)} turns:{first.Index}-{end.Index} source:{session.Source} kayit:v1 son:{end.Uuid} -->");
+        var bytes = lastByte is { } offset ? " bayt:" + offset.ToString(CultureInfo.InvariantCulture) : string.Empty;
+        text.AppendLine($"<!-- session:{session.Id} ts:{now.ToString("O", CultureInfo.InvariantCulture)} turns:{first.Index}-{end.Index} source:{session.Source} kayit:v1 son:{end.Uuid}{bytes} -->");
         foreach (var turn in turns)
         {
             var tools = turn.Class == "a" && turn.Tools is { Count: > 0 }

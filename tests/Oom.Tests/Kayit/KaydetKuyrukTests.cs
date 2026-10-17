@@ -16,11 +16,12 @@ public sealed partial class KaydetTests
             var filler = ResultRecord("bulk", new string('x', 1024 * 1024));
             for (var i = 0; i < 100; i++) writer.Write(filler);
         }
+        var cursorOffset = new FileInfo(f.Transcript).Length;
         f.Claude(11);
         var times = new List<long>();
         for (var i = 0; i < 3; i++)
         {
-            f.Daily(Cursor("m-0", 0));
+            f.Daily(Cursor("m-0", 0, cursorOffset));
             var timer = Stopwatch.StartNew();
             Assert.Equal((0, "", ""), f.Run("--tetik", "mesaj"));
             times.Add(timer.ElapsedMilliseconds);
@@ -98,11 +99,12 @@ public sealed partial class KaydetTests
     {
         using var f = new Fixture();
         File.WriteAllText(f.Transcript, ResultRecord("bulk", new string('x', 4 * 1024 * 1024)), Fixture.Utf8);
+        var cursorOffset = new FileInfo(f.Transcript).Length;
         f.Claude(2);
-        f.Daily(Cursor("m-0", 0));
+        f.Daily(Cursor("m-0", 0, cursorOffset));
         Assert.Equal((0, "", ""), f.Run());
         var row = Assert.Single(Rows(f));
-        Assert.Equal("kuyruk", row.GetProperty("yol").GetString());
+        Assert.Equal("bayt", row.GetProperty("yol").GetString());
         Assert.InRange(row.GetProperty("okunan_kb").GetInt32(), 1, (int)(new FileInfo(f.Transcript).Length / 1024 * 0.05));
         Assert.Contains("turns:1-1", f.Read());
     }
@@ -135,23 +137,23 @@ public sealed partial class KaydetTests
         Assert.Equal(1, f.Write());
         File.AppendAllText(f.Transcript, ResultRecord("after-cursor-answer", "The user answered: synthetic answer", "ask"));
         Assert.Equal((0, "", ""), f.Run());
-        Assert.Equal("kuyruk", Assert.Single(Rows(f)).GetProperty("yol").GetString());
+        Assert.Equal("bayt", Assert.Single(Rows(f)).GetProperty("yol").GetString());
         Assert.Matches(@"### \[u after-cursor-answer\] [^\r\n]+ · cevap", f.Read());
         Assert.Contains("turns:2-2", f.Read());
     }
 
     [Fact]
-    public void Kaydet_EslesenSoruKimligiMetinBlokluCevabiKaydeder()
+    public void Kaydet_CevapOnekiMetinBlokluCevabiKaydeder()
     {
         using var f = new Fixture();
         f.AppendClaude("question", "assistant", new[] { new { type = "tool_use", id = "ask", name = "AskUserQuestion" } });
         File.AppendAllText(f.Transcript, ResultRecord("blocks-answer", new[]
         {
-            new { type = "text", text = "synthetic first" }, new { type = "text", text = "synthetic second" }
+            new { type = "text", text = "The user answered: synthetic first" }, new { type = "text", text = "synthetic second" }
         }, "ask"));
         Assert.Equal((0, "", ""), f.Run());
         Assert.Matches(@"### \[u blocks-answer\] [^\r\n]+ · cevap", f.Read());
-        Assert.Contains("synthetic first\nsynthetic second", f.Read());
+        Assert.Contains("The user answered: synthetic first\nsynthetic second", f.Read());
     }
 
     [Fact]
@@ -226,7 +228,7 @@ public sealed partial class KaydetTests
         f.Daily(Cursor("m-0", 0));
         File.AppendAllText(f.Transcript, ForkTurn("fixture", "child", "user").Replace("{\"sessionId\"", "{\"parentUuid\":\"m-0\",\"sessionId\""));
         Assert.Equal((0, "", ""), f.Run());
-        Assert.Equal("kuyruk", Assert.Single(Rows(f)).GetProperty("yol").GetString());
+        Assert.Equal("bayt", Assert.Single(Rows(f)).GetProperty("yol").GetString());
         Assert.Contains("[u child]", f.Read());
     }
 
@@ -266,9 +268,9 @@ public sealed partial class KaydetTests
         var needleStart = cursor.IndexOf("\"uuid\"", StringComparison.Ordinal);
         var padding = 64 * 1024 - (cursor.Length - needleStart) + 7;
         File.WriteAllText(f.Transcript, new string(' ', 80_000) + "\n" + cursor + new string(' ', padding), Fixture.Utf8);
-        f.Daily(Cursor("needle-boundary", 0));
+        f.Daily(Cursor("needle-boundary", 0, 80_001));
         Assert.Equal((0, "", ""), f.Run());
-        Assert.Equal("kuyruk", Assert.Single(Rows(f)).GetProperty("yol").GetString());
+        Assert.Equal("bayt", Assert.Single(Rows(f)).GetProperty("yol").GetString());
         Assert.DoesNotContain("###", f.Read());
     }
 
@@ -309,14 +311,14 @@ public sealed partial class KaydetTests
         full.Daily(fast.Read());
         var tailResult = Oom.Contracts.Kaydet.WriteResult(fast.Root, "fixture", fast.Transcript, "kapanis", Fixture.Now);
         var fullResult = Oom.Contracts.Kaydet.WriteResult(full.Root, "fixture", full.Transcript, "kapanis", Fixture.Now, useTail: false);
-        Assert.Equal("kuyruk", tailResult.ReadPath);
+        Assert.Equal("bayt", tailResult.ReadPath);
         Assert.Equal("tam", fullResult.ReadPath);
         Assert.Equal(1, tailResult.Blocks);
         Assert.Equal(1, fullResult.Blocks);
         Assert.Equal(File.ReadAllBytes(full.DailyPath), File.ReadAllBytes(fast.DailyPath));
     }
 
-    private static string Cursor(string uuid, int end) => $"<!-- session:fixture ts:{Fixture.Now:O} turns:0-{end} source:claude kayit:v1 son:{uuid} -->\n";
+    private static string Cursor(string uuid, int end, long byteOffset = 0) => $"<!-- session:fixture ts:{Fixture.Now:O} turns:0-{end} source:claude kayit:v1 son:{uuid} bayt:{byteOffset} -->\n";
 
     private static string ResultRecord(string uuid, object content, string toolId = "ordinary", bool rejected = false) =>
         JsonSerializer.Serialize(new

@@ -19,12 +19,22 @@ public static class Kaydet
         TranskriptKuyruk.Input input;
         try { input = TranskriptKuyruk.Read(transcript, useTail && !codexPath ? Imlec.TailCursor(vault, sessionId, now) : null); }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return new(Outcome: "dosya-yok"); }
-        var result = new Result(BytesRead: input.Bytes, ReadPath: input.Tail ? "kuyruk" : "tam");
+        var result = new Result(BytesRead: input.Bytes, ReadPath: input.Tail ? "bayt" : "tam");
         onRead?.Invoke(result.BytesRead, result.ReadPath);
         var jsonl = input.Text;
-        var records = jsonl.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line =>
+        var offsets = new Dictionary<string, long>(StringComparer.Ordinal);
+        var records = TranskriptKuyruk.Lines(jsonl, input.StartByte, input.LineOffsets).Select(line =>
         {
-            try { using var document = JsonDocument.Parse(line); return document.RootElement.Clone(); }
+            try
+            {
+                using var document = JsonDocument.Parse(line.Text);
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) return default;
+                var id = root.TryGetProperty("payload", out var payload) ? HookPayload.Field(payload, "id") : null;
+                id ??= HookPayload.Field(root, "id");
+                if (id is not null) offsets.TryAdd(id, line.Offset);
+                return root.Clone();
+            }
             catch (JsonException) { return default; }
         }).Where(r => r.ValueKind == JsonValueKind.Object).ToArray();
         var codex = transcript.Replace('\\', '/').Contains("/.codex/", StringComparison.OrdinalIgnoreCase)
@@ -44,8 +54,9 @@ public static class Kaydet
         if (codex) session = CodexParser.Parse(jsonl, capture: true);
         else
         {
-            var read = ClaudeTranscript.Read(jsonl, new FixedClock(DateTimeOffset.UnixEpoch), sessionId, input.StartIndex);
+            var read = ClaudeTranscript.Read(jsonl, new FixedClock(DateTimeOffset.UnixEpoch), sessionId, input.StartIndex, input.StartByte, input.LineOffsets);
             answers = read.OwnerAnswers;
+            offsets = read.LineOffsets;
             if (read.SessionId is null) return result with { Outcome = input.Tail ? "bos" : "kimlik-yok" };
             if (read.Turns.Count == 0 || !input.Tail && !read.Turns.Any(t => t.Kind == "text")) return result;
             session = new Session(sessionId, "claude", read.Turns.OrderBy(t => t.Index).ThenBy(t => t.Timestamp).ToArray(), read.Turns.Min(t => t.Timestamp));
@@ -62,7 +73,8 @@ public static class Kaydet
         if (pending.Count == 0) return result;
         if (trigger == "mesaj" && pending.Count(t => t.Class is "u" or "a") < 10) return result with { Outcome = "bekliyor" };
         var existing = File.Exists(daily) ? File.ReadAllText(daily) : "---\ntype: daily\nkayit: v1\n---\n";
-        VaultFiles.WriteAtomic(daily, existing + (existing.EndsWith('\n') ? "\n" : "\n\n") + Blok.Compose(session, pending, project, now, redactor ?? new Redactor(), answers), new VaultFileOperations());
+        long? lastByte = offsets.TryGetValue(pending[^1].Uuid, out var lastOffset) ? lastOffset : null;
+        VaultFiles.WriteAtomic(daily, existing + (existing.EndsWith('\n') ? "\n" : "\n\n") + Blok.Compose(session, pending, project, now, redactor ?? new Redactor(), answers, lastByte), new VaultFileOperations());
         return result with { Blocks = 1, Outcome = "yazdi" };
     }
 

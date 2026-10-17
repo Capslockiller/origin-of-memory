@@ -7,9 +7,10 @@ internal static class Imlec
 {
     private static readonly Regex Anchor = new(@"^<!-- session:(?<id>\S+) ts:\S+ turns:\d+-(?<end>\d+)(?<extra>[^\r\n]*?) -->\r?$", RegexOptions.Multiline);
     private static readonly Regex Last = new(@"\bson:(\S+)");
+    private static readonly Regex ByteOffset = new(@"\bbayt:(\S+)");
     private static readonly Regex TurnId = new(@"^### \[[uah] ([^\]\r\n]+)\]", RegexOptions.Multiline);
 
-    internal sealed record Cursor(string Last, int End, string? Project);
+    internal sealed record Cursor(string Last, int End, string? Project, long? ByteOffset = null);
 
     internal static Cursor? TailCursor(string vault, string sessionId, DateTimeOffset now)
     {
@@ -23,8 +24,10 @@ internal static class Imlec
             {
                 if (anchor.Groups["id"].Value != sessionId) continue;
                 var last = Last.Match(anchor.Groups["extra"].Value);
+                var bytes = ByteOffset.Match(anchor.Groups["extra"].Value);
                 if (last.Success) cursor = int.TryParse(anchor.Groups["end"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end)
-                    && end < int.MaxValue ? new(last.Groups[1].Value, end, ProjectBefore(text, anchor.Index, sessionId)) : null;
+                    && end < int.MaxValue ? new(last.Groups[1].Value, end, ProjectBefore(text, anchor.Index, sessionId),
+                        bytes.Success && long.TryParse(bytes.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var offset) ? offset : null) : null;
             }
         }
         return cursor;
