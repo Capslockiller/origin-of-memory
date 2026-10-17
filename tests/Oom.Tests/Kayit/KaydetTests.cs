@@ -201,7 +201,7 @@ public sealed partial class KaydetTests
     {
         var help = GateFixture.Run("--help");
         Assert.Equal(0, help.ExitCode);
-        Assert.Equal(new[] { "context", "kaydet", "retrieve", "doctor" },
+        Assert.Equal(new[] { "context", "kaydet", "durum", "baglam", "retrieve", "doctor" },
             Regex.Matches(help.StandardOutput, @"(?m)^  (\w+) ").Select(m => m.Groups[1].Value).ToArray());
         foreach (var command in new[] { "flush", "sweep", "compile", "save", "mcp", "install", "nudge", "kit" })
             Assert.DoesNotContain(command + " ", help.StandardOutput);
@@ -296,13 +296,12 @@ public sealed partial class KaydetTests
     public void Kaydet_KancalarYeniTetikleriKullanir()
     {
         var hooks = HookTemplates.Build(@"E:\bin\oom.exe", @"E:\test vault");
-        Assert.Equal(new[] { "SessionStart", "SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact" }, hooks.Select(h => h.Event));
-        Assert.EndsWith(" context", hooks[0].Command);
-        Assert.EndsWith(" kaydet --tetik acilis", hooks[1].Command);
-        Assert.Equal(15, hooks[1].TimeoutSeconds);
-        Assert.EndsWith(" kaydet --tetik mesaj", hooks[2].Command);
-        Assert.EndsWith(" kaydet --tetik kapanis", hooks[3].Command);
-        Assert.EndsWith(" kaydet --tetik compact", hooks[4].Command);
+        Assert.Equal(new[] { "SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact" }, hooks.Select(h => h.Event));
+        Assert.EndsWith(" baglam", hooks[0].Command);
+        Assert.Equal(15, hooks[0].TimeoutSeconds);
+        Assert.EndsWith(" kaydet --tetik mesaj", hooks[1].Command);
+        Assert.EndsWith(" kaydet --tetik kapanis", hooks[2].Command);
+        Assert.EndsWith(" kaydet --tetik compact", hooks[3].Command);
         Assert.All(hooks, h => Assert.Contains("--vault \"E:/test vault\"", h.Command));
     }
 

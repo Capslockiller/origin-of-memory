@@ -100,6 +100,12 @@ internal static partial class Program
             case "kaydet":
                 return RunKaydet(args, vault, settings, now);
 
+            case "durum":
+                return RunDurum(args, vault, settings, now);
+
+            case "baglam":
+                return RunBaglam(args, vault, settings, now);
+
             case "doctor":
                 return Health(args, vault, settings, now);
 
@@ -121,6 +127,8 @@ internal static partial class Program
               context [--json]                                   oturum başlangıcı hafıza bağlamını gösterir
                 --json                                            bölümleri ve metni JSON olarak gösterir
               kaydet [--tetik mesaj|compact|kapanis|tara] [--session ID --transcript PATH]  yeni turları daily/ içine kaydeder
+              durum [--uzun] [--json]                            tek satır kasa ve kayıt durumunu gösterir
+              baglam [--metin]                                   oturum başlangıcı bağlamını üretir
               retrieve --query <sorgu> [--json] [--top N] [--batch <dosya>]  indekslenmiş notlarda arar
                 --query <sorgu>                                  aranacak sorguyu belirtir
                 --json                                            eşleşmeleri JSON olarak gösterir

@@ -14,8 +14,7 @@ public static class HookTemplates
         var prefix = Quote(executablePath) + " --vault " + Quote(vault);
         return
         [
-            new("SessionStart", prefix + " context", 15),
-            new("SessionStart", prefix + " kaydet --tetik acilis", 15),
+            new("SessionStart", prefix + " baglam", 15),
             new("UserPromptSubmit", prefix + " kaydet --tetik mesaj", 5),
             new("SessionEnd", prefix + " kaydet --tetik kapanis", 15),
             new("PreCompact", prefix + " kaydet --tetik compact", 15)
