@@ -78,6 +78,38 @@ Her karar: bağlam · karar · gerekçe · neyi değiştirdiği · geri dönüş
 - **Değiştirir:** 10 Eki 15:13 "Defter planı"nın ilk hamlesi olan `surum/4.0` dalını açma sırasını; dal Adım 1'de açılır.
 - **Geri dönüş:** yok; sıradaki iş 07-yol'da.
 
+## K-14 — Desktop gerçeği: kuyruk açılışta tamamlanır, hata görünür
+- **Bağlam:** 17 Eki'deki 7 günlük kapı düştü: oturum %84,8, sahip mesajı %85,5.
+  - Desktop oturumu açık bırakıyor ve SessionEnd çoğu zaman gelmiyor; 10 tur eşiğinin altındaki kuyruk yazılmıyordu.
+  - "btw" çatalı ana oturumun kayıtlarıyla başlıyor; bu yüzden her kanca kimlik uyuşmazlığıyla düşüyordu.
+  - İlk istemde transkript henüz yoktu.
+  - Hatalar yalnız stderr'in ilk satırında kalıyordu ve 7 gün fark edilmedi. Bu, Durdurma şartının tanımına uyan ilk 4.0 sessiz arızasıdır.
+- **Karar:** Kapatma yok, onarım. Sahip ikinci 7 günü beklemeden devam dedi (#b0703ac2, plan reddi notu).
+  - Yeni tetik `acilis`.
+  - Claude kimliği, istenen oturumdur.
+  - Kanca hatası tek `systemMessage` olarak gösterilir, çıkış 0.
+  - Her çağrı `kaydet.jsonl`'a bir satır yazar.
+  - Codex `exec` şeritleri kaydedilmez.
+  - İmleç bulunamazsa yalnız pencere tabanı içindeki turlar yazılır.
+  - Başka günün turu tarihli saatle yazılır.
+- **Değiştirir:** 03-ham-kayit'in tetik tablosunu ve "yalnız stderr'e tek satır" kuralını; 07-yol Adım 1 kapısının ölçütünü (mesaj düzeyi) ve süresini (onarımdan sonra ölçülür, 7 gün beklenmez).
+- **Geri dönüş:** bundan sonraki ilk sessiz arıza Durdurma şartını doğrudan tetikler.
+
+## K-15 — Çapada `bayt:<n>`
+- **Bağlam:** Kuyruktan okuma, her istemde 46–332 MB'lık transkripti baştan okuma maliyetini (1,1–4,9 sn) 150 ms'ye indirdi. Ama geriye doğru arama imleç uuid'inin SON geçişinde duruyordu. Claude Code geçmişi yeniden yazınca (397 dosyanın 5'inde, 8–68 MB arayla) aradaki yeni turlar sessizce kaybolabilirdi; yargıç bunu B-1 olarak buldu.
+- **Karar:** Çapa tek bir ek alan taşır: `bayt:<n>`, yani son turu üreten satırın bayt konumu (#1f1c2533). Okuyucu o konuma gider ve uuid'i doğrular; alan yoksa ya da eşleşmezse tam okumaya döner. Geriye doğru arama kaldırıldı.
+- **Değiştirir:** 03-ham-kayit'in çapa biçimini (ek alan; eski çapalar geçerli kalır, tam okumaya düşer).
+- **Geri dönüş:** alan kaldırılırsa okuyucu tam okumaya döner; veri kaybı olmaz.
+
+## K-16 — Sahip cevapları `u`; `baglam` catch-up'ı önce koşar; canlıda şimdilik `context`
+- **Bağlam:** Son 40 oturumda 150 soru penceresi cevabı ve elle yazılmış ret notları araç sonucu sayılıyor ve hiç kaydedilmiyordu. Bunlar sahibin sözü ve kararlarıdır. Adım 2'yi Gemini 4 Argon yazdı (#0645ed6c, #6a04b74e). İki SessionStart kancası paralel koşunca `durum`, catch-up bitmeden "kayıtsız oturum" sayabilirdi.
+- **Karar:**
+  - `The user answered:` ile başlayan cevaplar ve `To tell you how to proceed, the user said:` içeren ret notları `u · cevap` olarak yazılır; plan onayı (tıklama) yazılmaz.
+  - `baglam`, tek SessionStart kancası olarak önce catch-up'ı, sonra `durum`'u koşar.
+  - Canlı kurulumda SessionStart şimdilik `context` + `kaydet --tetik acilis` kalır (#bd21d93e); `baglam`'a geçiş Adım 3 kartlarıyla birlikte yapılır.
+- **Değiştirir:** 03'ün tur sınıfları tablosunu (`u` kaynağı); kanca şablonu `baglam` gösterir ama canlı ayar sahibin kararıdır.
+- **Geri dönüş:** geçiş Adım 3'te yeniden sorulur.
+
 ## Açık kararlar (sahibin)
 - Yok. 10 Eki 20:20: sahip "ilk 5 kartı neye göre seçmemi bekliyorsun?" dedi; kriter veriden çıkarıldı (son 30 günde ilk mesajda açılan konu × Threads'te canlı × son 7 günde dokunulmuş). Öneri: OoM, SCREENSHOT, 3D disiplin, STBC26, Sürü; ikinci dalga Pipeline ve kanal. Adım 3'te Odena açar, sahip yalnız yürürlük cümlelerine evet/hayır der.
 - Kapatılan eski maddeler: temizlik Adım 5'te arşiv anlık görüntüsünden sonra Odena yapar (veto saklı) · kavram arşivi vault'ta salt okur kalır · istemciden cevap basamağı istemci desteği gelene kadar yok.

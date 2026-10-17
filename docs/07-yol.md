@@ -12,11 +12,35 @@ Sıra var, takvim yok. Her adım tek şerit, ≤300 satır (test ve fikstür har
 - `kaydet` yazılır: sınıflandırma, imleç türetme, blok yazımı, maske, idempotentlik. UserPromptSubmit/PreCompact/SessionEnd kancaları.
 - **Kapı:** 7 gün gerçek kullanımda kapsama %100 (sahibin her oturumu için en az bir blok); aynı uuid iki kez yok; kanca süresi p95 <3 sn; 0 kayıtsız oturum. Ölçüm: `durum --uzun` ve `~/.claude/projects` ile çapraz sayım.
 - Canlıya geçiş: `kur.ps1` 3.1.1'in yanına değil yerine kurar; `bin.onceki` geri alma kopyası.
+- **17 Eki kapı sonucu: düştü.**
+  - Ölçüm: oturum kapsaması %84,8, sahip mesajı %85,5.
+  - Kök nedenler:
+    - Desktop'ta SessionEnd çoğu zaman gelmediği için 10 tur eşiğinin altındaki kuyruk yazılmıyordu.
+    - "btw" çatalında kimlik uyuşmazlığı vardı.
+    - İlk istemde transkript dosyası henüz yoktu.
+    - Hatalar sessizdi.
+  - Bu, Durdurma şartının tanımına uyan ilk 4.0 sessiz arızası. Sahip kapatmadı, onarımı seçti (K-14).
+- **Adım 1.1 ve 1.2 (18 Eki):**
+  - açılış tetiği `acilis`;
+  - görünür hata ve `kaydet.jsonl`;
+  - çapada `bayt:` ile kuyruktan okuma (K-15);
+  - sahip cevapları `u` olarak kaydediliyor (K-16);
+  - `tara --gun N` ve delik doldurma;
+  - meşgul transkript alarm üretmiyor.
+
+  Her tur bir Claude yargıcından geçti. Kopya kasada geri doldurma sonrası oturum, sahip ve ajan kapsaması %100, uuid tekrarı 0.
+- **Ölçüt sıkılaştı:** kapsama oturum VE mesaj düzeyinde ölçülür (açık oturum hariç); kanca hatası 0; p95 `kaydet.jsonl`'dan.
+- **Sahip kararı:** onarımdan sonra 7 gün yeniden beklenmez; kapı, canlı kurulum ve geri doldurmadan sonra ölçülerek kapanır.
 
 ## Adım 2 — `durum` ve `baglam`
 
 - Tek satır sağlık; `baglam` yeni sırayla (durum · Kurallar · Düzeltmeler · kart dizini · son oturum). Henüz kart yoksa dizin boş.
 - **Kapı:** `kaydet` durdurulunca `durum` 1 oturum içinde kırmızı üretir (gösterilir); `baglam` çıktısı ≤8.000 kr ve ≤8.500 bayt; ölçülen boyut Journal'da.
+- **18 Eki: yazıldı.**
+  - Kodu Gemini 4 Argon yazdı, iki turda; doğrulamayı Claude yargıcı yaptı.
+  - Kopya kasada ölçüm: `baglam` 4.563 kr / 4.725 bayt, yaklaşık 385 ms; `durum` 200 ms.
+  - `baglam`, tek SessionStart kancası olarak önce `acilis` catch-up'ını koşar (K-16).
+  - **Canlı kanca bu sürümde değişmiyor:** SessionStart `context` + `kaydet --tetik acilis` olarak kalıyor (sahip kararı). `baglam`'a geçiş Adım 3 kartlarıyla birlikte; kart yokken zengin bağlam korunur.
 
 ## Adım 3 — `kart`
 
@@ -63,3 +87,4 @@ Sıra var, takvim yok. Her adım tek şerit, ≤300 satır (test ve fikstür har
 ## Durdurma
 
 - 3 ay içinde yeni bir sessiz arıza ("çalışıyor" denip çalışmıyor) çıkarsa Defter'in özel altyapısı kapatılır; ham kayıt ve kartlar elle sürer, `rg` arar. Bu şart yol haritasından aynen taşındı ve 5 Eki ile 10 Eki'de iki kez tetiklenmişti.
+- 17 Eki'de 4.0'ın ilk sessiz arızası bulundu: kuyruk ve çatal kaybı, hatalar görünmüyordu. Sahip kapatmadı, onarımı seçti (K-14). Bundan sonraki ilk sessiz arıza şartı doğrudan tetikler.
