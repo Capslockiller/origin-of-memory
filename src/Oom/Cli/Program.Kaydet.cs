@@ -32,7 +32,7 @@ internal static partial class Program
                 var days = 2;
                 if (Value(args, "--gun") is { } value && (!int.TryParse(value, out days) || days < 1))
                     throw new ArgumentException("gun pozitif bir tamsayı olmalı");
-                result = Kaydet.Scan(vault, settings, now, days, trigger == "acilis" ? id : null, trigger == "acilis" ? transcript : null);
+                result = Kaydet.Scan(vault, settings, now, days, trigger == "acilis" ? id : null, trigger == "acilis" ? transcript : null, trigger);
                 failure = result.Error;
             }
             else result = Kaydet.WriteResult(vault, id!, transcript!, trigger, now,

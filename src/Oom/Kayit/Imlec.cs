@@ -12,10 +12,10 @@ internal static class Imlec
 
     internal sealed record Cursor(string Last, int End, string? Project, long? ByteOffset = null);
 
-    internal static Cursor? TailCursor(string vault, string sessionId, DateTimeOffset now)
+    internal static Cursor? TailCursor(string vault, string sessionId, DateTimeOffset now, int lookbackDays = 7)
     {
         Cursor? cursor = null;
-        for (var days = 7; days >= 0; days--)
+        for (var days = lookbackDays; days >= 0; days--)
         {
             var path = Path.Combine(vault, "daily", now.AddDays(-days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".md");
             if (!File.Exists(path)) continue;
@@ -25,9 +25,19 @@ internal static class Imlec
                 if (anchor.Groups["id"].Value != sessionId) continue;
                 var last = Last.Match(anchor.Groups["extra"].Value);
                 var bytes = ByteOffset.Match(anchor.Groups["extra"].Value);
-                if (last.Success) cursor = int.TryParse(anchor.Groups["end"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end)
-                    && end < int.MaxValue ? new(last.Groups[1].Value, end, ProjectBefore(text, anchor.Index, sessionId),
-                        bytes.Success && long.TryParse(bytes.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var offset) ? offset : null) : null;
+                if (!last.Success) continue;
+                if (!int.TryParse(anchor.Groups["end"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end) || end == int.MaxValue)
+                {
+                    cursor = null;
+                    continue;
+                }
+                long? byteOffset = bytes.Success && long.TryParse(bytes.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var offset) ? offset : null;
+                // Backfill-only blocks repeat son/bayt, but their range cannot number the tail.
+                var next = anchor.NextMatch();
+                var headings = TurnId.Matches(text[anchor.Index..(next.Success ? next.Index : text.Length)]);
+                if (headings.Count > 0 && !headings.Any(h => h.Groups[1].Value == last.Groups[1].Value))
+                    end = cursor?.Last == last.Groups[1].Value && cursor.ByteOffset == byteOffset ? cursor.End : -1;
+                cursor = new(last.Groups[1].Value, end, ProjectBefore(text, anchor.Index, sessionId), byteOffset);
             }
         }
         return cursor;
@@ -61,12 +71,13 @@ internal static class Imlec
         return latest;
     }
 
-    internal static IReadOnlyList<Turn> Pending(string vault, Session session, DateTimeOffset now, string? removedCursor = null)
+    internal static IReadOnlyList<Turn> Pending(string vault, Session session, DateTimeOffset now, string? removedCursor = null,
+        bool holeFill = false, int lookbackDays = 7)
     {
         var recorded = new HashSet<string>(StringComparer.Ordinal);
         string? last = null;
         var legacyEnd = -1;
-        for (var days = 7; days >= 0; days--)
+        for (var days = lookbackDays; days >= 0; days--)
         {
             var path = Path.Combine(vault, "daily", now.AddDays(-days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".md");
             if (!File.Exists(path)) continue;
@@ -85,7 +96,11 @@ internal static class Imlec
         }
         var cursor = last is null || last == removedCursor ? -1 : session.Turns.ToList().FindIndex(t => t.Uuid == last);
         var hasCursor = last is not null || legacyEnd >= 0;
-        var earliestDay = now.ToLocalTime().Date.AddDays(-7);
+        var today = now.ToLocalTime().Date;
+        var earliestDay = today.AddDays(-lookbackDays);
+        if (holeFill) return [.. session.Turns.Where(t => t.Class is "u" or "a" or "h"
+            && (UnknownTimestamp(t) || t.Timestamp.ToLocalTime().Date >= earliestDay && t.Timestamp.ToLocalTime().Date <= today)
+            && recorded.Add(t.Uuid))];
         return [.. session.Turns.Skip(cursor + 1).Where(t => t.Index > legacyEnd && t.Class != "t" && t.Kind != "compact"
             && (hasCursor || UnknownTimestamp(t) || t.Timestamp.ToLocalTime().Date >= earliestDay) && recorded.Add(t.Uuid))];
     }

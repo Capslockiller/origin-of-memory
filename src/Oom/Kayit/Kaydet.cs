@@ -11,13 +11,15 @@ public static class Kaydet
         long BytesRead = 0, string ReadPath = "tam");
 
     internal static Result WriteResult(string vault, string sessionId, string transcript, string trigger, DateTimeOffset now, Redactor? redactor = null,
-        bool useTail = true, Action<long, string>? onRead = null)
+        bool useTail = true, Action<long, string>? onRead = null, int lookbackDays = 7)
     {
         if (Excluded(transcript) || sessionId.StartsWith("beyin-flush-", StringComparison.OrdinalIgnoreCase)) return new();
         var codexPath = transcript.Replace('\\', '/').Contains("/.codex/", StringComparison.OrdinalIgnoreCase)
             || Path.GetFileName(transcript).StartsWith("rollout-", StringComparison.OrdinalIgnoreCase);
+        var holeFill = trigger == "tara";
+        lookbackDays = holeFill ? Math.Max(7, lookbackDays) : 7;
         TranskriptKuyruk.Input input;
-        try { input = TranskriptKuyruk.Read(transcript, useTail && !codexPath ? Imlec.TailCursor(vault, sessionId, now) : null); }
+        try { input = TranskriptKuyruk.Read(transcript, useTail && !codexPath && !holeFill ? Imlec.TailCursor(vault, sessionId, now) : null); }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return new(Outcome: "dosya-yok"); }
         var result = new Result(BytesRead: input.Bytes, ReadPath: input.Tail ? "bayt" : "tam");
         onRead?.Invoke(result.BytesRead, result.ReadPath);
@@ -41,7 +43,7 @@ public static class Kaydet
             || records.Any(r => HookPayload.Field(r, "type") is "session_meta" or "response_item" or "event_msg");
         if (codex && input.Tail)
         {
-            var full = WriteResult(vault, sessionId, transcript, trigger, now, redactor, useTail: false, onRead);
+            var full = WriteResult(vault, sessionId, transcript, trigger, now, redactor, useTail: false, onRead, lookbackDays);
             return full with { BytesRead = full.BytesRead + input.Bytes };
         }
         if (!codex) records = records.Where(r => (HookPayload.Field(r, "sessionId") ?? HookPayload.Field(r, "session_id")) == sessionId).ToArray();
@@ -51,14 +53,20 @@ public static class Kaydet
                 || source.ValueKind == JsonValueKind.Object && source.TryGetProperty("subagent", out _)))) return result;
         Session session;
         IReadOnlySet<string>? answers = null;
-        if (codex) session = CodexParser.Parse(jsonl, capture: true);
+        var turnOffsets = new Dictionary<int, long>();
+        if (codex)
+        {
+            session = CodexParser.Parse(jsonl, capture: true);
+            foreach (var turn in session.Turns)
+                if (offsets.TryGetValue(turn.Uuid, out var offset)) turnOffsets[turn.Index] = offset;
+        }
         else
         {
             var read = ClaudeTranscript.Read(jsonl, new FixedClock(DateTimeOffset.UnixEpoch), sessionId, input.StartIndex, input.StartByte, input.LineOffsets);
             answers = read.OwnerAnswers;
-            offsets = read.LineOffsets;
+            turnOffsets = read.LineOffsets;
             if (read.SessionId is null) return result with { Outcome = input.Tail ? "bos" : "kimlik-yok" };
-            if (read.Turns.Count == 0 || !input.Tail && !read.Turns.Any(t => t.Kind == "text")) return result;
+            if (read.Turns.Count == 0 || !holeFill && !input.Tail && !read.Turns.Any(t => t.Kind == "text")) return result;
             session = new Session(sessionId, "claude", read.Turns.OrderBy(t => t.Index).ThenBy(t => t.Timestamp).ToArray(), read.Turns.Min(t => t.Timestamp));
         }
         if (session.Id != sessionId) throw new InvalidDataException("oturum kimliği transkript ile uyuşmuyor");
@@ -69,12 +77,19 @@ public static class Kaydet
         if (Excluded(project)) return result;
         var daily = Path.Combine(vault, "daily", now.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) + ".md");
         using var held = DailyFileLock.Acquire(daily);
-        var pending = Imlec.Pending(vault, session, now, input.RemovedCursor);
+        var pending = Imlec.Pending(vault, session, now, input.RemovedCursor, holeFill, lookbackDays);
         if (pending.Count == 0) return result;
         if (trigger == "mesaj" && pending.Count(t => t.Class is "u" or "a") < 10) return result with { Outcome = "bekliyor" };
         var existing = File.Exists(daily) ? File.ReadAllText(daily) : "---\ntype: daily\nkayit: v1\n---\n";
-        long? lastByte = offsets.TryGetValue(pending[^1].Uuid, out var lastOffset) ? lastOffset : null;
-        VaultFiles.WriteAtomic(daily, existing + (existing.EndsWith('\n') ? "\n" : "\n\n") + Blok.Compose(session, pending, project, now, redactor ?? new Redactor(), answers, lastByte), new VaultFileOperations());
+        var anchorTurn = pending[^1];
+        if (holeFill && Imlec.TailCursor(vault, sessionId, now, lookbackDays) is { } cursor)
+        {
+            var forward = session.Turns.FirstOrDefault(t => t.Uuid == cursor.Last
+                && (cursor.ByteOffset is null || turnOffsets.TryGetValue(t.Index, out var offset) && offset == cursor.ByteOffset));
+            if (forward is not null && forward.Index > anchorTurn.Index) anchorTurn = forward;
+        }
+        long? lastByte = turnOffsets.TryGetValue(anchorTurn.Index, out var lastOffset) ? lastOffset : null;
+        VaultFiles.WriteAtomic(daily, existing + (existing.EndsWith('\n') ? "\n" : "\n\n") + Blok.Compose(session, pending, project, now, redactor ?? new Redactor(), answers, lastByte, anchorTurn.Uuid), new VaultFileOperations());
         return result with { Blocks = 1, Outcome = "yazdi" };
     }
 
@@ -89,7 +104,8 @@ public static class Kaydet
             || normalized.Contains("beyin-flush-", StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static Result Scan(string vault, OomSettings settings, DateTimeOffset now, int days = 2, string? excludedId = null, string? excludedPath = null)
+    internal static Result Scan(string vault, OomSettings settings, DateTimeOffset now, int days = 2, string? excludedId = null, string? excludedPath = null,
+        string trigger = "tara")
     {
         var sessions = 0; var blocks = 0; var errors = 0; var skipped = 0;
         long bytesRead = 0;
@@ -141,7 +157,7 @@ public static class Kaydet
                 if (lane || id == excludedId) continue;
                 if (anchors.TryGetValue(id, out var anchor) && modified < anchor.UtcDateTime.AddSeconds(-60)) { skipped++; continue; }
                 sessions++;
-                var result = WriteResult(vault, id, path, "tara", now, onRead: (bytes, _) => bytesRead += bytes);
+                var result = WriteResult(vault, id, path, trigger, now, onRead: (bytes, _) => bytesRead += bytes, lookbackDays: days);
                 blocks += result.Blocks;
             }
             catch (Exception error) { errors++; firstError ??= error; }

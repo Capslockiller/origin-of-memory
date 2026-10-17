@@ -6,7 +6,7 @@ namespace Oom.Contracts;
 public sealed record TranscriptRead(string? SessionId, string? WorkingDirectory, IReadOnlyList<Turn> Turns)
 {
     internal HashSet<string> OwnerAnswers { get; init; } = new(StringComparer.Ordinal);
-    internal Dictionary<string, long> LineOffsets { get; init; } = new(StringComparer.Ordinal);
+    internal Dictionary<int, long> LineOffsets { get; init; } = new();
 }
 
 internal static class ClaudeTranscript
@@ -24,7 +24,7 @@ internal static class ClaudeTranscript
         string? workingDirectory = null;
         var index = startIndex;
         var answers = new HashSet<string>(StringComparer.Ordinal);
-        var offsets = new Dictionary<string, long>(StringComparer.Ordinal);
+        var offsets = new Dictionary<int, long>();
 
         foreach (var (line, offset) in TranskriptKuyruk.Lines(jsonl ?? string.Empty, startByte, lineOffsets))
         {
@@ -74,7 +74,7 @@ internal static class ClaudeTranscript
             turns.Add(new Turn(position, turnClass == "h" ? "harness" : role, kind, text, Stamp(root, clock),
                 Text(root, "uuid") ?? TurSiniflandirma.Id(sessionId ?? string.Empty, position), turnClass, tools));
             if (answer is not null) answers.Add(turns[^1].Uuid);
-            offsets.TryAdd(turns[^1].Uuid, offset);
+            offsets[position] = offset;
             index++;
         }
 
