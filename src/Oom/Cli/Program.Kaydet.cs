@@ -10,29 +10,42 @@ internal static partial class Program
     {
         var timer = Stopwatch.StartNew();
         var trigger = Value(args, "--tetik") ?? "kapanis";
-        var hookDriven = trigger is "mesaj" or "compact" or "kapanis" or "acilis";
+        if (trigger == "acilis")
+        {
+            var acilisMessage = RunAcilis(vault, settings, now, id: Value(args, "--session"), gunArg: Value(args, "--gun"), fromAcilisCommand: true);
+            var acilisLog = KaydetLog.PathFor(vault);
+            var recent = KaydetLog.RecentErrors(acilisLog, now);
+            if (recent > 0) acilisMessage = (acilisMessage is null ? "" : acilisMessage + "; ") + $"kaydet: son 24 saatte {recent} hata — {acilisLog}";
+            if (acilisMessage is not null)
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    systemMessage = acilisMessage,
+                    hookSpecificOutput = new { hookEventName = "SessionStart", additionalContext = "[Bildirim] " + acilisMessage }
+                }));
+            return 0;
+        }
+        var hookDriven = trigger is "mesaj" or "compact" or "kapanis";
         string? id = trigger == "tara" ? null : Value(args, "--session");
         var result = new Kaydet.Result();
         Exception? failure = null;
         try
         {
-            if (trigger is not ("mesaj" or "compact" or "kapanis" or "acilis" or "tara")) throw new ArgumentException("geçersiz tetik");
+            if (trigger is not ("mesaj" or "compact" or "kapanis" or "tara")) throw new ArgumentException("geçersiz tetik");
             var transcript = Value(args, "--transcript");
-            if (trigger == "acilis" || trigger != "tara" && id is null && transcript is null)
+            if (trigger != "tara" && id is null && transcript is null)
             {
                 var hook = HookPayload.Read(ReadStandardInput());
-                id = hook.SessionId;
-                transcript = hook.TranscriptPath;
+                (id, transcript) = (hook.SessionId, hook.TranscriptPath);
             }
             if (settings.LoadError is { } error) throw new InvalidDataException(error);
-            if (trigger != "tara" && (string.IsNullOrWhiteSpace(id) || trigger != "acilis" && string.IsNullOrWhiteSpace(transcript)))
+            if (trigger != "tara" && (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(transcript)))
                 throw new ArgumentException("oturum ve transkript gerekli");
-            if (trigger is "tara" or "acilis")
+            if (trigger == "tara")
             {
                 var days = 2;
                 if (Value(args, "--gun") is { } value && (!int.TryParse(value, out days) || days < 1))
                     throw new ArgumentException("gun pozitif bir tamsayı olmalı");
-                result = Kaydet.Scan(vault, settings, now, days, trigger == "acilis" ? id : null, trigger == "acilis" ? transcript : null, trigger);
+                result = Kaydet.Scan(vault, settings, now, days, trigger: "tara");
                 failure = result.Error;
             }
             else result = Kaydet.WriteResult(vault, id!, transcript!, trigger, now,
@@ -43,26 +56,46 @@ internal static partial class Program
             failure = error;
             result = result with { Outcome = "hata", Errors = result.Errors + 1, Error = error };
         }
-        var log = KaydetLog.PathFor(vault);
-        KaydetLog.Append(log, now, trigger, id, timer, result);
+        KaydetLog.Append(KaydetLog.PathFor(vault), now, trigger, id, timer, result);
         if (!hookDriven)
         {
             if (trigger == "tara") Console.WriteLine($"tara: {result.Sessions} oturum, {result.Blocks} blok, {result.Errors} hata");
             if (failure is not null) Console.Error.WriteLine($"kaydet: {KaydetLog.ErrorText(failure, 200)}");
             return failure is null ? 0 : 1;
         }
-        var message = failure is null ? null : $"kaydet: {KaydetLog.ErrorText(failure, 200)} (oturum {(string.IsNullOrEmpty(id) ? "-" : id[..Math.Min(8, id.Length)])})";
-        var recent = trigger == "acilis" ? KaydetLog.RecentErrors(log, now) : 0;
-        if (recent > 0) message = (message is null ? "" : message + "; ") + $"kaydet: son 24 saatte {recent} hata — {log}";
-        if (message is not null)
-        {
-            if (trigger == "acilis") Console.WriteLine(JsonSerializer.Serialize(new
-            {
-                systemMessage = message,
-                hookSpecificOutput = new { hookEventName = "SessionStart", additionalContext = "[Bildirim] " + message }
-            }));
-            else Console.WriteLine(JsonSerializer.Serialize(new { systemMessage = message }));
-        }
+        if (FailureMessage(failure, id) is { } message) Console.WriteLine(JsonSerializer.Serialize(new { systemMessage = message }));
         return 0;
     }
+
+    internal static string? RunAcilis(string vault, OomSettings settings, DateTimeOffset now, string? id = null, string? transcript = null, string? gunArg = null, bool fromAcilisCommand = false)
+    {
+        var timer = Stopwatch.StartNew();
+        var result = new Kaydet.Result();
+        Exception? failure = null;
+        try
+        {
+            if (fromAcilisCommand)
+            {
+                var hook = HookPayload.Read(ReadStandardInput());
+                (id, transcript) = (hook.SessionId, hook.TranscriptPath);
+            }
+            if (settings.LoadError is { } error) throw new InvalidDataException(error);
+            if (fromAcilisCommand && string.IsNullOrWhiteSpace(id)) throw new ArgumentException("oturum ve transkript gerekli");
+            var days = 2;
+            if (gunArg is not null && (!int.TryParse(gunArg, out days) || days < 1))
+                throw new ArgumentException("gun pozitif bir tamsayı olmalı");
+            result = Kaydet.Scan(vault, settings, now, days, id ?? string.Empty, transcript, trigger: "acilis");
+            failure = result.Error;
+        }
+        catch (Exception error)
+        {
+            failure = error;
+            result = result with { Outcome = "hata", Errors = result.Errors + 1, Error = error };
+        }
+        KaydetLog.Append(KaydetLog.PathFor(vault), now, "acilis", id, timer, result);
+        return FailureMessage(failure, id);
+    }
+
+    private static string? FailureMessage(Exception? failure, string? id) =>
+        failure is null ? null : $"kaydet: {KaydetLog.ErrorText(failure, 200)} (oturum {(string.IsNullOrEmpty(id) ? "-" : id[..Math.Min(8, id.Length)])})";
 }
