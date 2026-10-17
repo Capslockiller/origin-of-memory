@@ -5,7 +5,7 @@ namespace Oom.Contracts;
 
 internal static class Blok
 {
-    internal static string Compose(Session session, IReadOnlyList<Turn> turns, string project, DateTimeOffset now, Redactor redactor)
+    internal static string Compose(Session session, IReadOnlyList<Turn> turns, string project, DateTimeOffset now, Redactor redactor, IReadOnlySet<string>? answers = null)
     {
         var first = turns[0];
         var end = turns[^1];
@@ -17,7 +17,8 @@ internal static class Blok
         {
             var tools = turn.Class == "a" && turn.Tools is { Count: > 0 }
                 ? " · araç: " + string.Join(", ", turn.Tools.GroupBy(n => Line(redactor.Mask(n).Text)).Select(g => $"{g.Key} ×{g.Count()}")) : string.Empty;
-            text.AppendLine($"\n### [{turn.Class} {turn.Uuid}] {Time(turn.Timestamp, now)}{(turn.Class == "h" ? " · ajan mesajı" : tools)}");
+            var suffix = turn.Class == "u" && answers?.Contains(turn.Uuid) == true ? " · cevap" : tools;
+            text.AppendLine($"\n### [{turn.Class} {turn.Uuid}] {Time(turn.Timestamp, now)}{(turn.Class == "h" ? " · ajan mesajı" : suffix)}");
             if (turn.Class == "h") continue;
             var masked = redactor.Mask(turn.Text);
             var body = masked.TimedOut ? $"[maske: zaman aşımı, {turn.Text.Length} kr]" : masked.Text;

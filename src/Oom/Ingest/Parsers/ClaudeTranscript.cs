@@ -3,7 +3,10 @@ using System.Text.Json;
 
 namespace Oom.Contracts;
 
-public sealed record TranscriptRead(string? SessionId, string? WorkingDirectory, IReadOnlyList<Turn> Turns);
+public sealed record TranscriptRead(string? SessionId, string? WorkingDirectory, IReadOnlyList<Turn> Turns)
+{
+    internal HashSet<string> OwnerAnswers { get; init; } = new(StringComparer.Ordinal);
+}
 
 internal static class ClaudeTranscript
 {
@@ -12,12 +15,14 @@ internal static class ClaudeTranscript
         "<task-notification", "<system-reminder", "<local-command-stdout", "<command-message", "<command-name"
     ];
 
-    internal static TranscriptRead Read(string jsonl, IClock clock, string? requestedId = null)
+    internal static TranscriptRead Read(string jsonl, IClock clock, string? requestedId = null, int startIndex = 0)
     {
         var turns = new List<Turn>();
         string? sessionId = null;
         string? workingDirectory = null;
-        var index = 0;
+        var index = startIndex;
+        var questions = new HashSet<string>(StringComparer.Ordinal);
+        var answers = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var line in (jsonl ?? string.Empty).Split('\n'))
         {
@@ -41,7 +46,7 @@ internal static class ClaudeTranscript
             if (requestedId is not null && recordId != requestedId) continue;
             sessionId ??= recordId;
             workingDirectory ??= Text(root, "cwd");
-            if (Flag(root, "isSidechain") || root.TryGetProperty("toolUseResult", out _))
+            if (Flag(root, "isSidechain"))
                 continue;
 
             var message = root.TryGetProperty("message", out var value) ? value : default;
@@ -51,23 +56,45 @@ internal static class ClaudeTranscript
                 continue;
 
             var content = message.ValueKind is JsonValueKind.Object && message.TryGetProperty("content", out var blocks) ? blocks : default;
+            if (role == "assistant" && content.ValueKind == JsonValueKind.Array)
+                foreach (var block in content.EnumerateArray().Where(b => Text(b, "type") == "tool_use" && Text(b, "name") == "AskUserQuestion"))
+                    if (Text(block, "id") is { } question) questions.Add(question);
+            var answer = role == "user" ? OwnerAnswer(content, questions) : null;
+            if (answer is null && root.TryGetProperty("toolUseResult", out _)) continue;
             var tools = content.ValueKind is JsonValueKind.Array
                 ? content.EnumerateArray().Where(b => Text(b, "type") == "tool_use").Select(b => Text(b, "name") ?? "tool").ToArray() : [];
             var toolResult = content.ValueKind is JsonValueKind.Array && content.EnumerateArray().Any(b => Text(b, "type") == "tool_result");
-            var text = ReadText(root, message) ?? string.Empty;
+            var text = answer ?? ReadText(root, message) ?? string.Empty;
             if (text.Length == 0 && tools.Length == 0 && !toolResult) continue;
-            var kind = toolResult ? "tool_result" : text.Length == 0 && tools.Length > 0 ? "tool_use"
+            var kind = answer is not null ? "text" : toolResult ? "tool_result" : text.Length == 0 && tools.Length > 0 ? "tool_use"
                 : Flag(root, "isCompactSummary") ? "compact" : Flag(root, "isMeta") ? "envelope" : Classify(Text(root, "kind") ?? "text", text);
             if (kind == "tool_use" && turns.LastOrDefault(t => t.Class == "a") is { } previous)
                 turns[turns.IndexOf(previous)] = previous with { Tools = [.. previous.Tools ?? [], .. tools] };
             var position = root.TryGetProperty("index", out var declared) && declared.TryGetInt32(out var parsed) ? parsed : index;
-            var turnClass = TurSiniflandirma.Classify(role, kind, text);
+            var turnClass = answer is not null ? "u" : TurSiniflandirma.Classify(role, kind, text);
             turns.Add(new Turn(position, turnClass == "h" ? "harness" : role, kind, text, Stamp(root, clock),
                 Text(root, "uuid") ?? TurSiniflandirma.Id(sessionId ?? string.Empty, position), turnClass, tools));
+            if (answer is not null) answers.Add(turns[^1].Uuid);
             index++;
         }
 
-        return new TranscriptRead(sessionId, workingDirectory, turns);
+        return new TranscriptRead(sessionId, workingDirectory, turns) { OwnerAnswers = answers };
+    }
+
+    private static string? OwnerAnswer(JsonElement content, HashSet<string> questions)
+    {
+        if (content.ValueKind != JsonValueKind.Array) return null;
+        foreach (var block in content.EnumerateArray().Where(b => Text(b, "type") == "tool_result"))
+        {
+            if (!block.TryGetProperty("content", out var result)) continue;
+            var text = result.ValueKind == JsonValueKind.String ? result.GetString() ?? ""
+                : result.ValueKind == JsonValueKind.Array ? string.Join("\n", result.EnumerateArray()
+                    .Where(b => Text(b, "type") == "text").Select(b => Text(b, "text") ?? "")) : "";
+            if (text.StartsWith("User has approved your plan", StringComparison.Ordinal)) continue;
+            if (questions.Contains(Text(block, "tool_use_id") ?? "") || text.StartsWith("The user answered:", StringComparison.Ordinal)
+                || text.Contains("To tell you how to proceed, the user said:", StringComparison.Ordinal)) return text;
+        }
+        return null;
     }
 
     private static string? ReadText(JsonElement root, JsonElement message)

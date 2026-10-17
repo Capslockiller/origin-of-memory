@@ -28,7 +28,8 @@ internal static class KaydetLog
             {
                 ["ts"] = now.ToString("O"), ["tetik"] = trigger, ["oturum"] = sessionId,
                 ["ms"] = (int)Math.Min(int.MaxValue, timer.ElapsedMilliseconds), ["sonuc"] = result.Outcome,
-                ["blok"] = result.Blocks, ["hata"] = result.Error is null ? null : Cap(ErrorText(result.Error, 300), 300)
+                ["blok"] = result.Blocks, ["hata"] = result.Error is null ? null : Cap(ErrorText(result.Error, 300), 300),
+                ["okunan_kb"] = (int)Math.Min(int.MaxValue, (result.BytesRead + 1023) / 1024)
             };
             if (trigger is "acilis" or "tara")
             {
@@ -36,6 +37,7 @@ internal static class KaydetLog
                 row["atlanan"] = result.Skipped;
                 row["hata_sayisi"] = result.Errors;
             }
+            else row["yol"] = result.ReadPath;
             writer.Write(JsonSerializer.Serialize(row) + "\n");
         }
         catch (Exception error) { Console.Error.WriteLine("kaydet log: " + ErrorText(error, 200)); }

@@ -35,7 +35,8 @@ internal static partial class Program
                 result = Kaydet.Scan(vault, settings, now, days, trigger == "acilis" ? id : null, trigger == "acilis" ? transcript : null);
                 failure = result.Error;
             }
-            else result = Kaydet.WriteResult(vault, id!, transcript!, trigger, now);
+            else result = Kaydet.WriteResult(vault, id!, transcript!, trigger, now,
+                onRead: (bytes, path) => result = result with { BytesRead = result.BytesRead + bytes, ReadPath = path });
         }
         catch (Exception error)
         {
