@@ -8,6 +8,9 @@ internal static class TranskriptKuyruk
     internal sealed record Input(string Text, long Bytes, bool Tail = false, int StartIndex = 0, string? RemovedCursor = null, string? Project = null,
         long StartByte = 0, IReadOnlyList<long>? LineOffsets = null);
 
+    internal static bool IsBusy(IOException error, string path, DateTimeOffset now) =>
+        (error.HResult & 0xffff) is 32 or 33 && File.GetLastWriteTimeUtc(path) > now.UtcDateTime.AddHours(-24);
+
     internal static Input Read(string path, Imlec.Cursor? cursor)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

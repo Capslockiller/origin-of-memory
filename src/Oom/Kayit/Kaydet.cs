@@ -8,7 +8,7 @@ public static class Kaydet
         => WriteResult(vault, sessionId, transcript, trigger, now, redactor).Blocks;
 
     internal sealed record Result(int Blocks = 0, string Outcome = "bos", int Sessions = 0, int Skipped = 0, int Errors = 0, Exception? Error = null,
-        long BytesRead = 0, string ReadPath = "tam");
+        long BytesRead = 0, string ReadPath = "tam", int Busy = 0);
 
     internal static Result WriteResult(string vault, string sessionId, string transcript, string trigger, DateTimeOffset now, Redactor? redactor = null,
         bool useTail = true, Action<long, string>? onRead = null, int lookbackDays = 7)
@@ -18,9 +18,11 @@ public static class Kaydet
             || Path.GetFileName(transcript).StartsWith("rollout-", StringComparison.OrdinalIgnoreCase);
         var holeFill = trigger == "tara";
         lookbackDays = holeFill ? Math.Max(7, lookbackDays) : 7;
+        var readCursor = useTail && !codexPath && !holeFill ? Imlec.TailCursor(vault, sessionId, now) : null;
         TranskriptKuyruk.Input input;
-        try { input = TranskriptKuyruk.Read(transcript, useTail && !codexPath && !holeFill ? Imlec.TailCursor(vault, sessionId, now) : null); }
+        try { input = TranskriptKuyruk.Read(transcript, readCursor); }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { return new(Outcome: "dosya-yok"); }
+        catch (IOException error) when (TranskriptKuyruk.IsBusy(error, transcript, now)) { return new(Outcome: "mesgul", Busy: 1); }
         var result = new Result(BytesRead: input.Bytes, ReadPath: input.Tail ? "bayt" : "tam");
         onRead?.Invoke(result.BytesRead, result.ReadPath);
         var jsonl = input.Text;
@@ -108,6 +110,7 @@ public static class Kaydet
         string trigger = "tara")
     {
         var sessions = 0; var blocks = 0; var errors = 0; var skipped = 0;
+        var busy = 0;
         long bytesRead = 0;
         Exception? firstError = null;
         var anchors = excludedId is null ? new Dictionary<string, DateTimeOffset>() : Imlec.LatestAnchors(vault, now);
@@ -133,35 +136,44 @@ public static class Kaydet
                 // Codex rollouts must resolve metadata before consulting the anchor map.
                 if (codexPath || !anchors.ContainsKey(id))
                 {
-                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                    using var reader = new StreamReader(stream);
-                    while (reader.ReadLine() is { } line)
+                    try
                     {
-                        try
+                        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                        using var reader = new StreamReader(stream);
+                        while (reader.ReadLine() is { } line)
                         {
-                            using var doc = JsonDocument.Parse(line);
-                            var r = doc.RootElement;
-                            if (HookPayload.Field(r, "type") == "session_meta" && r.TryGetProperty("payload", out var p))
+                            try
                             {
-                                lane = HookPayload.Field(p, "source") == "exec";
-                                id = HookPayload.Field(p, "id") ?? HookPayload.Field(p, "session_id") ?? id;
-                                break;
+                                using var doc = JsonDocument.Parse(line);
+                                var r = doc.RootElement;
+                                if (HookPayload.Field(r, "type") == "session_meta" && r.TryGetProperty("payload", out var p))
+                                {
+                                    lane = HookPayload.Field(p, "source") == "exec";
+                                    id = HookPayload.Field(p, "id") ?? HookPayload.Field(p, "session_id") ?? id;
+                                    break;
+                                }
+                                if (HookPayload.Field(r, "sessionId") is not null) break;
+                                if (codexPath && HookPayload.Field(r, "session_id") is { } flatId) { id = flatId; break; }
                             }
-                            if (HookPayload.Field(r, "sessionId") is not null) break;
-                            if (codexPath && HookPayload.Field(r, "session_id") is { } flatId) { id = flatId; break; }
+                            catch (JsonException) { }
                         }
-                        catch (JsonException) { }
+                        bytesRead += stream.Position;
                     }
-                    bytesRead += stream.Position;
+                    catch (IOException error) when (TranskriptKuyruk.IsBusy(error, path, now))
+                    {
+                        busy++;
+                        continue;
+                    }
                 }
                 if (lane || id == excludedId) continue;
                 if (anchors.TryGetValue(id, out var anchor) && modified < anchor.UtcDateTime.AddSeconds(-60)) { skipped++; continue; }
                 sessions++;
                 var result = WriteResult(vault, id, path, trigger, now, onRead: (bytes, _) => bytesRead += bytes, lookbackDays: days);
                 blocks += result.Blocks;
+                busy += result.Busy;
             }
             catch (Exception error) { errors++; firstError ??= error; }
         }
-        return new(blocks, errors > 0 ? "hata" : blocks > 0 ? "yazdi" : "bos", sessions, skipped, errors, firstError, bytesRead);
+        return new(blocks, errors > 0 ? "hata" : blocks > 0 ? "yazdi" : "bos", sessions, skipped, errors, firstError, bytesRead, Busy: busy);
     }
 }

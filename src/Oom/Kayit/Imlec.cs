@@ -99,6 +99,7 @@ internal static class Imlec
         var today = now.ToLocalTime().Date;
         var earliestDay = today.AddDays(-lookbackDays);
         if (holeFill) return [.. session.Turns.Where(t => t.Class is "u" or "a" or "h"
+            && t.Kind != "compact"
             && (UnknownTimestamp(t) || t.Timestamp.ToLocalTime().Date >= earliestDay && t.Timestamp.ToLocalTime().Date <= today)
             && recorded.Add(t.Uuid))];
         return [.. session.Turns.Skip(cursor + 1).Where(t => t.Index > legacyEnd && t.Class != "t" && t.Kind != "compact"

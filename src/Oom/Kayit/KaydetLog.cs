@@ -35,6 +35,7 @@ internal static class KaydetLog
             {
                 row["aday"] = result.Sessions;
                 row["atlanan"] = result.Skipped;
+                row["mesgul"] = result.Busy;
                 row["hata_sayisi"] = result.Errors;
             }
             else row["yol"] = result.ReadPath;
