@@ -11,6 +11,8 @@
 
 ## Dört sayaç
 
+Adım 2'de üç sayaç çalışır: son kayıt yaşı, bugünkü kayıtsız oturum (30 dakikadan yeni ve güncel oturum hariç) ve `kaydet.jsonl`'dan son 24 saatin `kaydet` hatası. Kart, indeks ve kaydedilmemiş karar sayaçları Adım 3–4'te gelir; o güne kadar satırda hiç görünmez, sıfır olarak da basılmaz.
+
 | Sayaç | Hesap | Yeşil | Kırmızı |
 |---|---|---|---|
 | Son kayıt yaşı | en yeni `kayit` bloğunun saati; ayrıca bugün başlayıp hiç bloğu olmayan oturum sayısı | ≤ 1 oturum geriden | bugün kayıtsız oturum ≥1 ya da 24 sa+ |

@@ -27,6 +27,8 @@
 
 Sabit sıra, sabit bütçe. Toplam ≤8.000 karakter ve ≤8.500 bayt; aşım en alttan kesilir, üstten değil.
 
+`baglam` tek SessionStart kancasıdır ve önce `kaydet --tetik acilis` ile aynı catch-up'ı koşar. Sonra `durum`'u hesaplar ve bağlamı basar. Çıktı tek JSON nesnesidir: `hookSpecificOutput.additionalContext`; `durum` kırmızıysa ek olarak `systemMessage`. İki kanca paralel koşsaydı `durum`, catch-up bitmeden "kayıtsız oturum" sayabilirdi; bu sıra o yarışı önler (K-16). Canlı geçiş Adım 3 kartlarıyla birlikte yapılır.
+
 | Sıra | Blok | Bütçe | Kaynak |
 |---|---|---|---|
 | 1 | `[Durum]` tek satır | ≤160 kr | hesaplanır |
