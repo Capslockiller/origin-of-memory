@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 
 namespace Oom.Tests.Kayit;
 
-public sealed class KaydetTests
+public sealed partial class KaydetTests
 {
     [Fact]
     public void Kaydet_HarnessMesajiSahipSayilmaz()
@@ -167,7 +167,7 @@ public sealed class KaydetTests
     }
 
     [Fact]
-    public void Kaydet_KilitliDailyTekHataSatiriVeBirCikisVerir()
+    public void Kaydet_KilitliDailyTekJsonBildirirVeSifirDoner()
     {
         using var f = new Fixture();
         f.Claude(1);
@@ -175,9 +175,8 @@ public sealed class KaydetTests
         using var held = DailyFileLock.Acquire(f.DailyPath);
         var timer = Stopwatch.StartNew();
         var result = f.Run();
-        Assert.Equal(1, result.Exit);
-        Assert.Single(result.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries));
-        Assert.Equal(string.Empty, result.Out);
+        Assert.Contains("IOException", Message(result));
+        Assert.Equal("hata", Assert.Single(Rows(f)).GetProperty("sonuc").GetString());
         Assert.Equal("mevcut içerik\n", f.Read());
         Assert.False(File.Exists(f.DailyPath + ".oom-tmp"));
         Assert.True(timer.Elapsed < TimeSpan.FromSeconds(5));
@@ -267,7 +266,8 @@ public sealed class KaydetTests
         var bad = f.ProcessRun(new[] { "--vault", f.Root, "kaydet", "--tetik", "yanlis" });
         Assert.Equal(1, bad.Exit);
         Assert.Single(bad.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries));
-        Assert.Equal(1, f.Run().Exit);
+        Assert.Equal(0, f.Run().Exit);
+        Assert.Equal("dosya-yok", Rows(f)[^1].GetProperty("sonuc").GetString());
     }
 
     [Fact]
@@ -277,9 +277,9 @@ public sealed class KaydetTests
         f.Claude(1);
         var projects = Path.Combine(f.Root, "projects");
         Directory.CreateDirectory(projects);
-        File.Copy(f.Transcript, Path.Combine(projects, "recent.jsonl"));
+        File.WriteAllText(Path.Combine(projects, "recent.jsonl"), File.ReadAllText(f.Transcript).Replace("\"fixture\"", "\"recent\""), Fixture.Utf8);
         File.Copy(f.Transcript, Path.Combine(projects, "old.jsonl"));
-        File.WriteAllText(Path.Combine(projects, "bad.jsonl"), "invalid", Fixture.Utf8);
+        File.WriteAllText(Path.Combine(projects, "bad.jsonl"), """{"type":"session_meta","payload":{"id":"bad"}}""", Fixture.Utf8);
         File.Copy(f.Transcript, Path.Combine(projects, "agent-helper.jsonl"));
         File.SetLastWriteTimeUtc(Path.Combine(projects, "recent.jsonl"), Fixture.Now.UtcDateTime.AddHours(-47));
         File.SetLastWriteTimeUtc(Path.Combine(projects, "bad.jsonl"), Fixture.Now.UtcDateTime);
@@ -296,11 +296,13 @@ public sealed class KaydetTests
     public void Kaydet_KancalarYeniTetikleriKullanir()
     {
         var hooks = HookTemplates.Build(@"E:\bin\oom.exe", @"E:\test vault");
-        Assert.Equal(new[] { "SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact" }, hooks.Select(h => h.Event));
+        Assert.Equal(new[] { "SessionStart", "SessionStart", "UserPromptSubmit", "SessionEnd", "PreCompact" }, hooks.Select(h => h.Event));
         Assert.EndsWith(" context", hooks[0].Command);
-        Assert.EndsWith(" kaydet --tetik mesaj", hooks[1].Command);
-        Assert.EndsWith(" kaydet --tetik kapanis", hooks[2].Command);
-        Assert.EndsWith(" kaydet --tetik compact", hooks[3].Command);
+        Assert.EndsWith(" kaydet --tetik acilis", hooks[1].Command);
+        Assert.Equal(15, hooks[1].TimeoutSeconds);
+        Assert.EndsWith(" kaydet --tetik mesaj", hooks[2].Command);
+        Assert.EndsWith(" kaydet --tetik kapanis", hooks[3].Command);
+        Assert.EndsWith(" kaydet --tetik compact", hooks[4].Command);
         Assert.All(hooks, h => Assert.Contains("--vault \"E:/test vault\"", h.Command));
     }
 

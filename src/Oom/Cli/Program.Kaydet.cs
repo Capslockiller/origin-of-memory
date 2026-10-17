@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.Json;
 using Oom.Contracts;
 
 namespace Oom;
@@ -6,26 +8,52 @@ internal static partial class Program
 {
     private static int RunKaydet(string[] args, string vault, OomSettings settings, DateTimeOffset now)
     {
-        if (settings.LoadError is { } error) throw new InvalidDataException(error);
+        var timer = Stopwatch.StartNew();
         var trigger = Value(args, "--tetik") ?? "kapanis";
-        if (trigger is not ("mesaj" or "compact" or "kapanis" or "tara")) throw new ArgumentException("geçersiz tetik");
-        if (trigger == "tara")
+        var hookDriven = trigger is "mesaj" or "compact" or "kapanis" or "acilis";
+        string? id = trigger == "tara" ? null : Value(args, "--session");
+        var result = new Kaydet.Result();
+        Exception? failure = null;
+        try
         {
-            var result = Kaydet.Scan(vault, settings, now);
-            Console.WriteLine($"tara: {result.Sessions} oturum, {result.Blocks} blok, {result.Errors} hata");
-            if (result.Errors > 0) Console.Error.WriteLine("kaydet: taramada hata");
-            return result.Errors > 0 ? 1 : 0;
+            if (trigger is not ("mesaj" or "compact" or "kapanis" or "acilis" or "tara")) throw new ArgumentException("geçersiz tetik");
+            var transcript = Value(args, "--transcript");
+            if (trigger == "acilis" || trigger != "tara" && id is null && transcript is null)
+            {
+                var hook = HookPayload.Read(ReadStandardInput());
+                id = hook.SessionId;
+                transcript = hook.TranscriptPath;
+            }
+            if (settings.LoadError is { } error) throw new InvalidDataException(error);
+            if (trigger != "tara" && (string.IsNullOrWhiteSpace(id) || trigger != "acilis" && string.IsNullOrWhiteSpace(transcript)))
+                throw new ArgumentException("oturum ve transkript gerekli");
+            if (trigger is "tara" or "acilis")
+            {
+                var days = 2;
+                if (Value(args, "--gun") is { } value && (!int.TryParse(value, out days) || days < 1))
+                    throw new ArgumentException("gun pozitif bir tamsayı olmalı");
+                result = Kaydet.Scan(vault, settings, now, days, trigger == "acilis" ? id : null, trigger == "acilis" ? transcript : null);
+                failure = result.Error;
+            }
+            else result = Kaydet.WriteResult(vault, id!, transcript!, trigger, now);
         }
-        var id = Value(args, "--session");
-        var transcript = Value(args, "--transcript");
-        if (id is null && transcript is null)
+        catch (Exception error)
         {
-            var hook = HookPayload.Read(ReadStandardInput());
-            id = hook.SessionId;
-            transcript = hook.TranscriptPath;
+            failure = error;
+            result = result with { Outcome = "hata", Errors = result.Errors + 1, Error = error };
         }
-        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(transcript)) throw new ArgumentException("oturum ve transkript gerekli");
-        Kaydet.Write(vault, id, transcript, trigger, now);
+        var log = KaydetLog.PathFor(vault);
+        KaydetLog.Append(log, now, trigger, id, timer, result);
+        if (!hookDriven)
+        {
+            if (trigger == "tara") Console.WriteLine($"tara: {result.Sessions} oturum, {result.Blocks} blok, {result.Errors} hata");
+            if (failure is not null) Console.Error.WriteLine($"kaydet: {KaydetLog.ErrorText(failure, 200)}");
+            return failure is null ? 0 : 1;
+        }
+        var message = failure is null ? null : $"kaydet: {KaydetLog.ErrorText(failure, 200)} (oturum {(string.IsNullOrEmpty(id) ? "-" : id[..Math.Min(8, id.Length)])})";
+        var recent = trigger == "acilis" ? KaydetLog.RecentErrors(log, now) : 0;
+        if (recent > 0) message = (message is null ? "" : message + "; ") + $"kaydet: son 24 saatte {recent} hata — {log}";
+        if (message is not null) Console.WriteLine(JsonSerializer.Serialize(new { systemMessage = message }));
         return 0;
     }
 }

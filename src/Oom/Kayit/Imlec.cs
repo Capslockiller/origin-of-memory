@@ -9,6 +9,24 @@ internal static class Imlec
     private static readonly Regex Last = new(@"\bson:(\S+)");
     private static readonly Regex TurnId = new(@"^### \[[uah] ([^\]\r\n]+)\]", RegexOptions.Multiline);
 
+    internal static Dictionary<string, DateTimeOffset> LatestAnchors(string vault, DateTimeOffset now)
+    {
+        var latest = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        for (var days = 7; days >= 0; days--)
+        {
+            var path = Path.Combine(vault, "daily", now.AddDays(-days).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".md");
+            if (!File.Exists(path)) continue;
+            foreach (Match anchor in Anchor.Matches(File.ReadAllText(path)))
+            {
+                var stamp = anchor.Value.Split(" ts:")[1].Split(' ')[0];
+                if (!DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var time)) continue;
+                var id = anchor.Groups["id"].Value;
+                if (!latest.TryGetValue(id, out var previous) || time > previous) latest[id] = time;
+            }
+        }
+        return latest;
+    }
+
     internal static IReadOnlyList<Turn> Pending(string vault, Session session, DateTimeOffset now)
     {
         var recorded = new HashSet<string>(StringComparer.Ordinal);

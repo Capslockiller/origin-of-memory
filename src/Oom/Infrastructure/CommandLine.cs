@@ -6,7 +6,7 @@ public static class CommandLine
     [
         "--vault", "--tetik", "--session", "--transcript", "--reason", "--query", "--top", "--batch", "--max",
         "--session-json", "--backend", "--transcripts", "--dailies", "--transcript-dir", "--daily-dir", "--out",
-        "--kit", "--only"
+        "--kit", "--only", "--gun"
     ];
 
     public static IReadOnlyList<string> Positionals(IReadOnlyList<string> args)

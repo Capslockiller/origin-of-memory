@@ -12,7 +12,7 @@ internal static class ClaudeTranscript
         "<task-notification", "<system-reminder", "<local-command-stdout", "<command-message", "<command-name"
     ];
 
-    internal static TranscriptRead Read(string jsonl, IClock clock)
+    internal static TranscriptRead Read(string jsonl, IClock clock, string? requestedId = null)
     {
         var turns = new List<Turn>();
         string? sessionId = null;
@@ -25,17 +25,21 @@ internal static class ClaudeTranscript
             if (trimmed.Length == 0 || trimmed[0] != '{')
                 continue;
 
-            JsonElement root;
+            JsonDocument document;
             try
             {
-                root = JsonDocument.Parse(trimmed).RootElement;
+                document = JsonDocument.Parse(trimmed);
             }
             catch (JsonException)
             {
                 continue;
             }
 
-            sessionId ??= Text(root, "sessionId") ?? Text(root, "session_id");
+            using var held = document;
+            var root = document.RootElement;
+            var recordId = Text(root, "sessionId") ?? Text(root, "session_id");
+            if (requestedId is not null && recordId != requestedId) continue;
+            sessionId ??= recordId;
             workingDirectory ??= Text(root, "cwd");
             if (Flag(root, "isSidechain") || root.TryGetProperty("toolUseResult", out _))
                 continue;
