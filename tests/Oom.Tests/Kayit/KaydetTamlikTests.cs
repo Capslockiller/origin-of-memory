@@ -355,7 +355,15 @@ public sealed partial class KaydetTests
         Assert.Equal("", result.Error);
         var line = Assert.Single(result.Out.Split('\n', StringSplitOptions.RemoveEmptyEntries));
         using var json = JsonDocument.Parse(line);
-        Assert.Single(json.RootElement.EnumerateObject());
-        return json.RootElement.GetProperty("systemMessage").GetString()!;
+        var message = json.RootElement.GetProperty("systemMessage").GetString()!;
+        if (json.RootElement.TryGetProperty("hookSpecificOutput", out var hook))
+        {
+            Assert.Equal(2, json.RootElement.EnumerateObject().Count());
+            Assert.Equal(2, hook.EnumerateObject().Count());
+            Assert.Equal("SessionStart", hook.GetProperty("hookEventName").GetString());
+            Assert.Equal("[Bildirim] " + message, hook.GetProperty("additionalContext").GetString());
+        }
+        else Assert.Single(json.RootElement.EnumerateObject());
+        return message;
     }
 }

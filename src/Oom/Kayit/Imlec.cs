@@ -50,6 +50,13 @@ internal static class Imlec
             }
         }
         var cursor = last is null ? -1 : session.Turns.ToList().FindIndex(t => t.Uuid == last);
-        return [.. session.Turns.Skip(cursor + 1).Where(t => t.Index > legacyEnd && t.Class != "t" && t.Kind != "compact" && recorded.Add(t.Uuid))];
+        var hasCursor = last is not null || legacyEnd >= 0;
+        var earliestDay = now.ToLocalTime().Date.AddDays(-7);
+        return [.. session.Turns.Skip(cursor + 1).Where(t => t.Index > legacyEnd && t.Class != "t" && t.Kind != "compact"
+            && (hasCursor || UnknownTimestamp(t) || t.Timestamp.ToLocalTime().Date >= earliestDay) && recorded.Add(t.Uuid))];
     }
+
+    // Claude uses epoch; Codex adds the turn index as ticks when no timestamp exists.
+    private static bool UnknownTimestamp(Turn turn) => turn.Timestamp == DateTimeOffset.UnixEpoch
+        || turn.Timestamp == DateTimeOffset.UnixEpoch.AddTicks(turn.Index);
 }

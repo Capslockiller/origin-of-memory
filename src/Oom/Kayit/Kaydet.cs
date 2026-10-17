@@ -25,7 +25,8 @@ public static class Kaydet
         if (!codex) records = records.Where(r => (HookPayload.Field(r, "sessionId") ?? HookPayload.Field(r, "session_id")) == sessionId).ToArray();
         if (records.Any(r => r.TryGetProperty("isSidechain", out var side) && side.ValueKind == JsonValueKind.True)) return new();
         if (records.Any(r => HookPayload.Field(r, "type") == "session_meta" && r.TryGetProperty("payload", out var p)
-            && p.TryGetProperty("source", out var source) && source.ValueKind == JsonValueKind.Object && source.TryGetProperty("subagent", out _))) return new();
+            && p.TryGetProperty("source", out var source) && (source.ValueKind == JsonValueKind.String && source.GetString() == "exec"
+                || source.ValueKind == JsonValueKind.Object && source.TryGetProperty("subagent", out _)))) return new();
         Session session;
         if (codex) session = CodexParser.Parse(jsonl, capture: true);
         else
@@ -82,19 +83,34 @@ public static class Kaydet
                 var modified = File.GetLastWriteTimeUtc(path);
                 if (modified < now.UtcDateTime.AddDays(-days)) continue;
                 var id = Path.GetFileNameWithoutExtension(path);
+                var lane = false;
+                var codexPath = path.Replace('\\', '/').Contains("/.codex/", StringComparison.OrdinalIgnoreCase)
+                    || id.StartsWith("rollout-", StringComparison.OrdinalIgnoreCase);
+                // Claude identity is the stem; anchored Claude files need no reads.
+                // Codex rollouts must resolve metadata before consulting the anchor map.
+                if (codexPath || !anchors.ContainsKey(id))
+                {
+                    foreach (var line in File.ReadLines(path))
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(line);
+                            var r = doc.RootElement;
+                            if (HookPayload.Field(r, "type") == "session_meta" && r.TryGetProperty("payload", out var p))
+                            {
+                                lane = HookPayload.Field(p, "source") == "exec";
+                                id = HookPayload.Field(p, "id") ?? HookPayload.Field(p, "session_id") ?? id;
+                                break;
+                            }
+                            if (HookPayload.Field(r, "sessionId") is not null) break;
+                            if (codexPath && HookPayload.Field(r, "session_id") is { } flatId) { id = flatId; break; }
+                        }
+                        catch (JsonException) { }
+                    }
+                }
+                if (lane || id == excludedId) continue;
                 if (anchors.TryGetValue(id, out var anchor) && modified < anchor.UtcDateTime.AddSeconds(-60)) { skipped++; continue; }
                 sessions++;
-                foreach (var line in File.ReadLines(path))
-                {
-                    try { using var doc = JsonDocument.Parse(line); var r = doc.RootElement;
-                        if (HookPayload.Field(r, "type") == "session_meta" && r.TryGetProperty("payload", out var p))
-                        { id = HookPayload.Field(p, "id") ?? HookPayload.Field(p, "session_id") ?? id; break; }
-                        if (HookPayload.Field(r, "sessionId") is not null) break;
-                        if (path.Replace('\\', '/').Contains("/.codex/", StringComparison.OrdinalIgnoreCase) && HookPayload.Field(r, "session_id") is { } flatId) { id = flatId; break; }
-                    }
-                    catch (JsonException) { }
-                }
-                if (id == excludedId) continue;
                 blocks += Write(vault, id, path, "tara", now);
             }
             catch (Exception error) { errors++; firstError ??= error; }

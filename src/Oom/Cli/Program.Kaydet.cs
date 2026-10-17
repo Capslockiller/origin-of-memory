@@ -53,7 +53,15 @@ internal static partial class Program
         var message = failure is null ? null : $"kaydet: {KaydetLog.ErrorText(failure, 200)} (oturum {(string.IsNullOrEmpty(id) ? "-" : id[..Math.Min(8, id.Length)])})";
         var recent = trigger == "acilis" ? KaydetLog.RecentErrors(log, now) : 0;
         if (recent > 0) message = (message is null ? "" : message + "; ") + $"kaydet: son 24 saatte {recent} hata — {log}";
-        if (message is not null) Console.WriteLine(JsonSerializer.Serialize(new { systemMessage = message }));
+        if (message is not null)
+        {
+            if (trigger == "acilis") Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                systemMessage = message,
+                hookSpecificOutput = new { hookEventName = "SessionStart", additionalContext = "[Bildirim] " + message }
+            }));
+            else Console.WriteLine(JsonSerializer.Serialize(new { systemMessage = message }));
+        }
         return 0;
     }
 }
